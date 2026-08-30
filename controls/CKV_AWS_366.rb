@@ -2,26 +2,31 @@
 #
 # Rule:        CKV_AWS_366 (checkov 3.3.16)
 # Applies to:  aws_cognito_identity_pool
-# Status:      PLANNED — no deployed-asset reader exists for aws_cognito_identity_pool yet.
+# Read with:   aws_cognito_identity_pools -> aws_cognito_identity_pool (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_366'] || []
 
 control 'CKV_AWS_366' do
-  impact 0.0
   title 'Ensure AWS Cognito identity pool does not allow unauthenticated guest access'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cognito_identity_pool in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cognito_identity_pool resources that actually exist, read
+    through the stock inspec-aws aws_cognito_identity_pool resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure AWS Cognito identity pool does not allow unauthenticated guest
+    access. Anchors derived from the check's iam category, not reviewed
+    control by control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_cognito_identity_pool: allow_unauthenticated_identities is False
+    Checkov looks for: aws_cognito_identity_pool:
+    allow_unauthenticated_identities is False
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +39,29 @@ control 'CKV_AWS_366' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cognito_identity_pool]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cognito_identity_pool#allow-unauthenticated-identities'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AC-3', 'AC-6']
+  tag nist_r4:               ['AC-3', 'AC-6']
+  tag cci:                   ['CCI-000213', 'CCI-002233']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_366 — no deployed-asset reader for aws_cognito_identity_pool" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_cognito_identity_pools.identity_pool_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_cognito_identity_pool', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_cognito_identity_pool in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_cognito_identity_pool(identity_pool_id: id) do
+      its('allow_unauthenticated_identities') { should eq false }
+    end
   end
 end

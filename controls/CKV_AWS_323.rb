@@ -2,23 +2,27 @@
 #
 # Rule:        CKV_AWS_323 (checkov 3.3.16)
 # Applies to:  aws_elasticache_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_elasticache_cluster yet.
+# Read with:   aws_elasticache_clusters -> aws_elasticache_cluster (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_323'] || []
 
 control 'CKV_AWS_323' do
-  impact 0.0
   title 'Ensure ElastiCache clusters do not use the default subnet group'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_elasticache_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_elasticache_cluster resources that actually exist, read through
+    the stock inspec-aws aws_elasticache_cluster resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Ensure ElastiCache clusters do not use the default subnet group. Anchors
+    derived from the check's networking category, not reviewed control by
+    control.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_elasticache_cluster: subnet_group_name is CKV_ANY
@@ -34,9 +38,29 @@ control 'CKV_AWS_323' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_elasticache_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_cluster#subnet-group-name'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-7', 'SC-7 (5)']
+  tag nist_r4:               ['SC-7', 'SC-7 (5)']
+  tag cci:                   ['CCI-001097', 'CCI-002080']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_323 — no deployed-asset reader for aws_elasticache_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_elasticache_clusters.ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_elasticache_cluster', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_elasticache_cluster in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_elasticache_cluster(elasticache_cluster_identifier: id) do
+      its('cache_subnet_group_name') { should_not be_empty }
+    end
   end
 end

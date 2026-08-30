@@ -90,6 +90,7 @@ control 'CKV_AWS_46' do
   tag ksi:              ['KSI-SVC-KMG']
   tag severity:         'high'
   tag severity_source:  'assessed'
+  tag nist_source:      'reviewed'
   tag implementation_status: 'implemented'
 
   assets = aws_compute_assets(regions: scan_regions)

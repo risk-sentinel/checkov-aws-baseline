@@ -2,26 +2,36 @@
 #
 # Rule:        CKV_AWS_206 (checkov 3.3.16)
 # Applies to:  aws_api_gateway_domain_name
-# Status:      PLANNED — no deployed-asset reader exists for aws_api_gateway_domain_name yet.
+# Read with:   aws_api_gateway_domain_names -> aws_api_gateway_domain_name (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_206'] || []
 
 control 'CKV_AWS_206' do
-  impact 0.0
   title 'Ensure API Gateway Domain uses a modern security Policy'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_api_gateway_domain_name in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_api_gateway_domain_name resources that actually exist, read
+    through the stock inspec-aws aws_api_gateway_domain_name resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure API Gateway Domain uses a modern security Policy. Anchors derived
+    from the check's general security category, not reviewed control by
+    control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_api_gateway_domain_name: security_policy is TLS_1_2 or SecurityPolicy_TLS12_2018_EDGE or SecurityPolicy_TLS12_PFS_2025_EDGE or SecurityPolicy_TLS13_1_2_2021_06 or SecurityPolicy_TLS13_1_2_PFS_PQ_2025_09 or SecurityPolicy_TLS13_1_2_PQ_2025_09 or SecurityPolicy_TLS13_1_3_2025_09 or SecurityPolicy_TLS13_1_3_FIPS_2025_09 or SecurityPolicy_TLS13_2025_EDGE
+    Checkov looks for: aws_api_gateway_domain_name: security_policy is
+    TLS_1_2 or SecurityPolicy_TLS12_2018_EDGE or
+    SecurityPolicy_TLS12_PFS_2025_EDGE or SecurityPolicy_TLS13_1_2_2021_06
+    or SecurityPolicy_TLS13_1_2_PFS_PQ_2025_09 or
+    SecurityPolicy_TLS13_1_2_PQ_2025_09 or SecurityPolicy_TLS13_1_3_2025_09
+    or SecurityPolicy_TLS13_1_3_FIPS_2025_09 or
+    SecurityPolicy_TLS13_2025_EDGE
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +44,29 @@ control 'CKV_AWS_206' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_api_gateway_domain_name]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_domain_name#security-policy'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-6']
+  tag nist_r4:               ['CM-6']
+  tag cci:                   ['CCI-000366']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_206 — no deployed-asset reader for aws_api_gateway_domain_name" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_api_gateway_domain_names.api_gateway_domain_name_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_api_gateway_domain_name', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_api_gateway_domain_name in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_api_gateway_domain_name(domain_name: id) do
+      its('security_policy') { should be_in ['TLS_1_2', 'SecurityPolicy_TLS12_2018_EDGE', 'SecurityPolicy_TLS12_PFS_2025_EDGE', 'SecurityPolicy_TLS13_1_2_2021_06', 'SecurityPolicy_TLS13_1_2_PFS_PQ_2025_09', 'SecurityPolicy_TLS13_1_2_PQ_2025_09', 'SecurityPolicy_TLS13_1_3_2025_09', 'SecurityPolicy_TLS13_1_3_FIPS_2025_09', 'SecurityPolicy_TLS13_2025_EDGE'] }
+    end
   end
 end

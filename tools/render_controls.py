@@ -141,6 +141,7 @@ control '{cid}' do
   tag ksi:                   {ksi}
   tag severity:              '{sev}'
   tag severity_source:       'assessed'
+  tag nist_source:           '{nist_source}'
   tag implementation_status: 'implemented'
 
   # Enumerated at control scope, then each asset asserted on its own. The
@@ -164,10 +165,27 @@ end
 
 
 def load():
+    """Reviewed data first, derived data second — and an authored entry always wins.
+
+    The two are separate files on purpose. A derived mapping asserts on a property
+    name taken from the Terraform argument, and a derived anchor is a family-level
+    claim from the check's category. Merging them into the authored files would
+    erase the only signal a reader has for which is which.
+    """
     catalog = yaml.safe_load(CATALOG.read_text())
-    return (catalog["_source"]["version"], catalog["checks"],
-            yaml.safe_load(RESOURCE_MAP.read_text())["checks"],
-            yaml.safe_load(METADATA.read_text()),
+    resource_map = yaml.safe_load(RESOURCE_MAP.read_text())["checks"]
+    metadata = yaml.safe_load(METADATA.read_text())
+
+    derived_map = HERE / "resource_map_derived.yml"
+    if derived_map.is_file():
+        for cid, spec in (yaml.safe_load(derived_map.read_text()) or {}).get("checks", {}).items():
+            resource_map.setdefault(cid, spec)
+    derived_meta = HERE / "control_metadata_derived.yml"
+    if derived_meta.is_file():
+        for cid, meta in (yaml.safe_load(derived_meta.read_text()) or {}).items():
+            metadata.setdefault(cid, meta)
+
+    return (catalog["_source"]["version"], catalog["checks"], resource_map, metadata,
             yaml.safe_load(FIXES.read_text()))
 
 
@@ -249,6 +267,9 @@ def render(cid, version, entry, mapping, meta, fixes):
     prose = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     types_rb = "%w[" + " ".join(types) + "]"
 
+    # f-string template below, so this must be a local rather than a format arg.
+    nist_source = meta.get("nist_source", "reviewed")
+
     stronger = ""
     if meta.get("stronger"):
         stronger = "\n\n" + wrap(meta["stronger"], 4)
@@ -298,6 +319,7 @@ control '{cid}' do
   tag ksi:              {meta["ksi"]}
   tag severity:         '{meta["severity"]}'
   tag severity_source:  'assessed'
+  tag nist_source:      '{nist_source}'
   tag implementation_status: 'implemented'
 
   assets = aws_compute_assets(regions: scan_regions)
@@ -352,7 +374,8 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
     elif satisfies == "in_list":
         # A literal array in the control, so the accepted set is visible in the
         # result rather than hidden behind a helper.
-        allowed = ", ".join(f"'{v}'" for v in value)
+        # Ruby escapes a single quote inside a single-quoted string by doubling it.
+        allowed = ", ".join("'" + str(v).replace("'", "''") + "'" for v in value)
         matcher = f"should be_in [{allowed}]"
     else:
         raise SystemExit(f"{cid}: unknown satisfies '{satisfies}'")
@@ -372,6 +395,7 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
         docs=entry["tf_docs"].get(tf_type, PROVIDER_DOCS),
         nist=meta["nist"], nist_r4=meta["nist_r4"], cci=meta["cci"], ksi=meta["ksi"],
         sev=meta["severity"], impact=meta["impact"],
+        nist_source=meta.get("nist_source", "reviewed"),
         plural=enum["resource"], ids_column=enum["ids"],
         singular=assertion["resource"],
         arg_expr=("id" if assertion.get("arg") in (None, "", "positional")

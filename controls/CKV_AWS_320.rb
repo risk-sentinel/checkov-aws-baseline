@@ -52,6 +52,7 @@ control 'CKV_AWS_320' do
   tag ksi:                   ['KSI-CMT-CFG']
   tag severity:              'low'
   tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
   tag implementation_status: 'implemented'
 
   # Enumerated at control scope, then each asset asserted on its own. The

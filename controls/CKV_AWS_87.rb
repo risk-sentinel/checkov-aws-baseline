@@ -51,6 +51,7 @@ control 'CKV_AWS_87' do
   tag ksi:                   ['KSI-CNA-NDS']
   tag severity:              'high'
   tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
   tag implementation_status: 'implemented'
 
   # Enumerated at control scope, then each asset asserted on its own. The

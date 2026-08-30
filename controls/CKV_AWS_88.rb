@@ -77,6 +77,7 @@ control 'CKV_AWS_88' do
   tag ksi:              ['KSI-CNA-NDS']
   tag severity:         'medium'
   tag severity_source:  'assessed'
+  tag nist_source:      'reviewed'
   tag implementation_status: 'implemented'
 
   assets = aws_compute_assets(regions: scan_regions)

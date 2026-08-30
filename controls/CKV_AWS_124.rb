@@ -2,26 +2,31 @@
 #
 # Rule:        CKV_AWS_124 (checkov 3.3.16)
 # Applies to:  aws_cloudformation_stack
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudformation_stack yet.
+# Read with:   aws_cloudformation_stacks -> aws_cloudformation_stack (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_124'] || []
 
 control 'CKV_AWS_124' do
-  impact 0.0
   title 'Ensure that CloudFormation stacks are sending event notifications to an SNS topic'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudformation_stack in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudformation_stack resources that actually exist, read through
+    the stock inspec-aws aws_cloudformation_stack resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure that CloudFormation stacks are sending event notifications to an
+    SNS topic. Anchors derived from the check's logging category, not
+    reviewed control by control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_cloudformation_stack: notification_arns is CKV_ANY
+    Checkov looks for: aws_cloudformation_stack: notification_arns is
+    CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +39,29 @@ control 'CKV_AWS_124' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cloudformation_stack]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudformation_stack#notification-arns'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_124 — no deployed-asset reader for aws_cloudformation_stack" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_cloudformation_stacks.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_cloudformation_stack', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudformation_stack in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_cloudformation_stack(stack_name: id) do
+      its('notification_arns') { should_not be_empty }
+    end
   end
 end

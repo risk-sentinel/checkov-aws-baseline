@@ -2,23 +2,26 @@
 #
 # Rule:        CKV_AWS_227 (checkov 3.3.16)
 # Applies to:  aws_kms_key
-# Status:      PLANNED — no deployed-asset reader exists for aws_kms_key yet.
+# Read with:   aws_kms_keys -> aws_kms_key (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_227'] || []
 
 control 'CKV_AWS_227' do
-  impact 0.0
   title 'Ensure KMS key is enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_kms_key in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_kms_key resources that actually exist, read through the stock
+    inspec-aws aws_kms_key resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Ensure KMS key is enabled. Anchors derived from the check's encryption
+    category, not reviewed control by control.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_kms_key: is_enabled is True
@@ -34,9 +37,29 @@ control 'CKV_AWS_227' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_kms_key]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key#is-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_227 — no deployed-asset reader for aws_kms_key" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_kms_keys.key_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_kms_key', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_kms_key in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_kms_key(key_id: id) do
+      its('is_enabled') { should eq true }
+    end
   end
 end

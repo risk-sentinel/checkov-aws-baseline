@@ -2,23 +2,26 @@
 #
 # Rule:        CKV_AWS_130 (checkov 3.3.16)
 # Applies to:  aws_subnet
-# Status:      PLANNED — no deployed-asset reader exists for aws_subnet yet.
+# Read with:   aws_subnets -> aws_subnet (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_130'] || []
 
 control 'CKV_AWS_130' do
-  impact 0.0
   title 'Ensure VPC subnets do not assign public IP by default'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_subnet in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_subnet resources that actually exist, read through the stock
+    inspec-aws aws_subnet resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Ensure VPC subnets do not assign public IP by default. Anchors derived
+    from the check's networking category, not reviewed control by control.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_subnet: map_public_ip_on_launch is not True
@@ -34,9 +37,29 @@ control 'CKV_AWS_130' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_subnet]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/subnet#map-public-ip-on-launch'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-7', 'SC-7 (5)']
+  tag nist_r4:               ['SC-7', 'SC-7 (5)']
+  tag cci:                   ['CCI-001097', 'CCI-002080']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_130 — no deployed-asset reader for aws_subnet" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_subnets.subnet_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_subnet', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_subnet in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_subnet(subnet_id: id) do
+      its('map_public_ip_on_launch') { should eq false }
+    end
   end
 end

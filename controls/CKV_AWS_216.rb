@@ -2,23 +2,26 @@
 #
 # Rule:        CKV_AWS_216 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudfront_distribution yet.
+# Read with:   aws_cloudfront_distributions -> aws_cloudfront_distribution (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_216'] || []
 
 control 'CKV_AWS_216' do
-  impact 0.0
   title 'Ensure CloudFront distribution is enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudfront_distribution in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudfront_distribution resources that actually exist, read
+    through the stock inspec-aws aws_cloudfront_distribution resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Ensure CloudFront distribution is enabled. Anchors derived from the
+    check's general security category, not reviewed control by control.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_cloudfront_distribution: enabled is True
@@ -34,9 +37,29 @@ control 'CKV_AWS_216' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cloudfront_distribution]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution#enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-6']
+  tag nist_r4:               ['CM-6']
+  tag cci:                   ['CCI-000366']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_216 — no deployed-asset reader for aws_cloudfront_distribution" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_cloudfront_distributions.distribution_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_cloudfront_distribution', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudfront_distribution in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_cloudfront_distribution(distribution_id: id) do
+      its('enabled') { should eq true }
+    end
   end
 end

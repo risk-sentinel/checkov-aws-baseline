@@ -2,26 +2,31 @@
 #
 # Rule:        CKV_AWS_209 (checkov 3.3.16)
 # Applies to:  aws_mq_broker
-# Status:      PLANNED — no deployed-asset reader exists for aws_mq_broker yet.
+# Read with:   aws_mq_brokers -> aws_mq_broker (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_209'] || []
 
 control 'CKV_AWS_209' do
-  impact 0.0
   title 'Ensure MQ broker encrypted by KMS using a customer managed Key (CMK)'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_mq_broker in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_mq_broker resources that actually exist, read through the stock
+    inspec-aws aws_mq_broker resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure MQ broker encrypted by KMS using a customer managed Key (CMK).
+    Anchors derived from the check's encryption category, not reviewed
+    control by control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_mq_broker: encryption_options/[0]/kms_key_id is CKV_ANY
+    Checkov looks for: aws_mq_broker: encryption_options/[0]/kms_key_id is
+    CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +39,29 @@ control 'CKV_AWS_209' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_mq_broker]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/mq_broker#encryption-options'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_209 — no deployed-asset reader for aws_mq_broker" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_mq_brokers.broker_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_mq_broker', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_mq_broker in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_mq_broker(broker_id: id) do
+      its('encryption_options') { should_not be_empty }
+    end
   end
 end

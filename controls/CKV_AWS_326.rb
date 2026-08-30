@@ -51,6 +51,7 @@ control 'CKV_AWS_326' do
   tag ksi:                   ['KSI-RPL-RCY']
   tag severity:              'low'
   tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
   tag implementation_status: 'implemented'
 
   # Enumerated at control scope, then each asset asserted on its own. The

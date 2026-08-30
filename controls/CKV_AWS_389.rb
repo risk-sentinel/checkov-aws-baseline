@@ -2,26 +2,31 @@
 #
 # Rule:        CKV_AWS_389 (checkov 3.3.16)
 # Applies to:  aws_launch_configuration
-# Status:      PLANNED — no deployed-asset reader exists for aws_launch_configuration yet.
+# Read with:   aws_launch_configurations -> aws_launch_configuration (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_389'] || []
 
 control 'CKV_AWS_389' do
-  impact 0.0
   title 'Ensure AWS Auto Scaling group launch configuration doesn''t have public IP address assignment enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_launch_configuration in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_launch_configuration resources that actually exist, read through
+    the stock inspec-aws aws_launch_configuration resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure AWS Auto Scaling group launch configuration doesn't have public
+    IP address assignment enabled. Anchors derived from the check's
+    networking category, not reviewed control by control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_launch_configuration: associate_public_ip_address is not True
+    Checkov looks for: aws_launch_configuration: associate_public_ip_address
+    is not True
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +39,29 @@ control 'CKV_AWS_389' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_launch_configuration]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/launch_configuration#associate-public-ip-address'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-7', 'SC-7 (5)']
+  tag nist_r4:               ['SC-7', 'SC-7 (5)']
+  tag cci:                   ['CCI-001097', 'CCI-002080']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_389 — no deployed-asset reader for aws_launch_configuration" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_launch_configurations.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_launch_configuration', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_launch_configuration in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_launch_configuration(launch_configuration_name: id) do
+      its('associate_public_ip_address') { should eq false }
+    end
   end
 end

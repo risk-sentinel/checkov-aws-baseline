@@ -41,6 +41,53 @@ NAME = re.compile(r"^\s*name\s+['\"]([a-z0-9_]+)['\"]", re.M)
 COLUMN = re.compile(r"register_column\(:([a-z0-9_]+)")
 DYNAMIC = "populate_filter_table_from_response"
 
+# Required parameters are written four ways in the pack: [:a, :b], %i[a b],
+# %i(a b), %w[a b]. A single loose pattern captured past the closing bracket and
+# swallowed the next twenty lines of Ruby into an "argument name", which then
+# rendered a control that could not parse. Each form is matched exactly, and
+# every captured name must look like a parameter or it is discarded.
+# `required:` means all of them; `require_any_of:` means at least one, and the
+# first is as good an argument name as any. Both appear with [], %i[], %i() and
+# %w[] bodies, which is why this is a list of exact patterns rather than one
+# loose one -- a loose one already captured past a closing bracket and swallowed
+# twenty lines of Ruby into an argument name.
+REQUIRED_FORMS = [
+    re.compile(r"\brequired:\s*\[([^\]]*)\]"),
+    re.compile(r"\brequired:\s*%i\[([^\]]*)\]"),
+    re.compile(r"\brequired:\s*%i\(([^)]*)\)"),
+    re.compile(r"\brequired:\s*%w\[([^\]]*)\]"),
+]
+ANY_OF_FORMS = [
+    re.compile(r"require_any_of:\s*\[([^\]]*)\]"),
+    re.compile(r"require_any_of:\s*%i\[([^\]]*)\]"),
+    re.compile(r"require_any_of:\s*%i\(([^)]*)\)"),
+    re.compile(r"require_any_of:\s*%w\[([^\]]*)\]"),
+]
+MUST_PROVIDE = re.compile(r"`\[([^\]`]*)\]`\s*must be provided")
+PARAM_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def required_params(text):
+    """Parameters a resource refuses to run without.
+
+    A resource with required parameters cannot enumerate an account -- there is
+    nothing to pass it -- and a singular resource's required parameter is the
+    argument name a control must use, which pluralising the resource name does
+    not reliably produce.
+    """
+    found = set()
+    for pattern in REQUIRED_FORMS:
+        for m in pattern.finditer(text):
+            found |= {p.strip().lstrip(":") for p in re.split(r"[,\s]+", m.group(1)) if p.strip()}
+    for pattern in ANY_OF_FORMS:
+        for m in pattern.finditer(text):
+            alts = [p.strip().lstrip(":") for p in re.split(r"[,\s]+", m.group(1)) if p.strip()]
+            if alts:
+                found.add(alts[0])
+    for m in MUST_PROVIDE.finditer(text):
+        found |= {p.strip().lstrip(":") for p in m.group(1).split(",")}
+    return sorted(p for p in found if PARAM_NAME.fullmatch(p))
+
 
 def pack():
     """resource name -> {columns, dynamic} from the vendored resource pack."""
@@ -48,7 +95,8 @@ def pack():
     for f in sorted(ROOT.glob("vendor/*/libraries/*.rb")):
         text = f.read_text()
         for n in NAME.findall(text):
-            out[n] = {"columns": set(COLUMN.findall(text)), "dynamic": DYNAMIC in text}
+            out[n] = {"columns": set(COLUMN.findall(text)), "dynamic": DYNAMIC in text,
+                      "required": required_params(text)}
     return out
 
 
@@ -73,6 +121,10 @@ def main() -> int:
 
             if plural not in resources:
                 problems.append(f"{cid}/{tf_type}: no resource named '{plural}' in the pack")
+            elif resources[plural]["required"]:
+                problems.append(
+                    f"{cid}/{tf_type}: {plural} requires {resources[plural]['required']} and "
+                    f"cannot enumerate an account — the control errors at exec instead of skipping")
             elif column not in resources[plural]["columns"]:
                 if resources[plural]["dynamic"]:
                     unverifiable.append(
@@ -85,6 +137,10 @@ def main() -> int:
 
             if singular not in resources:
                 problems.append(f"{cid}/{tf_type}: no resource named '{singular}' in the pack")
+            elif (req := resources[singular]["required"]) and assertion.get("arg") not in req + ["positional"]:
+                problems.append(
+                    f"{cid}/{tf_type}: {singular} requires {req}, control passes "
+                    f"'{assertion.get('arg')}'")
             elif prop:
                 unverifiable.append(
                     f"{cid}/{tf_type}: {singular}.{prop} — provided by create_resource_methods "

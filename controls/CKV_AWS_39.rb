@@ -2,26 +2,30 @@
 #
 # Rule:        CKV_AWS_39 (checkov 3.3.16)
 # Applies to:  aws_eks_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_eks_cluster yet.
+# Read with:   aws_eks_clusters -> aws_eks_cluster (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_39'] || []
 
 control 'CKV_AWS_39' do
-  impact 0.0
   title 'Ensure Amazon EKS public endpoint disabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_eks_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_eks_cluster resources that actually exist, read through the
+    stock inspec-aws aws_eks_cluster resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Ensure Amazon EKS public endpoint disabled. Anchors derived from the
+    check's kubernetes category, not reviewed control by control.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_eks_cluster: vpc_config/[0]/endpoint_public_access is False
+    Checkov looks for: aws_eks_cluster:
+    vpc_config/[0]/endpoint_public_access is False
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -34,9 +38,29 @@ control 'CKV_AWS_39' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_eks_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster#vpc-config'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-6', 'SC-7']
+  tag nist_r4:               ['CM-6', 'SC-7']
+  tag cci:                   ['CCI-000366']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'category-derived'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_39 — no deployed-asset reader for aws_eks_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_eks_clusters.eks_cluster_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_eks_cluster', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_eks_cluster in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_eks_cluster(cluster_name: id) do
+      its('vpc_config') { should eq false }
+    end
   end
 end
