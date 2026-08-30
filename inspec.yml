@@ -39,8 +39,20 @@ inputs:
     type: string
     value: aws
     description: >-
-      AWS partition the scan runs against. One of: aws (Commercial),
-      aws-us-gov (GovCloud non-DoD).
+      Which AWS partition this boundary lives in — separate account namespaces,
+      endpoints, service availability and ARN prefixes. One of: aws
+      (Commercial), aws-us-gov (GovCloud US, non-DoD). A check whose service
+      does not exist in the partition is Not Applicable there for a stated
+      reason, and asset ARNs are built with this prefix, so an exemption written
+      against arn:aws: will not match a GovCloud asset.
+  - name: aws_account_id
+    type: string
+    value: ''
+    description: >-
+      The account this boundary is. Empty means "do not check". When set, the
+      run asserts the credentials actually resolve to it and fails otherwise —
+      evidence filed against the wrong account is worse than no evidence, and
+      the two are indistinguishable after the fact.
   - name: scan_regions
     type: array
     value: []
@@ -58,5 +70,9 @@ inputs:
     type: hash
     value: {}
     description: >-
-      Documented exceptions, as { CHECK_ID: [asset-id, ...] }. An exception is
-      data with an owner, not an edited control.
+      Documented exceptions, scoped by resource type and matched on ARN:
+      { CHECK_ID: [ { type: aws_instance, arns: [...] } ] }. An id alone is
+      ambiguous across resource types and names neither account nor region,
+      which matters when a boundary inherits assets from elsewhere. `ids:` is
+      accepted where the console id is what an operator has in hand. An
+      exception is data with an owner, not an edited control.

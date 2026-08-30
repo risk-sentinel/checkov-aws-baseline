@@ -96,8 +96,7 @@ control 'CKV_AWS_46' do
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
-  in_scope = assets.assets_of(applies_to)
-                   .reject { |a| exempt.include?(a[:id]) }
+  in_scope = assets.assets_of(applies_to, exempt: exempt)
                    .reject { |a| a[:user_data_secrets].nil? }
 
   applicable = !in_scope.empty?
@@ -111,7 +110,7 @@ control 'CKV_AWS_46' do
   only_if("no #{applies_to.join(', ')} in scope expressing this setting") { applicable }
 
   in_scope.each do |asset|
-    describe "#{asset[:type]} #{asset[:id]} (#{asset[:region]})" do
+    describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:user_data_secrets] }
       it { should be_empty }
     end

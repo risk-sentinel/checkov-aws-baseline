@@ -122,6 +122,21 @@ its types and still look correct.
 `tools/lint_catalog_drift.py` asserts the three agree, and that the id is one the
 pinned Checkov release still defines.
 
+## Partitions
+
+Targets **AWS Commercial** (`aws`) and **AWS GovCloud US, non-DoD**
+(`aws-us-gov`), selected by the `aws_partition` input.
+
+Partitions are separate AWS universes — separate account namespaces, endpoints,
+service availability and ARN prefixes. Two consequences here:
+
+- a check whose service does not exist in the partition renders **Not
+  Applicable** with a stated reason, never a silent pass;
+- asset ARNs are built with the partition prefix, so an exemption written
+  against `arn:aws:` will not match a GovCloud asset. The profile derives the
+  prefix from the region rather than trusting the input, because a resource
+  cannot read inputs and the region already carries the answer.
+
 ## Status
 
 | | |

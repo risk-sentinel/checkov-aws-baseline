@@ -33,8 +33,10 @@ class AwsComputeAssets < AwsResourceBase
 
   FilterTable.create
              .register_column(:ids,                     field: :id)
+             .register_column(:arns,                    field: :arn)
              .register_column(:types,                   field: :type)
              .register_column(:regions,                 field: :region)
+             .register_column(:account_ids,             field: :account_id)
              .register_column(:imds_tokens_or_disabled, field: :imds_tokens_or_disabled)
              .register_column(:public_ip,               field: :public_ip)
              .register_column(:ebs_optimized,           field: :ebs_optimized)
@@ -59,8 +61,11 @@ class AwsComputeAssets < AwsResourceBase
     super(opts)
     validate_parameters(allow: %i[regions])
     @unreadable_regions = []
+    @account_id = fetch_account_id
     @table = fetch_data
   end
+
+  attr_reader :account_id
 
   def exists?
     !@table.empty?
@@ -72,16 +77,79 @@ class AwsComputeAssets < AwsResourceBase
   # Structs whose shape is FilterTable's business, not this profile's, and a
   # control that reaches into it breaks quietly when that changes. A hash with
   # symbol keys is the contract here.
-  def assets_of(types)
+  # Rows for the given Terraform resource types, with declared exemptions
+  # already removed.
+  #
+  # Filtering happens here rather than in the control because the resource class
+  # is NOT resolvable by constant from a control's eval context -- InSpec
+  # registers a library resource under its DSL name, not as a constant the
+  # control can reach. A control calling `AwsComputeAssets.exempt?` raises
+  # `uninitialized constant` at exec, and neither `check` nor `json` sees it.
+  #
+  # Controls iterate plain hashes with symbol keys rather than FilterTable
+  # entries: `entries` yields Structs whose shape is FilterTable's business, and
+  # a control that reaches into it breaks quietly when that changes.
+  def assets_of(types, exempt: [])
     wanted = Array(types)
-    @table.select { |row| wanted.include?(row[:type]) }
+    @table.select { |row| wanted.include?(row[:type]) && !exempt?(row, exempt) }
   end
 
-  def to_s
-    "Compute assets across #{@scan_regions.length} region(s)"
+  # Does a declared exemption cover this asset?
+  #
+  # An exemption is scoped by resource TYPE and matched on ARN, because an id
+  # alone is ambiguous across types and names neither the account nor the region
+  # it lives in. A boundary that inherits assets from another account needs to
+  # name them precisely, and an ARN is the only identifier that does.
+  #
+  #   exempt_assets:
+  #     CKV_AWS_88:
+  #       - type: aws_instance
+  #         arns:
+  #           - arn:aws:ec2:us-east-2:111122223333:instance/i-0123456789abcdef0
+  #
+  # `ids:` is accepted alongside `arns:` for the case where the console id is
+  # what an operator has in hand and the asset is unambiguously in this account.
+  def exempt?(asset, exemptions)
+    Array(exemptions).any? do |rule|
+      rule = rule.transform_keys(&:to_s) if rule.respond_to?(:transform_keys)
+      next false unless rule.is_a?(Hash)
+      next false if rule["type"] && rule["type"] != asset[:type]
+
+      Array(rule["arns"]).include?(asset[:arn]) || Array(rule["ids"]).include?(asset[:id])
+    end
   end
 
   private
+
+  # The boundary this evidence is about. Carried on every row so a result names
+  # the account it came from -- evidence that does not identify its subject is
+  # not evidence, and a multi-account estate produces identical-looking rows
+  # otherwise.
+  def fetch_account_id
+    id = nil
+    catch_aws_errors do
+      # Through @aws, not bare: the client accessors live on AwsConnection, and
+      # a resource that calls `sts_client` directly raises NameError the moment
+      # it runs -- which `check` and `json` never do.
+      id = @aws.sts_client.get_caller_identity.account
+    end
+    id
+  end
+
+  # Derived from the region rather than read from an input: a resource cannot
+  # read inputs (`input()` raises in resource scope), and the region already
+  # carries the answer.
+  def partition_for(region)
+    case region.to_s
+    when /\Aus-gov-/ then "aws-us-gov"
+    when /\Acn-/     then "aws-cn"
+    else                  "aws"
+    end
+  end
+
+  def arn_for(region, service, resource)
+    "arn:#{partition_for(region)}:#{service}:#{region}:#{@account_id}:#{resource}"
+  end
 
   def fetch_data
     @scan_regions = resolve_regions
@@ -94,13 +162,13 @@ class AwsComputeAssets < AwsResourceBase
 
     regions = []
     catch_aws_errors do
-      resp = ec2_client.describe_regions
+      resp = @aws.compute_client.describe_regions
       regions = resp.regions.map(&:region_name)
     end
     # An empty list here means describe_regions itself failed. Returning [] would
     # scan nothing and report an account with no compute -- the exact silence
     # this resource exists to avoid -- so fall back to the configured region.
-    regions.empty? ? [ec2_client.config.region].compact : regions
+    regions.empty? ? [@aws.compute_client.config.region].compact : regions
   end
 
   def walk_region(region)
@@ -127,6 +195,8 @@ class AwsComputeAssets < AwsResourceBase
 
           rows << {
             id:                     i.instance_id,
+            arn:                    arn_for(region, "ec2", "instance/#{i.instance_id}"),
+            account_id:             @account_id,
             type:                   "aws_instance",
             region:                 region,
             imds_tokens_or_disabled: imds_ok?(i.metadata_options),
@@ -151,6 +221,8 @@ class AwsComputeAssets < AwsResourceBase
 
         rows << {
           id:                     lt.launch_template_id,
+          arn:                    arn_for(region, "ec2", "launch-template/#{lt.launch_template_id}"),
+          account_id:             @account_id,
           type:                   "aws_launch_template",
           region:                 region,
           imds_tokens_or_disabled: imds_ok?(data.metadata_options),
@@ -174,6 +246,11 @@ class AwsComputeAssets < AwsResourceBase
       page.launch_configurations.each do |lc|
         rows << {
           id:                     lc.launch_configuration_name,
+          # The API hands back the real ARN here, so use it rather than
+          # reconstructing one -- a launch configuration ARN embeds a uuid that
+          # cannot be derived from the name.
+          arn:                    lc.launch_configuration_arn,
+          account_id:             @account_id,
           type:                   "aws_launch_configuration",
           region:                 region,
           imds_tokens_or_disabled: imds_ok?(lc.metadata_options),
