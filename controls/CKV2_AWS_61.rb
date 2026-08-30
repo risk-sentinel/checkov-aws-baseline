@@ -2,30 +2,56 @@
 #
 # Rule:        CKV2_AWS_61 (checkov 3.3.16)
 # Applies to:  aws_s3_bucket
-# Status:      PLANNED — no deployed-asset reader exists for aws_s3_bucket yet.
+# Read with:   aws_s3_buckets -> aws_s3_bucket (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV2_AWS_61'] || []
 
 control 'CKV2_AWS_61' do
-  impact 0.0
   title 'Ensure that an S3 bucket has a lifecycle configuration'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_s3_bucket in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_s3_bucket resources that actually exist, read through the stock
+    inspec-aws aws_s3_bucket resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    With no lifecycle configuration, objects accumulate indefinitely:
+    retention becomes whatever nobody got around to deleting.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure that an S3 bucket has a lifecycle configuration
+    Checkov looks for: Ensure that an S3 bucket has a lifecycle
+    configuration
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket
+    Terraform — aws_s3_bucket:
+
+      resource "aws_s3_bucket_lifecycle_configuration" "example" {
+        bucket = aws_s3_bucket.example.id
+
+        rule {
+          id     = "expire-noncurrent"
+          status = "Enabled"
+
+          noncurrent_version_expiration {
+            noncurrent_days = 90
+          }
+
+          abort_incomplete_multipart_upload {
+            days_after_initiation = 7
+          }
+        }
+      }
+
+    Out of band — aws_s3_bucket:
+
+      aws s3api put-bucket-lifecycle-configuration --bucket <name> \
+        --lifecycle-configuration file://lifecycle.json
   FIX
 
   tag checkov_id:            'CKV2_AWS_61'
@@ -34,9 +60,28 @@ control 'CKV2_AWS_61' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_s3_bucket]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-11', 'SI-12']
+  tag nist_r4:               ['AU-11', 'SI-12']
+  tag cci:                   ['CCI-000167', 'CCI-001678']
+  tag ksi:                   ['KSI-MLA-OSM']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_61 — no deployed-asset reader for aws_s3_bucket" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_s3_buckets.bucket_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_s3_bucket', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_s3_bucket in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_s3_bucket(bucket_name: id) do
+      its('bucket_lifecycle_rules') { should_not be_empty }
+    end
   end
 end

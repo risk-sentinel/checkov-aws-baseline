@@ -195,3 +195,123 @@ CKV_AWS_46:
 
         user_data = file("${path.module}/bootstrap.sh")
       }
+
+CKV_AWS_18:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_logging" "example" {
+        bucket        = aws_s3_bucket.example.id
+        target_bucket = aws_s3_bucket.log_archive.id
+        target_prefix = "s3-access/"
+      }
+    cli: |
+      aws s3api put-bucket-logging --bucket <name> \
+        --bucket-logging-status file://logging.json
+
+CKV_AWS_19:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_server_side_encryption_configuration" "example" {
+        bucket = aws_s3_bucket.example.id
+      
+        rule {
+          apply_server_side_encryption_by_default {
+            sse_algorithm     = "aws:kms"
+            kms_master_key_id = aws_kms_key.s3.arn
+          }
+        }
+      }
+    cli: |
+      aws s3api put-bucket-encryption --bucket <name> \
+        --server-side-encryption-configuration file://sse.json
+
+CKV_AWS_21:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_versioning" "example" {
+        bucket = aws_s3_bucket.example.id
+      
+        versioning_configuration {
+          status = "Enabled"
+        }
+      }
+    cli: |
+      aws s3api put-bucket-versioning --bucket <name> \
+        --versioning-configuration Status=Enabled
+
+CKV_AWS_20:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_public_access_block" "example" {
+        bucket                  = aws_s3_bucket.example.id
+        block_public_acls       = true
+        ignore_public_acls      = true
+        block_public_policy     = true
+        restrict_public_buckets = true
+      }
+    cli: |
+      aws s3api put-public-access-block --bucket <name> \
+        --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+CKV_AWS_379:
+  aws_s3_bucket:
+    terraform: |
+      data "aws_iam_policy_document" "tls_only" {
+        statement {
+          effect    = "Deny"
+          actions   = ["s3:*"]
+          resources = [aws_s3_bucket.example.arn, "${aws_s3_bucket.example.arn}/*"]
+      
+          principals {
+            type        = "*"
+            identifiers = ["*"]
+          }
+      
+          condition {
+            test     = "Bool"
+            variable = "aws:SecureTransport"
+            values   = ["false"]
+          }
+        }
+      }
+    cli: |
+      aws s3api put-bucket-policy --bucket <name> --policy file://tls-only.json
+
+CKV2_AWS_6:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_public_access_block" "example" {
+        bucket                  = aws_s3_bucket.example.id
+        block_public_acls       = true
+        ignore_public_acls      = true
+        block_public_policy     = true
+        restrict_public_buckets = true
+      }
+    cli: |
+      aws s3api put-public-access-block --bucket <name> \
+        --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+CKV2_AWS_61:
+  aws_s3_bucket:
+    terraform: |
+      resource "aws_s3_bucket_lifecycle_configuration" "example" {
+        bucket = aws_s3_bucket.example.id
+      
+        rule {
+          id     = "expire-noncurrent"
+          status = "Enabled"
+      
+          noncurrent_version_expiration {
+            noncurrent_days = 90
+          }
+      
+          abort_incomplete_multipart_upload {
+            days_after_initiation = 7
+          }
+        }
+      }
+    cli: |
+      aws s3api put-bucket-lifecycle-configuration --bucket <name> \
+        --lifecycle-configuration file://lifecycle.json

@@ -2,30 +2,44 @@
 #
 # Rule:        CKV_AWS_18 (checkov 3.3.16)
 # Applies to:  aws_s3_bucket
-# Status:      PLANNED — no deployed-asset reader exists for aws_s3_bucket yet.
+# Read with:   aws_s3_buckets -> aws_s3_bucket (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_18'] || []
 
 control 'CKV_AWS_18' do
-  impact 0.0
   title 'Ensure the S3 bucket has access logging enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_s3_bucket in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_s3_bucket resources that actually exist, read through the stock
+    inspec-aws aws_s3_bucket resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Without access logging there is no record of who read or wrote an
+    object, so a data-exposure question has no evidence either way.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: Ensure the S3 bucket has access logging enabled
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket
+    Terraform — aws_s3_bucket:
+
+      resource "aws_s3_bucket_logging" "example" {
+        bucket        = aws_s3_bucket.example.id
+        target_bucket = aws_s3_bucket.log_archive.id
+        target_prefix = "s3-access/"
+      }
+
+    Out of band — aws_s3_bucket:
+
+      aws s3api put-bucket-logging --bucket <name> \
+        --bucket-logging-status file://logging.json
   FIX
 
   tag checkov_id:            'CKV_AWS_18'
@@ -34,9 +48,28 @@ control 'CKV_AWS_18' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_s3_bucket]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_18 — no deployed-asset reader for aws_s3_bucket" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_s3_buckets.bucket_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_s3_bucket', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_s3_bucket in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_s3_bucket(bucket_name: id) do
+      its('has_access_logging_enabled?') { should eq true }
+    end
   end
 end

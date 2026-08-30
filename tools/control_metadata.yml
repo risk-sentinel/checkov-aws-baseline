@@ -92,3 +92,73 @@ CKV_AWS_46:
     Checkov scans the user_data string in HCL. This decodes what the instance is
     actually serving, which catches a value injected after apply or supplied by a
     template Checkov never rendered.
+
+CKV_AWS_18:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Without access logging there is no record of who read or wrote an object, so a data-exposure question has no evidence either way.
+
+CKV_AWS_19:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Default encryption is what makes an object written by any client encrypted at rest; without it, encryption depends on every writer remembering.
+
+CKV_AWS_21:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535', 'CCI-001678']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Versioning is what makes an accidental or malicious overwrite recoverable; without it a delete is final.
+
+CKV_AWS_20:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'SC-7']
+  nist_r4: ['AC-3', 'SC-7']
+  cci: ['CCI-000213', 'CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A bucket ACL granting public READ exposes every object to the internet, and the exposure is invisible from inside the account.
+
+CKV_AWS_379:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418', 'CCI-002421']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    Without a policy denying aws:SecureTransport=false, an unencrypted request is accepted rather than refused, and TLS becomes a client-side choice.
+
+CKV2_AWS_6:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'SC-7']
+  nist_r4: ['AC-3', 'SC-7']
+  cci: ['CCI-000213', 'CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    The public access block is the account-independent backstop: without it, a future ACL or policy change can make the bucket public with no further review.
+
+CKV2_AWS_61:
+  severity: low
+  impact: 0.3
+  nist: ['AU-11', 'SI-12']
+  nist_r4: ['AU-11', 'SI-12']
+  cci: ['CCI-000167', 'CCI-001678']
+  ksi: ['KSI-MLA-OSM']
+  rationale: >-
+    With no lifecycle configuration, objects accumulate indefinitely: retention becomes whatever nobody got around to deleting.

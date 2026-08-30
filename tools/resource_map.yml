@@ -50,3 +50,74 @@ checks:
     aws_instance:             {field: user_data_secrets, satisfies: empty}
     aws_launch_template:      {field: user_data_secrets, satisfies: empty}
     aws_launch_configuration: {field: user_data_secrets, satisfies: empty}
+
+  # --- S3, read through stock inspec-aws resources (no custom reader) ---
+  CKV_AWS_18:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "has_access_logging_enabled?"
+        satisfies: equals
+        value: true
+  CKV_AWS_19:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "has_default_encryption_enabled?"
+        satisfies: equals
+        value: true
+  CKV_AWS_21:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "has_versioning_enabled?"
+        satisfies: equals
+        value: true
+  CKV_AWS_20:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "public?"
+        satisfies: equals
+        value: false
+  CKV_AWS_379:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "has_secure_transport_enabled?"
+        satisfies: equals
+        value: true
+  CKV2_AWS_6:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "prevent_public_access?"
+        satisfies: equals
+        value: true
+  CKV2_AWS_61:
+    aws_s3_bucket:
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: "bucket_lifecycle_rules"
+        satisfies: not_empty
