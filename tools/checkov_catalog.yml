@@ -9,6 +9,625 @@
 #       policy           -> needs IAM policy document parsing
 _source: {tool: checkov, version: '3.3.16', framework: terraform}
 checks:
+  CKV2_AWS_1:
+    name: 'Ensure that all NACL are attached to subnets'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_network_acl, aws_subnet]
+    inspected_key:
+      aws_network_acl: ''
+      aws_subnet: ''
+    tf_docs:
+      aws_network_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/network_acl'
+      aws_subnet: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/subnet'
+  CKV2_AWS_10:
+    name: 'Ensure CloudTrail trails are integrated with CloudWatch Logs'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_cloudtrail]
+    inspected_key:
+      aws_cloudtrail: ''
+    tf_docs:
+      aws_cloudtrail: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail'
+  CKV2_AWS_11:
+    name: 'Ensure VPC flow logging is enabled in all VPCs'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_vpc]
+    inspected_key:
+      aws_vpc: ''
+    tf_docs:
+      aws_vpc: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc'
+  CKV2_AWS_12:
+    name: 'Ensure the default security group of every VPC restricts all traffic'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_default_security_group, aws_vpc]
+    inspected_key:
+      aws_default_security_group: ''
+      aws_vpc: ''
+    tf_docs:
+      aws_default_security_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/default_security_group'
+      aws_vpc: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc'
+  CKV2_AWS_14:
+    name: 'Ensure that IAM groups includes at least one IAM user'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_iam_group, aws_iam_group_membership]
+    inspected_key:
+      aws_iam_group: ''
+      aws_iam_group_membership: ''
+    tf_docs:
+      aws_iam_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_group'
+      aws_iam_group_membership: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_group_membership'
+  CKV2_AWS_15:
+    name: 'Ensure that auto Scaling groups that are associated with a load balancer are using Elastic Load Balancing health checks.'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_autoscaling_group, aws_elb, aws_lb_target_group]
+    inspected_key:
+      aws_autoscaling_group: ''
+      aws_elb: ''
+      aws_lb_target_group: ''
+    tf_docs:
+      aws_autoscaling_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group'
+      aws_elb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb'
+      aws_lb_target_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_target_group'
+  CKV2_AWS_16:
+    name: 'Ensure that Auto Scaling is enabled on your DynamoDB tables'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_appautoscaling_target, aws_dynamodb_table]
+    inspected_key:
+      aws_appautoscaling_target: ''
+      aws_dynamodb_table: ''
+    tf_docs:
+      aws_appautoscaling_target: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_target'
+      aws_dynamodb_table: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table'
+  CKV2_AWS_18:
+    name: 'Ensure that Elastic File System (Amazon EFS) file systems are added in the backup plans of AWS Backup'
+    kind: graph
+    categories: [BACKUP_AND_RECOVERY]
+    resources: [aws_backup_selection]
+    inspected_key:
+      aws_backup_selection: ''
+    tf_docs:
+      aws_backup_selection: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/backup_selection'
+  CKV2_AWS_19:
+    name: 'Ensure that all EIP addresses allocated to a VPC are attached to EC2 instances'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_eip, aws_eip_association]
+    inspected_key:
+      aws_eip: ''
+      aws_eip_association: ''
+    tf_docs:
+      aws_eip: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eip'
+      aws_eip_association: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eip_association'
+  CKV2_AWS_2:
+    name: 'Ensure that only encrypted EBS volumes are attached to EC2 instances'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_ebs_volume, aws_volume_attachment]
+    inspected_key:
+      aws_ebs_volume: ''
+      aws_volume_attachment: ''
+    tf_docs:
+      aws_ebs_volume: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ebs_volume'
+      aws_volume_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/volume_attachment'
+  CKV2_AWS_20:
+    name: 'Ensure that ALB redirects HTTP requests into HTTPS ones'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb, aws_alb_listener, aws_lb, aws_lb_listener]
+    inspected_key:
+      aws_alb: ''
+      aws_alb_listener: ''
+      aws_lb: ''
+      aws_lb_listener: ''
+    tf_docs:
+      aws_alb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb'
+      aws_alb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_listener'
+      aws_lb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb'
+      aws_lb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener'
+  CKV2_AWS_21:
+    name: 'Ensure that all IAM users are members of at least one IAM group.'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_iam_group_membership]
+    inspected_key:
+      aws_iam_group_membership: ''
+    tf_docs:
+      aws_iam_group_membership: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_group_membership'
+  CKV2_AWS_22:
+    name: 'Ensure an IAM User does not have access to the console'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_iam_user]
+    inspected_key:
+      aws_iam_user: ''
+    tf_docs:
+      aws_iam_user: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_user'
+  CKV2_AWS_23:
+    name: 'Route53 A Record has Attached Resource'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_route53_record]
+    inspected_key:
+      aws_route53_record: ''
+    tf_docs:
+      aws_route53_record: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_record'
+  CKV2_AWS_27:
+    name: 'Ensure Postgres RDS as aws_rds_cluster has Query Logging enabled'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_rds_cluster, aws_rds_cluster_parameter_group]
+    inspected_key:
+      aws_rds_cluster: ''
+      aws_rds_cluster_parameter_group: ''
+    tf_docs:
+      aws_rds_cluster: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster'
+      aws_rds_cluster_parameter_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster_parameter_group'
+  CKV2_AWS_28:
+    name: 'Ensure public facing ALB are protected by WAF'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb, aws_lb]
+    inspected_key:
+      aws_alb: ''
+      aws_lb: ''
+    tf_docs:
+      aws_alb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb'
+      aws_lb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb'
+  CKV2_AWS_29:
+    name: 'Ensure public API gateway are protected by WAF'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_api_gateway_rest_api, aws_api_gateway_stage]
+    inspected_key:
+      aws_api_gateway_rest_api: ''
+      aws_api_gateway_stage: ''
+    tf_docs:
+      aws_api_gateway_rest_api: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api'
+      aws_api_gateway_stage: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage'
+  CKV2_AWS_3:
+    name: 'Ensure GuardDuty is enabled to specific org/region'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_guardduty_detector, aws_guardduty_organization_configuration]
+    inspected_key:
+      aws_guardduty_detector: ''
+      aws_guardduty_organization_configuration: ''
+    tf_docs:
+      aws_guardduty_detector: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_detector'
+      aws_guardduty_organization_configuration: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_organization_configuration'
+  CKV2_AWS_30:
+    name: 'Ensure Postgres RDS as aws_db_instance has Query Logging enabled'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_db_instance, aws_db_parameter_group]
+    inspected_key:
+      aws_db_instance: ''
+      aws_db_parameter_group: ''
+    tf_docs:
+      aws_db_instance: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance'
+      aws_db_parameter_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_parameter_group'
+  CKV2_AWS_31:
+    name: 'Ensure WAF2 has a Logging Configuration'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_wafv2_web_acl]
+    inspected_key:
+      aws_wafv2_web_acl: ''
+    tf_docs:
+      aws_wafv2_web_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl'
+  CKV2_AWS_32:
+    name: 'Ensure CloudFront distribution has a response headers policy attached'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_cloudfront_distribution]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+  CKV2_AWS_33:
+    name: 'Ensure AppSync is protected by WAF'
+    kind: graph
+    categories: [APPLICATION_SECURITY]
+    resources: [aws_appsync_graphql_api]
+    inspected_key:
+      aws_appsync_graphql_api: ''
+    tf_docs:
+      aws_appsync_graphql_api: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appsync_graphql_api'
+  CKV2_AWS_34:
+    name: 'AWS SSM Parameter should be Encrypted'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_ssm_parameter]
+    inspected_key:
+      aws_ssm_parameter: ''
+    tf_docs:
+      aws_ssm_parameter: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter'
+  CKV2_AWS_35:
+    name: 'AWS NAT Gateways should be utilized for the default route'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_route, aws_route_table]
+    inspected_key:
+      aws_route: ''
+      aws_route_table: ''
+    tf_docs:
+      aws_route: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route'
+      aws_route_table: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table'
+  CKV2_AWS_36:
+    name: 'Ensure terraform is not sending SSM secrets to untrusted domains over HTTP'
+    kind: graph
+    categories: [SUPPLY_CHAIN]
+    resources: [aws_ssm_parameter]
+    inspected_key:
+      aws_ssm_parameter: ''
+    tf_docs:
+      aws_ssm_parameter: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter'
+  CKV2_AWS_37:
+    name: 'Ensure CodeCommit associates an approval rule'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_codecommit_repository]
+    inspected_key:
+      aws_codecommit_repository: ''
+    tf_docs:
+      aws_codecommit_repository: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/codecommit_repository'
+  CKV2_AWS_38:
+    name: 'Ensure Domain Name System Security Extensions (DNSSEC) signing is enabled for Amazon Route 53 public hosted zones'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_route53_zone]
+    inspected_key:
+      aws_route53_zone: ''
+    tf_docs:
+      aws_route53_zone: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_zone'
+  CKV2_AWS_39:
+    name: 'Ensure Domain Name System (DNS) query logging is enabled for Amazon Route 53 hosted zones'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_route53_zone]
+    inspected_key:
+      aws_route53_zone: ''
+    tf_docs:
+      aws_route53_zone: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53_zone'
+  CKV2_AWS_4:
+    name: 'Ensure API Gateway stage have logging level defined as appropriate'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_api_gateway_method_settings, aws_api_gateway_stage]
+    inspected_key:
+      aws_api_gateway_method_settings: ''
+      aws_api_gateway_stage: ''
+    tf_docs:
+      aws_api_gateway_method_settings: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method_settings'
+      aws_api_gateway_stage: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage'
+  CKV2_AWS_40:
+    name: 'Ensure AWS IAM policy does not allow full IAM privileges'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_iam_group_policy, aws_iam_policy, aws_iam_role_policy, aws_iam_user_policy, aws_ssoadmin_permission_set_inline_policy]
+    inspected_key:
+      aws_iam_group_policy: ''
+      aws_iam_policy: ''
+      aws_iam_role_policy: ''
+      aws_iam_user_policy: ''
+      aws_ssoadmin_permission_set_inline_policy: ''
+    tf_docs:
+      aws_iam_group_policy: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_group_policy'
+      aws_iam_policy: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy'
+      aws_iam_role_policy: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy'
+      aws_iam_user_policy: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_user_policy'
+      aws_ssoadmin_permission_set_inline_policy: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssoadmin_permission_set_inline_policy'
+  CKV2_AWS_41:
+    name: 'Ensure an IAM role is attached to EC2 instance'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_instance]
+    inspected_key:
+      aws_instance: ''
+    tf_docs:
+      aws_instance: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/instance'
+  CKV2_AWS_42:
+    name: 'Ensure AWS CloudFront distribution uses custom SSL certificate'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_cloudfront_distribution]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+  CKV2_AWS_43:
+    name: 'Ensure S3 Bucket does not allow access to all Authenticated users'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_s3_bucket_acl]
+    inspected_key:
+      aws_s3_bucket_acl: ''
+    tf_docs:
+      aws_s3_bucket_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_acl'
+  CKV2_AWS_44:
+    name: 'Ensure AWS route table with VPC peering does not contain routes overly permissive to all traffic'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_route, aws_route_table]
+    inspected_key:
+      aws_route: ''
+      aws_route_table: ''
+    tf_docs:
+      aws_route: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route'
+      aws_route_table: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table'
+  CKV2_AWS_45:
+    name: 'Ensure AWS Config recorder is enabled to record all supported resources'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_config_configuration_recorder, aws_config_configuration_recorder_status]
+    inspected_key:
+      aws_config_configuration_recorder: ''
+      aws_config_configuration_recorder_status: ''
+    tf_docs:
+      aws_config_configuration_recorder: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/config_configuration_recorder'
+      aws_config_configuration_recorder_status: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/config_configuration_recorder_status'
+  CKV2_AWS_46:
+    name: 'Ensure AWS CloudFront Distribution with S3 have Origin Access set to enabled'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_cloudfront_distribution]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+  CKV2_AWS_47:
+    name: 'Ensure AWS CloudFront attached WAFv2 WebACL is configured with AMR for Log4j Vulnerability'
+    kind: graph
+    categories: [APPLICATION_SECURITY]
+    resources: [aws_cloudfront_distribution, aws_wafv2_web_acl]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+      aws_wafv2_web_acl: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+      aws_wafv2_web_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl'
+  CKV2_AWS_48:
+    name: 'Ensure AWS Config must record all possible resources'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_config_configuration_recorder]
+    inspected_key:
+      aws_config_configuration_recorder: ''
+    tf_docs:
+      aws_config_configuration_recorder: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/config_configuration_recorder'
+  CKV2_AWS_49:
+    name: 'Ensure AWS Database Migration Service endpoints have SSL configured'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_dms_endpoint]
+    inspected_key:
+      aws_dms_endpoint: ''
+    tf_docs:
+      aws_dms_endpoint: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dms_endpoint'
+  CKV2_AWS_5:
+    name: 'Ensure that Security Groups are attached to another resource'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_security_group]
+    inspected_key:
+      aws_security_group: ''
+    tf_docs:
+      aws_security_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group'
+  CKV2_AWS_50:
+    name: 'Ensure AWS ElastiCache Redis cluster with Multi-AZ Automatic Failover feature set to enabled'
+    kind: graph
+    categories: [BACKUP_AND_RECOVERY]
+    resources: [aws_elasticache_replication_group]
+    inspected_key:
+      aws_elasticache_replication_group: ''
+    tf_docs:
+      aws_elasticache_replication_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group'
+  CKV2_AWS_51:
+    name: 'Ensure AWS API Gateway endpoints uses client certificate authentication'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_api_gateway_stage, aws_apigatewayv2_api, aws_apigatewayv2_stage]
+    inspected_key:
+      aws_api_gateway_stage: ''
+      aws_apigatewayv2_api: ''
+      aws_apigatewayv2_stage: ''
+    tf_docs:
+      aws_api_gateway_stage: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage'
+      aws_apigatewayv2_api: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/apigatewayv2_api'
+      aws_apigatewayv2_stage: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/apigatewayv2_stage'
+  CKV2_AWS_52:
+    name: 'Ensure AWS ElasticSearch/OpenSearch Fine-grained access control is enabled'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_elasticsearch_domain, aws_opensearch_domain]
+    inspected_key:
+      aws_elasticsearch_domain: ''
+      aws_opensearch_domain: ''
+    tf_docs:
+      aws_elasticsearch_domain: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticsearch_domain'
+      aws_opensearch_domain: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/opensearch_domain'
+  CKV2_AWS_53:
+    name: 'Ensure AWS API gateway request is validated'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_api_gateway_method]
+    inspected_key:
+      aws_api_gateway_method: ''
+    tf_docs:
+      aws_api_gateway_method: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method'
+  CKV2_AWS_54:
+    name: 'Ensure AWS CloudFront distribution is using secure SSL protocols for HTTPS communication'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_cloudfront_distribution]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+  CKV2_AWS_55:
+    name: 'Ensure AWS EMR cluster is configured with security configuration'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_emr_cluster]
+    inspected_key:
+      aws_emr_cluster: ''
+    tf_docs:
+      aws_emr_cluster: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_cluster'
+  CKV2_AWS_56:
+    name: 'Ensure AWS Managed IAMFullAccess IAM policy is not used.'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_iam_group_policy_attachment, aws_iam_policy_attachment, aws_iam_role, aws_iam_role_policy_attachment, aws_iam_user_policy_attachment, aws_ssoadmin_managed_policy_attachment]
+    inspected_key:
+      aws_iam_group_policy_attachment: ''
+      aws_iam_policy_attachment: ''
+      aws_iam_role: ''
+      aws_iam_role_policy_attachment: ''
+      aws_iam_user_policy_attachment: ''
+      aws_ssoadmin_managed_policy_attachment: ''
+    tf_docs:
+      aws_iam_group_policy_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_group_policy_attachment'
+      aws_iam_policy_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_policy_attachment'
+      aws_iam_role: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role'
+      aws_iam_role_policy_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment'
+      aws_iam_user_policy_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_user_policy_attachment'
+      aws_ssoadmin_managed_policy_attachment: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssoadmin_managed_policy_attachment'
+  CKV2_AWS_57:
+    name: 'Ensure Secrets Manager secrets should have automatic rotation enabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_secretsmanager_secret]
+    inspected_key:
+      aws_secretsmanager_secret: ''
+    tf_docs:
+      aws_secretsmanager_secret: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret'
+  CKV2_AWS_58:
+    name: 'Ensure AWS Neptune cluster deletion protection is enabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_neptune_cluster]
+    inspected_key:
+      aws_neptune_cluster: ''
+    tf_docs:
+      aws_neptune_cluster: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster'
+  CKV2_AWS_59:
+    name: 'Ensure ElasticSearch/OpenSearch has dedicated master node enabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_elasticsearch_domain, aws_opensearch_domain]
+    inspected_key:
+      aws_elasticsearch_domain: ''
+      aws_opensearch_domain: ''
+    tf_docs:
+      aws_elasticsearch_domain: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticsearch_domain'
+      aws_opensearch_domain: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/opensearch_domain'
+  CKV2_AWS_6:
+    name: 'Ensure that S3 bucket has a Public Access block'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_s3_bucket, aws_s3_bucket_public_access_block]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_public_access_block: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_public_access_block: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block'
+  CKV2_AWS_60:
+    name: 'Ensure RDS instance with copy tags to snapshots is enabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: []
+    inspected_key:
+    tf_docs:
+  CKV2_AWS_61:
+    name: 'Ensure that an S3 bucket has a lifecycle configuration'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_s3_bucket]
+    inspected_key:
+      aws_s3_bucket: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+  CKV2_AWS_62:
+    name: 'Ensure S3 buckets should have event notifications enabled'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_s3_bucket]
+    inspected_key:
+      aws_s3_bucket: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+  CKV2_AWS_63:
+    name: 'Ensure Network firewall has logging configuration defined'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_networkfirewall_firewall]
+    inspected_key:
+      aws_networkfirewall_firewall: ''
+    tf_docs:
+      aws_networkfirewall_firewall: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/networkfirewall_firewall'
+  CKV2_AWS_64:
+    name: 'Ensure KMS key Policy is defined'
+    kind: graph
+    categories: [IAM]
+    resources: [aws_kms_key]
+    inspected_key:
+      aws_kms_key: ''
+    tf_docs:
+      aws_kms_key: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key'
+  CKV2_AWS_65:
+    name: 'Ensure access control lists for S3 buckets are disabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: []
+    inspected_key:
+    tf_docs:
+  CKV2_AWS_66:
+    name: 'Ensure MWAA environment is not publicly accessible'
+    kind: graph
+    categories: [NETWORKING]
+    resources: []
+    inspected_key:
+    tf_docs:
+  CKV2_AWS_68:
+    name: 'Ensure SageMaker notebook instance IAM policy is not overly permissive'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_iam_role, aws_sagemaker_notebook_instance]
+    inspected_key:
+      aws_iam_role: ''
+      aws_sagemaker_notebook_instance: ''
+    tf_docs:
+      aws_iam_role: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role'
+      aws_sagemaker_notebook_instance: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sagemaker_notebook_instance'
+  CKV2_AWS_69:
+    name: 'Ensure AWS RDS database instance configured with encryption in transit'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_db_instance, aws_db_parameter_group]
+    inspected_key:
+      aws_db_instance: ''
+      aws_db_parameter_group: ''
+    tf_docs:
+      aws_db_instance: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance'
+      aws_db_parameter_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_parameter_group'
+  CKV2_AWS_7:
+    name: 'Ensure that Amazon EMR clusters'' security groups are not open to the world'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_emr_cluster, aws_security_group]
+    inspected_key:
+      aws_emr_cluster: ''
+      aws_security_group: ''
+    tf_docs:
+      aws_emr_cluster: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_cluster'
+      aws_security_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group'
   CKV2_AWS_70:
     name: 'Ensure API gateway method has authorization or API key set'
     kind: custom
@@ -18,6 +637,110 @@ checks:
       aws_api_gateway_method: ''
     tf_docs:
       aws_api_gateway_method: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method'
+  CKV2_AWS_71:
+    name: 'Ensure AWS ACM Certificate domain name does not include wildcards'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_acm_certificate]
+    inspected_key:
+      aws_acm_certificate: ''
+    tf_docs:
+      aws_acm_certificate: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/acm_certificate'
+  CKV2_AWS_72:
+    name: 'Ensure AWS CloudFront origin protocol policy enforces HTTPS-only'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_cloudfront_distribution]
+    inspected_key:
+      aws_cloudfront_distribution: ''
+    tf_docs:
+      aws_cloudfront_distribution: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
+  CKV2_AWS_73:
+    name: 'Ensure AWS SQS uses CMK not AWS default keys for encryption'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_sqs_queue]
+    inspected_key:
+      aws_sqs_queue: ''
+    tf_docs:
+      aws_sqs_queue: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue'
+  CKV2_AWS_74:
+    name: 'Ensure AWS Load Balancers use strong ciphers'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb_listener, aws_lb_listener]
+    inspected_key:
+      aws_alb_listener: ''
+      aws_lb_listener: ''
+    tf_docs:
+      aws_alb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_listener'
+      aws_lb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener'
+  CKV2_AWS_75:
+    name: 'Ensure no open CORS policy'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_lambda_function, aws_lambda_function_url]
+    inspected_key:
+      aws_lambda_function: ''
+      aws_lambda_function_url: ''
+    tf_docs:
+      aws_lambda_function: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function'
+      aws_lambda_function_url: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function_url'
+  CKV2_AWS_76:
+    name: 'Ensure AWS ALB attached WAFv2 WebACL is configured with AMR for Log4j Vulnerability'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb, aws_lb, aws_wafv2_web_acl]
+    inspected_key:
+      aws_alb: ''
+      aws_lb: ''
+      aws_wafv2_web_acl: ''
+    tf_docs:
+      aws_alb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb'
+      aws_lb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb'
+      aws_wafv2_web_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl'
+  CKV2_AWS_77:
+    name: 'Ensure AWS API Gateway Rest API attached WAFv2 WebACL is configured with AMR for Log4j Vulnerability'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_api_gateway_stage, aws_apigatewayv2_api, aws_wafv2_web_acl]
+    inspected_key:
+      aws_api_gateway_stage: ''
+      aws_apigatewayv2_api: ''
+      aws_wafv2_web_acl: ''
+    tf_docs:
+      aws_api_gateway_stage: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage'
+      aws_apigatewayv2_api: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/apigatewayv2_api'
+      aws_wafv2_web_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl'
+  CKV2_AWS_78:
+    name: 'Ensure AWS AppSync attached WAFv2 WebACL is configured with AMR for Log4j Vulnerability'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_appsync_graphql_api, aws_wafv2_web_acl]
+    inspected_key:
+      aws_appsync_graphql_api: ''
+      aws_wafv2_web_acl: ''
+    tf_docs:
+      aws_appsync_graphql_api: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appsync_graphql_api'
+      aws_wafv2_web_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/wafv2_web_acl'
+  CKV2_AWS_8:
+    name: 'Ensure that RDS clusters has backup plan of AWS Backup'
+    kind: graph
+    categories: [BACKUP_AND_RECOVERY]
+    resources: [aws_rds_cluster]
+    inspected_key:
+      aws_rds_cluster: ''
+    tf_docs:
+      aws_rds_cluster: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster'
+  CKV2_AWS_9:
+    name: 'Ensure that EBS are added in the backup plans of AWS Backup'
+    kind: graph
+    categories: [BACKUP_AND_RECOVERY]
+    resources: [aws_backup_selection]
+    inspected_key:
+      aws_backup_selection: ''
+    tf_docs:
+      aws_backup_selection: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/backup_selection'
   CKV_AWS_10:
     name: 'Ensure IAM password policy requires minimum length of 14 or greater'
     kind: value
@@ -56,6 +779,19 @@ checks:
       aws_neptune_cluster_instance: 'publicly_accessible/[0]'
     tf_docs:
       aws_neptune_cluster_instance: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster_instance#publicly-accessible'
+  CKV_AWS_103:
+    name: 'Ensure that load balancer is using at least TLS 1.2'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb_listener, aws_lb, aws_lb_listener]
+    inspected_key:
+      aws_alb_listener: ''
+      aws_lb: ''
+      aws_lb_listener: ''
+    tf_docs:
+      aws_alb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_listener'
+      aws_lb: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb'
+      aws_lb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener'
   CKV_AWS_104:
     name: 'Ensure DocumentDB has audit logs enabled'
     kind: custom
@@ -413,6 +1149,28 @@ checks:
       aws_s3_bucket: ''
     tf_docs:
       aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+  CKV_AWS_144:
+    name: 'Ensure that S3 bucket has cross-region replication enabled'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_s3_bucket, aws_s3_bucket_replication_configuration]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_replication_configuration: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_replication_configuration: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_replication_configuration'
+  CKV_AWS_145:
+    name: 'Ensure that S3 buckets are encrypted with KMS by default'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_s3_bucket, aws_s3_bucket_server_side_encryption_configuration]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_server_side_encryption_configuration: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_server_side_encryption_configuration: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration'
   CKV_AWS_146:
     name: 'Ensure that RDS database cluster snapshot is encrypted'
     kind: value
@@ -776,6 +1534,15 @@ checks:
       aws_fsx_windows_file_system: 'kms_key_id'
     tf_docs:
       aws_fsx_windows_file_system: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/fsx_windows_file_system#kms-key-id'
+  CKV_AWS_18:
+    name: 'Ensure the S3 bucket has access logging enabled'
+    kind: graph
+    categories: [LOGGING]
+    resources: [aws_s3_bucket]
+    inspected_key:
+      aws_s3_bucket: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
   CKV_AWS_180:
     name: 'Ensure Image Builder component is encrypted by KMS using a customer managed Key (CMK)'
     kind: value
@@ -868,6 +1635,17 @@ checks:
       aws_ebs_volume: 'kms_key_id'
     tf_docs:
       aws_ebs_volume: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ebs_volume#kms-key-id'
+  CKV_AWS_19:
+    name: 'Ensure all data stored in the S3 bucket is securely encrypted at rest'
+    kind: graph
+    categories: [ENCRYPTION]
+    resources: [aws_s3_bucket, aws_s3_bucket_server_side_encryption_configuration]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_server_side_encryption_configuration: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_server_side_encryption_configuration: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_server_side_encryption_configuration'
   CKV_AWS_190:
     name: 'Ensure lustre file systems is encrypted by KMS using a customer managed Key (CMK)'
     kind: value
@@ -980,6 +1758,17 @@ checks:
     tf_docs:
       aws_alb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_listener'
       aws_lb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener'
+  CKV_AWS_20:
+    name: 'S3 Bucket has an ACL defined which allows public READ access.'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_s3_bucket, aws_s3_bucket_acl]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_acl: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_acl'
   CKV_AWS_200:
     name: 'Ensure that Image Recipe EBS Disk are encrypted with CMK'
     kind: custom
@@ -1078,6 +1867,17 @@ checks:
       aws_mq_broker: 'encryption_options/[0]/kms_key_id'
     tf_docs:
       aws_mq_broker: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/mq_broker#encryption-options'
+  CKV_AWS_21:
+    name: 'Ensure all data stored in the S3 bucket have versioning enabled'
+    kind: graph
+    categories: [BACKUP_AND_RECOVERY]
+    resources: [aws_s3_bucket, aws_s3_bucket_versioning]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_versioning: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_versioning: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_versioning'
   CKV_AWS_210:
     name: 'Batch job does not define a privileged container'
     kind: custom
@@ -2946,6 +3746,21 @@ checks:
       aws_route53domains_registered_domain: 'transfer_lock'
     tf_docs:
       aws_route53domains_registered_domain: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53domains_registered_domain#transfer-lock'
+  CKV_AWS_378:
+    name: 'Ensure AWS Load Balancer doesn''t use HTTP protocol'
+    kind: graph
+    categories: [NETWORKING]
+    resources: [aws_alb_listener, aws_alb_target_group, aws_lb_listener, aws_lb_target_group]
+    inspected_key:
+      aws_alb_listener: ''
+      aws_alb_target_group: ''
+      aws_lb_listener: ''
+      aws_lb_target_group: ''
+    tf_docs:
+      aws_alb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_listener'
+      aws_alb_target_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/alb_target_group'
+      aws_lb_listener: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener'
+      aws_lb_target_group: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_target_group'
   CKV_AWS_379:
     name: 'Ensure AWS S3 bucket is configured with secure data transport policy'
     kind: custom
@@ -3247,6 +4062,17 @@ checks:
       aws_s3_bucket_public_access_block: 'restrict_public_buckets'
     tf_docs:
       aws_s3_bucket_public_access_block: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block#restrict-public-buckets'
+  CKV_AWS_57:
+    name: 'S3 Bucket has an ACL defined which allows public WRITE access.'
+    kind: graph
+    categories: [GENERAL_SECURITY]
+    resources: [aws_s3_bucket, aws_s3_bucket_acl]
+    inspected_key:
+      aws_s3_bucket: ''
+      aws_s3_bucket_acl: ''
+    tf_docs:
+      aws_s3_bucket: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket'
+      aws_s3_bucket_acl: 'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_acl'
   CKV_AWS_58:
     name: 'Ensure EKS Cluster has Secrets Encryption Enabled'
     kind: value

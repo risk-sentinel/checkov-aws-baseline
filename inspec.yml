@@ -32,7 +32,10 @@ supports:
 depends:
   - name: inspec-aws
     git: https://github.com/inspec/inspec-aws.git
-    tag: v1.21.0
+    # `main`, matching the rest of the fleet. The v1.21.0 tag ships 90 resources;
+    # main ships 481, and the difference decides how many of Checkov's 194 AWS
+    # resource types can be read with a stock resource instead of a custom one.
+    branch: main
 
 inputs:
   - name: aws_partition

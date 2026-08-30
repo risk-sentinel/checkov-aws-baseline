@@ -60,6 +60,7 @@ control 'CKV_AWS_135' do
   tag ksi:              ['KSI-CNA-CAP']
   tag severity:         'low'
   tag severity_source:  'assessed'
+  tag implementation_status: 'implemented'
 
   assets = aws_compute_assets(regions: scan_regions)
 

@@ -93,6 +93,7 @@ control 'CKV_AWS_8' do
   tag ksi:              ['KSI-SVC-CER']
   tag severity:         'high'
   tag severity_source:  'assessed'
+  tag implementation_status: 'implemented'
 
   assets = aws_compute_assets(regions: scan_regions)
 

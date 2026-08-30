@@ -107,6 +107,47 @@ def call(check, method, entity_type=None):
         return None
 
 
+def graph_resource_types(node, found=None):
+    """Every `resource_types` named anywhere in a graph check's definition."""
+    found = set() if found is None else found
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "resource_types" and isinstance(v, list):
+                found.update(x for x in v if isinstance(x, str))
+            else:
+                graph_resource_types(v, found)
+    elif isinstance(node, list):
+        for v in node:
+            graph_resource_types(v, found)
+    return found
+
+
+def build_graph_checks():
+    """The JSON graph checks, which the resource registry does not contain."""
+    import json
+    import checkov
+    root = (pathlib.Path(checkov.__file__).parent
+            / "terraform" / "checks" / "graph_checks" / "aws")
+    out = {}
+    for f in sorted(root.glob("*.json")):
+        doc = json.loads(f.read_text())
+        meta = doc.get("metadata", {})
+        cid = meta.get("id")
+        if not cid:
+            continue
+        types = sorted(t for t in graph_resource_types(doc.get("definition", {}))
+                       if t.startswith("aws_"))
+        out[cid] = {
+            "name": meta.get("name", ""),
+            "categories": sorted({str(meta.get("category", "")).upper()} - {""}),
+            "kind": "graph",
+            "resources": types,
+            "inspected_key": {t: "" for t in types},
+            "tf_docs": {t: docs_url(t, "") for t in types},
+        }
+    return out
+
+
 def build():
     from checkov.terraform.runner import Runner  # noqa: F401 — populates registries
     from checkov.terraform.checks.resource.registry import resource_registry
@@ -138,6 +179,10 @@ def build():
                 entry["forbidden"] = [str(v) for v in forbidden]
     for entry in catalog.values():
         entry["resources"].sort()
+
+    # Graph checks last, and never overwriting a resource check of the same id.
+    for cid, entry in build_graph_checks().items():
+        catalog.setdefault(cid, entry)
     return catalog
 
 

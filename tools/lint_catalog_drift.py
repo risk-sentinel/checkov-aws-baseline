@@ -9,6 +9,11 @@ must agree:
     tag checkov_id: '...'       the tag a reader joins back on
     tools/checkov_catalog.yml   the catalogue entry it was generated from
 
+Both `CKV_*` and `CKV2_*` are rule ids: the second prefix is Checkov's graph
+checks, which live in a separate registry and assert relationships BETWEEN
+resources. A prefix filter that matches only `CKV_` silently skips all 71 of
+them and reports a coverage number that looks one short rather than 71 short.
+
 A mismatch between file name and control id is invisible in HDF — only the
 control id survives — and a mismatch between control id and `checkov_id` breaks
 the join back to the rule that motivated the control, which is the whole
@@ -59,7 +64,7 @@ def main() -> int:
     for path in sorted(CONTROLS.glob("*.rb")):
         text = path.read_text()
         stem = path.stem
-        if not stem.startswith("CKV_"):
+        if not stem.startswith(("CKV_", "CKV2_")):
             continue                      # inventory and other non-check controls
         controls[stem] = path
 
