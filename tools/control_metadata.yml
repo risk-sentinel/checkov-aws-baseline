@@ -1,0 +1,94 @@
+# Hand-authored, per check. Everything here is a judgement a person made and a
+# reviewer can argue with -- which is why it lives in one reviewable file rather
+# than scattered across 362 control files.
+#
+# Checkov ships none of this: no NIST mapping, no CCI, and no severity in the
+# OSS distribution. Claiming any of it came from Checkov would attribute values
+# it never published, so `severity_source` is 'assessed' everywhere.
+#
+# rationale  why the deployed state matters, in the profile's own words
+# nist/cci   assigned at catalogue review; nist is Rev 5, nist_r4 is Rev 4
+# ksi        resolved from the NIST anchors against the FedRAMP rules catalogue
+# severity   assessed here, with impact following it
+# what       only for `custom` checks: a custom scan_resource_conf has no
+#            declarative inspected key, so the catalogue cannot derive one
+# stronger   set where the deployed assertion covers MORE than the IaC check;
+#            it becomes a paragraph in the control, because that difference is
+#            the argument for this profile existing
+
+CKV_AWS_79:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'AC-6']
+  nist_r4: ['AC-3', 'AC-6']
+  cci: ['CCI-000213', 'CCI-002233']
+  ksi: ['KSI-IAM-MFA']
+  rationale: >-
+    IMDSv1 answers an unauthenticated GET, so any server-side request forgery in
+    a workload on the instance reaches the credential endpoint. IMDSv2 requires a
+    PUT-issued token, which SSRF cannot forge.
+
+CKV_AWS_88:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A public IP puts the instance directly on the internet attack surface, rather
+    than behind a load balancer or NAT where ingress can be reasoned about.
+
+CKV_AWS_8:
+  what: every declared block device sets encrypted = true
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted volume exposes its data to anyone who can reach the underlying
+    snapshot or the storage service, without needing access to the instance.
+  stronger: >-
+    Checkov reads the block devices declared in HCL. This reads DescribeVolumes,
+    so a volume attached later, by hand, outside Terraform is assessed too -- and
+    that is the volume most likely to be unencrypted.
+
+CKV_AWS_126:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Basic monitoring reports at five-minute granularity, too coarse to see a
+    short-lived spike or a brief exfiltration window.
+
+CKV_AWS_135:
+  severity: low
+  impact: 0.3
+  nist: ['SC-5']
+  nist_r4: ['SC-5']
+  cci: ['CCI-002385']
+  ksi: ['KSI-CNA-CAP']
+  rationale: >-
+    Dedicated EBS throughput keeps storage traffic off the shared network path,
+    so a noisy neighbour cannot starve the instance of disk I/O.
+
+CKV_AWS_46:
+  what: the user_data blob contains no recognisable secret
+  severity: high
+  impact: 0.7
+  nist: ['IA-5 (7)', 'SC-28']
+  nist_r4: ['IA-5 (7)', 'SC-28']
+  cci: ['CCI-000196', 'CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    User data is readable by anything that can reach the metadata service or call
+    DescribeInstanceAttribute, and it is not encrypted at rest.
+  stronger: >-
+    Checkov scans the user_data string in HCL. This decodes what the instance is
+    actually serving, which catches a value injected after apply or supplied by a
+    template Checkov never rendered.

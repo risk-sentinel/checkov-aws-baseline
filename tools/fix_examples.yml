@@ -1,0 +1,197 @@
+# Remediation, per check AND per resource type.
+#
+# Terraform comes first and is always present. An organisation that manages its
+# estate through Terraform cannot act on an `aws ec2 modify-...` command: running
+# it either fails a policy gate or is reverted by the next apply. So the
+# Terraform block is the fix, and the CLI is the out-of-band path for an estate
+# that is not under Terraform, or for closing an exposure before the next apply.
+#
+# Per resource type because the fix differs by type -- the argument a check
+# inspects is per-type, and so is the block you write to satisfy it.
+#
+# terraform  a complete, copy-pasteable resource block, not a fragment
+# cli        the out-of-band path, or an explicit statement that there is none
+# note       set where the deployed fix is NOT possible in place
+
+CKV_AWS_79:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+
+        metadata_options {
+          http_endpoint = "enabled"
+          http_tokens   = "required"   # IMDSv2 only
+        }
+      }
+    cli: |
+      aws ec2 modify-instance-metadata-options \
+        --instance-id <id> --http-tokens required --http-endpoint enabled
+  aws_launch_template:
+    terraform: |
+      resource "aws_launch_template" "app" {
+        name_prefix   = "app-"
+        image_id      = var.ami_id
+        instance_type = "t3.micro"
+
+        metadata_options {
+          http_endpoint = "enabled"
+          http_tokens   = "required"
+        }
+      }
+    cli: |
+      Create a new launch template version with the corrected metadata_options
+      and update the consumers to $Latest -- a version is immutable once created.
+  aws_launch_configuration:
+    terraform: |
+      resource "aws_launch_configuration" "app" {
+        name_prefix   = "app-"
+        image_id      = var.ami_id
+        instance_type = "t3.micro"
+
+        metadata_options {
+          http_endpoint = "enabled"
+          http_tokens   = "required"
+        }
+      }
+    note: >-
+      Launch configurations are immutable and deprecated by AWS in favour of
+      launch templates; the fix replaces the configuration rather than editing it.
+
+CKV_AWS_88:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami                         = var.ami_id
+        instance_type               = "t3.micro"
+        subnet_id                   = var.private_subnet_id
+        associate_public_ip_address = false
+      }
+    note: >-
+      A running instance cannot have its public IP detached. The Terraform change
+      replaces the instance; there is no in-place CLI equivalent.
+  aws_launch_template:
+    terraform: |
+      resource "aws_launch_template" "app" {
+        name_prefix   = "app-"
+        image_id      = var.ami_id
+        instance_type = "t3.micro"
+
+        network_interfaces {
+          associate_public_ip_address = false
+          subnet_id                   = var.private_subnet_id
+        }
+      }
+    cli: |
+      Create a new launch template version; existing instances keep the address
+      they were launched with until they are replaced.
+
+CKV_AWS_8:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+
+        root_block_device {
+          encrypted  = true
+          kms_key_id = aws_kms_key.ebs.arn   # omit for the AWS-managed key
+        }
+
+        ebs_block_device {
+          device_name = "/dev/sdb"
+          encrypted   = true
+        }
+      }
+    cli: |
+      aws ec2 create-snapshot --volume-id <vol>
+      aws ec2 copy-snapshot --source-snapshot-id <snap> --encrypted \
+        --source-region <region>
+      aws ec2 create-volume --snapshot-id <encrypted-snap> \
+        --availability-zone <az>
+      # then detach the old volume and attach the new one
+    note: >-
+      An attached volume cannot be encrypted in place; both paths replace the
+      volume. Setting `encrypted = true` in Terraform on an existing instance
+      forces replacement -- plan before applying.
+  aws_launch_configuration:
+    terraform: |
+      resource "aws_launch_configuration" "app" {
+        name_prefix   = "app-"
+        image_id      = var.ami_id
+        instance_type = "t3.micro"
+
+        root_block_device {
+          encrypted = true
+        }
+      }
+    note: >-
+      Immutable: the fix replaces the launch configuration and the instances the
+      ASG launches from it.
+
+CKV_AWS_126:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+        monitoring    = true
+      }
+    cli: |
+      aws ec2 monitor-instances --instance-ids <id>
+
+CKV_AWS_135:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+        ebs_optimized = true
+      }
+    cli: |
+      aws ec2 stop-instances --instance-ids <id>
+      aws ec2 modify-instance-attribute --instance-id <id> --ebs-optimized
+      aws ec2 start-instances --instance-ids <id>
+    note: >-
+      Requires a stop/start. Most current instance types are EBS-optimised by
+      default and cannot be set false.
+
+CKV_AWS_46:
+  aws_instance:
+    terraform: |
+      resource "aws_instance" "app" {
+        ami           = var.ami_id
+        instance_type = "t3.micro"
+
+        # Fetch at boot with the instance role. Never interpolate a secret into
+        # user_data: Terraform would also write it to state in cleartext.
+        user_data = <<-EOT
+          #!/bin/bash
+          TOKEN=$(aws secretsmanager get-secret-value \
+            --secret-id app/db --query SecretString --output text)
+        EOT
+
+        iam_instance_profile = aws_iam_instance_profile.app.name
+      }
+    cli: |
+      Rotate the exposed credential FIRST -- it is readable by anything that can
+      reach the metadata service. Then replace the instance with corrected user
+      data; user data can only be changed while the instance is stopped, and the
+      old value remains in any snapshot taken before the rotation.
+  aws_launch_template:
+    terraform: |
+      resource "aws_launch_template" "app" {
+        name_prefix = "app-"
+        image_id    = var.ami_id
+
+        user_data = base64encode(file("${path.module}/bootstrap.sh"))
+      }
+  aws_launch_configuration:
+    terraform: |
+      resource "aws_launch_configuration" "app" {
+        name_prefix = "app-"
+        image_id    = var.ami_id
+
+        user_data = file("${path.module}/bootstrap.sh")
+      }

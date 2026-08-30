@@ -90,6 +90,13 @@ jobs:
             || { echo "::error::json produced no controls"; exit 1; }
           echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
 
+      - name: Generated controls are in sync with the data files
+        # controls/CKV_*.rb are rendered from the four data files. A hand-edit
+        # is correct and stale at the same time: the next render drops it.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/render_controls.py --check
+
       - name: Catalogue drift (controls vs pinned Checkov)
         # A control naming a check the pinned release does not define is
         # asserting something no rule asks for; a mapped check with no control
