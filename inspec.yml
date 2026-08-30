@@ -1,0 +1,62 @@
+name: checkov-aws-v3.3.16
+title: Checkov AWS Deployed-Asset Baseline
+maintainer: Risk Sentinel
+copyright: Risk Sentinel
+copyright_email: support@risk-sentinel.org
+license: Apache-2.0
+summary: |
+  Deployed-asset parity for Checkov's Terraform AWS checks.
+
+  Checkov answers "would this Terraform create a compliant resource?". This
+  profile answers "is the resource that actually exists still compliant with
+  what that check asserted?" — the same intent, assessed against the AWS API
+  rather than against HCL.
+
+  Controls are generated one-per-check from a committed catalogue derived from
+  a pinned Checkov release (see tools/checkov_catalog.yml). A check declares the
+  resource types it applies to, so a control asserts against every deployed
+  asset of every one of those types: several assertions per control is the
+  normal shape, not the exception.
+
+  Scope comes from the boundary. An inventory pass determines which services are
+  present, and a control for a service the boundary does not use renders Not
+  Applicable with a stated reason rather than passing silently.
+
+  Targets AWS Commercial (aws) and AWS GovCloud non-DoD (aws-us-gov).
+version: 0.1.0
+inspec_version: '>= 5.0'
+
+supports:
+  - platform: aws
+
+depends:
+  - name: inspec-aws
+    git: https://github.com/inspec/inspec-aws.git
+    tag: v1.21.0
+
+inputs:
+  - name: aws_partition
+    type: string
+    value: aws
+    description: >-
+      AWS partition the scan runs against. One of: aws (Commercial),
+      aws-us-gov (GovCloud non-DoD).
+  - name: scan_regions
+    type: array
+    value: []
+    description: >-
+      Regions to enumerate. Empty means every region enabled for the account —
+      a single-region sweep reports "absent" for a workload that exists
+      elsewhere, and absent renders as "does not apply here", which is a claim.
+  - name: checkov_version
+    type: string
+    value: '3.3.16'
+    description: >-
+      The Checkov release tools/checkov_catalog.yml was generated from. Asserted
+      against the catalogue at run time so a stale catalogue is loud.
+  - name: exempt_assets
+    type: hash
+    value: {}
+    description: >-
+      Documented exceptions, as { CHECK_ID: [asset-id, ...] }. An exception is
+      data with an owner, not an edited control.

@@ -1,0 +1,52 @@
+# How a Terraform resource type becomes something this profile can assess.
+#
+# Keyed by (check, terraform type) rather than by check, because the argument a
+# check inspects varies by type -- CKV_AWS_88 reads associate_public_ip_address
+# on an instance and network_interfaces[0].associate_public_ip_address on a
+# launch template. A map keyed only by check would inspect the wrong field for
+# one of them and still look right.
+#
+# reader    the InSpec resource that enumerates every deployed asset of this type
+# field     the row attribute answering this check
+# satisfies how the field is judged: equals / not_equals / empty / any_of
+# note      only where the deployed assertion is not a restatement of the IaC one
+#
+# Seeded with the aws_instance tranche. Everything else in the catalogue is
+# unmapped, which is what tools/lint_catalog_drift.py counts -- an unmapped
+# check has no control, and that is visible rather than assumed.
+
+readers:
+  aws_instance:              {resource: aws_compute_assets, type: aws_instance}
+  aws_launch_template:       {resource: aws_compute_assets, type: aws_launch_template}
+  aws_launch_configuration:  {resource: aws_compute_assets, type: aws_launch_configuration}
+
+checks:
+  CKV_AWS_79:
+    aws_instance:             {field: imds_tokens_or_disabled, satisfies: equals, value: true}
+    aws_launch_template:      {field: imds_tokens_or_disabled, satisfies: equals, value: true}
+    aws_launch_configuration: {field: imds_tokens_or_disabled, satisfies: equals, value: true}
+
+  CKV_AWS_88:
+    aws_instance:        {field: public_ip, satisfies: equals, value: false}
+    aws_launch_template: {field: public_ip, satisfies: equals, value: false}
+
+  CKV_AWS_8:
+    aws_instance:
+      field: unencrypted_volumes
+      satisfies: empty
+      note: >-
+        Stronger than the IaC check. Checkov sees the block devices declared in
+        HCL; DescribeVolumes sees every volume actually attached, including ones
+        attached later by hand, outside Terraform.
+    aws_launch_configuration: {field: unencrypted_volumes, satisfies: empty}
+
+  CKV_AWS_126:
+    aws_instance: {field: detailed_monitoring, satisfies: equals, value: true}
+
+  CKV_AWS_135:
+    aws_instance: {field: ebs_optimized, satisfies: equals, value: true}
+
+  CKV_AWS_46:
+    aws_instance:             {field: user_data_secrets, satisfies: empty}
+    aws_launch_template:      {field: user_data_secrets, satisfies: empty}
+    aws_launch_configuration: {field: user_data_secrets, satisfies: empty}

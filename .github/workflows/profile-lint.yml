@@ -1,0 +1,113 @@
+name: Profile lint
+
+# Controls here are generated from a pinned Checkov catalogue, so the failure
+# modes are the fleet's plus one of its own: a control can drift from the rule
+# it claims to implement. `check` and `json` cannot see any of it — they load
+# control files without evaluating a control body or reading a tag's meaning.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AUDITOR_IMAGE: risksentinel/sparc-auditor:v0.5.0
+
+jobs:
+  lint:
+    name: InSpec validate + Ruby syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Docker Hub login (auditor image pull)
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          # Optional. The auditor image is public, so an anonymous pull works;
+          # signing in only raises the shared rate limit. Without this guard an
+          # adopter with no Docker Hub secrets fails here, before anything runs.
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "::notice::No Docker Hub credentials set; pulling anonymously."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Ruby syntax (every control + library)
+        run: |
+          set -uo pipefail
+          fail=0
+          for f in $(find controls libraries -name '*.rb' | sort); do
+            docker run --rm -v "$PWD:/work" -w /work --entrypoint sh "${AUDITOR_IMAGE}" \
+              -c "/opt/cinc-workstation/embedded/bin/ruby -c '$f' >/dev/null" \
+              || { echo "::error file=$f::ruby syntax error"; fail=1; }
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "All control and library files parse."
+
+      # `vendor/` is gitignored, so a fresh checkout has no dependencies and
+      # `check` fails before evaluating anything. Locally this is invisible —
+      # a stale vendor/ from earlier work makes it pass.
+      - name: Vendor dependencies
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" vendor . --overwrite
+
+      - name: cinc-auditor check
+        run: |
+          set -uo pipefail
+          # Capture the exit code rather than letting `bash -e` abort here: the
+          # first version of this step died on the docker call BEFORE echoing
+          # $out, so a failing check produced no diagnostic at all — the guard
+          # hid its own evidence.
+          out=$(docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" check . 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::cinc-auditor check exited ${rc} — see output above."
+            exit 1
+          fi
+          echo "$out" | grep -q "Valid : *true" || { echo "::error::profile did not validate"; exit 1; }
+          # A profile that loads ZERO controls validates happily. Assert the
+          # count is non-zero so an empty or wrongly-scoped profile is caught.
+          n=$(echo "$out" | sed -n 's/^Controls *: *\([0-9]*\).*/\1/p')
+          [ "${n:-0}" -gt 0 ] || { echo "::error::check reported ${n:-0} controls"; exit 1; }
+          echo "Controls: $n"
+
+      - name: cinc-auditor json (catches load-time errors check misses)
+        run: |
+          set -uo pipefail
+          out=$(docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" json . 2>/tmp/json.err) && rc=0 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::cinc-auditor json exited ${rc}"; cat /tmp/json.err; exit 1
+          fi
+          echo "$out" > /tmp/profile.json
+          jq -e '.controls | length > 0' /tmp/profile.json > /dev/null \
+            || { echo "::error::json produced no controls"; exit 1; }
+          echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
+
+      - name: Catalogue drift (controls vs pinned Checkov)
+        # A control naming a check the pinned release does not define is
+        # asserting something no rule asks for; a mapped check with no control
+        # is a gap that looks like finished work. Coverage is printed every run,
+        # so "we cover Checkov" is never claimable without a number beside it.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_catalog_drift.py
+
+      - name: Control-tag completeness
+        # `check` and `json` read tags but assert nothing about them. A control
+        # with no Rev 4 anchor, a tag written twice, or a tag whose value is a
+        # constant all pass both — and the last of those emits `[None]` into the
+        # results while looking present.
+        run: python3 tools/lint_control_tags.py controls
+
+      - name: Resource-scope guard
+        # `check` and `json` do NOT evaluate control bodies, so neither can see
+        # a resource called in a describe body — it only raises on a real exec
+        # against a live target, which this repo cannot run. Hence a linter.
+        run: python3 tools/lint_resource_scope.py controls libraries

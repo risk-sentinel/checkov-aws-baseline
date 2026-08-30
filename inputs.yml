@@ -1,0 +1,16 @@
+# Reference inputs — clone-to-results. Copy, edit, and pass with
+#   --input-file inputs.yml
+#
+# Nothing here is required to get a first run: the defaults enumerate every
+# enabled region in the Commercial partition and exempt nothing.
+aws_partition: aws
+scan_regions: []
+checkov_version: '3.3.16'
+
+# Documented exceptions, per check. The asset id is the instance id, launch
+# template id, or launch configuration name the exception applies to.
+#
+# exempt_assets:
+#   CKV_AWS_88:
+#     - i-0123456789abcdef0   # public by design: NAT-less bastion, ticket RS-1234
+exempt_assets: {}
