@@ -2,30 +2,41 @@
 #
 # Rule:        CKV_AWS_313 (checkov 3.3.16)
 # Applies to:  aws_rds_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_rds_cluster yet.
+# Read with:   aws_rds_clusters -> aws_rds_cluster (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_313'] || []
 
 control 'CKV_AWS_313' do
-  impact 0.0
   title 'Ensure RDS cluster configured to copy tags to snapshots'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_rds_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_rds_cluster resources that actually exist, read through the
+    stock inspec-aws aws_rds_cluster resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A snapshot that loses its tags loses its owner, its retention class and
+    its cost centre at the moment it becomes long-lived data.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_rds_cluster: copy_tags_to_snapshot is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster#copy-tags-to-snapshot
+    Terraform — aws_rds_cluster:
+
+      resource "aws_rds_cluster" "example" {
+        copy_tags_to_snapshot = true
+      }
+
+    Out of band — aws_rds_cluster:
+
+      aws rds modify-db-cluster --db-cluster-identifier <id> --copy-tags-to-snapshot --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_313'
@@ -34,9 +45,28 @@ control 'CKV_AWS_313' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_rds_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster#copy-tags-to-snapshot'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-8', 'AU-12']
+  tag nist_r4:               ['CM-8', 'AU-12']
+  tag cci:                   ['CCI-000366']
+  tag ksi:                   ['KSI-CMT-INV']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_313 — no deployed-asset reader for aws_rds_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_clusters.cluster_identifier
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_rds_cluster', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_rds_cluster in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_cluster(db_cluster_identifier: id) do
+      its('copy_tags_to_snapshot') { should eq true }
+    end
   end
 end

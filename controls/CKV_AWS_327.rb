@@ -2,30 +2,42 @@
 #
 # Rule:        CKV_AWS_327 (checkov 3.3.16)
 # Applies to:  aws_rds_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_rds_cluster yet.
+# Read with:   aws_rds_clusters -> aws_rds_cluster (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_327'] || []
 
 control 'CKV_AWS_327' do
-  impact 0.0
   title 'Ensure RDS Clusters are encrypted using KMS CMKs'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_rds_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_rds_cluster resources that actually exist, read through the
+    stock inspec-aws aws_rds_cluster resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    The default service key cannot be rotated, scoped or revoked by the
+    account that owns the data; a customer-managed key can.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_rds_cluster: kms_key_id is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster#kms-key-id
+    Terraform — aws_rds_cluster:
+
+      resource "aws_rds_cluster" "example" {
+        storage_encrypted = true
+        kms_key_id        = aws_kms_key.rds.arn
+      }
+
+    Out of band — aws_rds_cluster:
+
+      Set at creation: the key cannot be changed on an existing cluster.
   FIX
 
   tag checkov_id:            'CKV_AWS_327'
@@ -34,9 +46,28 @@ control 'CKV_AWS_327' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_rds_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/rds_cluster#kms-key-id'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-12', 'SC-28 (1)']
+  tag nist_r4:               ['SC-12', 'SC-28 (1)']
+  tag cci:                   ['CCI-002475']
+  tag ksi:                   ['KSI-SVC-KMG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_327 — no deployed-asset reader for aws_rds_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_clusters.cluster_identifier
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_rds_cluster', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_rds_cluster in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_cluster(db_cluster_identifier: id) do
+      its('kms_key_id') { should_not be_empty }
+    end
   end
 end

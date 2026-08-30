@@ -232,3 +232,171 @@ checks:
         property: "ca_certificate_identifier"
         satisfies: in_list
         value: ['rds-ca-rsa2048-g1', 'rds-ca-rsa4096-g1', 'rds-ca-ecc384-g1']
+
+  # --- Aurora/RDS clusters, Redshift, ElastiCache (stock inspec-aws) ---
+  CKV_AWS_96:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "storage_encrypted"
+        satisfies: equals
+        value: true
+  CKV_AWS_139:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "deletion_protection"
+        satisfies: equals
+        value: true
+  CKV_AWS_162:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "iam_database_authentication_enabled"
+        satisfies: equals
+        value: true
+  CKV_AWS_313:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "copy_tags_to_snapshot"
+        satisfies: equals
+        value: true
+  CKV_AWS_324:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "enabled_cloudwatch_logs_exports"
+        satisfies: not_empty
+  CKV_AWS_327:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "kms_key_id"
+        satisfies: not_empty
+  CKV_AWS_326:
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "backtrack_window"
+        satisfies: greater_than
+        value: 0
+  CKV_AWS_64:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "encrypted"
+        satisfies: equals
+        value: true
+  CKV_AWS_87:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "publicly_accessible"
+        satisfies: equals
+        value: false
+  CKV_AWS_141:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "allow_version_upgrade"
+        satisfies: equals
+        value: true
+  CKV_AWS_321:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "enhanced_vpc_routing"
+        satisfies: equals
+        value: true
+  CKV_AWS_343:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "automated_snapshot_retention_period"
+        satisfies: greater_than
+        value: 0
+  CKV_AWS_320:
+    aws_redshift_cluster:
+      reader: stock
+      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
+      assert:
+        resource: aws_redshift_cluster
+        arg: cluster_identifier
+        property: "db_name"
+        satisfies: not_empty
+  CKV_AWS_29:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: "at_rest_encryption_enabled"
+        satisfies: equals
+        value: true
+  CKV_AWS_30:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: "transit_encryption_enabled"
+        satisfies: equals
+        value: true
+  CKV_AWS_191:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: "kms_key_id"
+        satisfies: not_empty
+  CKV_AWS_134:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: "snapshot_retention_limit"
+        satisfies: greater_than
+        value: 0

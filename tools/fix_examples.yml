@@ -421,3 +421,164 @@ CKV_AWS_211:
     cli: |
       aws rds modify-db-instance --db-instance-identifier <id> \
         --ca-certificate-identifier rds-ca-rsa2048-g1 --apply-immediately
+
+CKV_AWS_96:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        storage_encrypted = true
+        kms_key_id        = aws_kms_key.rds.arn
+      }
+    cli: |
+      Cannot be enabled in place: snapshot, copy with --kms-key-id, restore.
+
+CKV_AWS_139:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        deletion_protection = true
+      }
+    cli: |
+      aws rds modify-db-cluster --db-cluster-identifier <id> --deletion-protection --apply-immediately
+
+CKV_AWS_162:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        iam_database_authentication_enabled = true
+      }
+    cli: |
+      aws rds modify-db-cluster --db-cluster-identifier <id> --enable-iam-database-authentication --apply-immediately
+
+CKV_AWS_313:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        copy_tags_to_snapshot = true
+      }
+    cli: |
+      aws rds modify-db-cluster --db-cluster-identifier <id> --copy-tags-to-snapshot --apply-immediately
+
+CKV_AWS_324:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
+      }
+    cli: |
+      aws rds modify-db-cluster --db-cluster-identifier <id> \
+        --cloudwatch-logs-export-configuration EnableLogTypes=audit,error --apply-immediately
+
+CKV_AWS_327:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        storage_encrypted = true
+        kms_key_id        = aws_kms_key.rds.arn
+      }
+    cli: |
+      Set at creation: the key cannot be changed on an existing cluster.
+
+CKV_AWS_326:
+  aws_rds_cluster:
+    terraform: |
+      resource "aws_rds_cluster" "example" {
+        backtrack_window = 72   # hours
+      }
+    cli: |
+      aws rds modify-db-cluster --db-cluster-identifier <id> --backtrack-window 259200 --apply-immediately
+
+CKV_AWS_64:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        encrypted  = true
+        kms_key_id = aws_kms_key.redshift.arn
+      }
+    cli: |
+      aws redshift modify-cluster --cluster-identifier <id> --encrypted --kms-key-id <key-arn>
+
+CKV_AWS_87:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        publicly_accessible = false
+      }
+    cli: |
+      aws redshift modify-cluster --cluster-identifier <id> --no-publicly-accessible
+
+CKV_AWS_141:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        allow_version_upgrade = true
+      }
+    cli: |
+      aws redshift modify-cluster --cluster-identifier <id> --allow-version-upgrade
+
+CKV_AWS_321:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        enhanced_vpc_routing = true
+      }
+    cli: |
+      aws redshift modify-cluster --cluster-identifier <id> --enhanced-vpc-routing
+
+CKV_AWS_343:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        automated_snapshot_retention_period = 7
+      }
+    cli: |
+      aws redshift modify-cluster --cluster-identifier <id> --automated-snapshot-retention-period 7
+
+CKV_AWS_320:
+  aws_redshift_cluster:
+    terraform: |
+      resource "aws_redshift_cluster" "example" {
+        database_name = "analytics"
+      }
+    cli: |
+      Set at creation; renaming requires a new cluster.
+
+CKV_AWS_29:
+  aws_elasticache_replication_group:
+    terraform: |
+      resource "aws_elasticache_replication_group" "example" {
+        at_rest_encryption_enabled = true
+        kms_key_id                 = aws_kms_key.cache.arn
+      }
+    cli: |
+      Cannot be enabled in place: the replication group must be recreated.
+
+CKV_AWS_30:
+  aws_elasticache_replication_group:
+    terraform: |
+      resource "aws_elasticache_replication_group" "example" {
+        transit_encryption_enabled = true
+      }
+    cli: |
+      aws elasticache modify-replication-group --replication-group-id <id> \
+        --transit-encryption-enabled --transit-encryption-mode preferred --apply-immediately
+
+CKV_AWS_191:
+  aws_elasticache_replication_group:
+    terraform: |
+      resource "aws_elasticache_replication_group" "example" {
+        at_rest_encryption_enabled = true
+        kms_key_id                 = aws_kms_key.cache.arn
+      }
+    cli: |
+      Set at creation; the key cannot be changed on an existing replication group.
+
+CKV_AWS_134:
+  aws_elasticache_replication_group:
+    terraform: |
+      resource "aws_elasticache_replication_group" "example" {
+        snapshot_retention_limit = 7
+      }
+    cli: |
+      aws elasticache modify-replication-group --replication-group-id <id> \
+        --snapshot-retention-limit 7 --apply-immediately

@@ -272,3 +272,173 @@ CKV_AWS_211:
   ksi: ['KSI-SVC-CET']
   rationale: >-
     The rds-ca-2019 authority expires; an instance still presenting it will fail client TLS validation on expiry, and the replacement is a reboot.
+
+CKV_AWS_96:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted cluster exposes its data through any snapshot copy or storage-layer access, without touching the database.
+
+CKV_AWS_139:
+  severity: low
+  impact: 0.3
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    Deletion protection is the difference between a mistyped identifier costing an argument and costing the cluster.
+
+CKV_AWS_162:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-2', 'IA-5']
+  nist_r4: ['IA-2', 'IA-5']
+  cci: ['CCI-000764']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    IAM database authentication replaces long-lived cluster passwords with short-lived tokens tied to an IAM principal.
+
+CKV_AWS_313:
+  severity: low
+  impact: 0.3
+  nist: ['CM-8', 'AU-12']
+  nist_r4: ['CM-8', 'AU-12']
+  cci: ['CCI-000366']
+  ksi: ['KSI-CMT-INV']
+  rationale: >-
+    A snapshot that loses its tags loses its owner, its retention class and its cost centre at the moment it becomes long-lived data.
+
+CKV_AWS_324:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Cluster logs that never leave the cluster are lost when it is replaced, and cannot be alerted on or retained centrally.
+
+CKV_AWS_327:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-12', 'SC-28 (1)']
+  nist_r4: ['SC-12', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data; a customer-managed key can.
+
+CKV_AWS_326:
+  severity: low
+  impact: 0.3
+  nist: ['CP-10', 'SI-12']
+  nist_r4: ['CP-10', 'SI-12']
+  cci: ['CCI-000553']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Backtrack rewinds a cluster in place after a bad write; without it the equivalent recovery is a restore, which is a new endpoint and an outage.
+
+CKV_AWS_64:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted warehouse exposes every table it holds through the storage layer and through any snapshot.
+
+CKV_AWS_87:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A publicly accessible warehouse is reachable from the internet, bounded only by credentials and the security group.
+
+CKV_AWS_141:
+  severity: medium
+  impact: 0.5
+  nist: ['SI-2', 'SI-2 (5)']
+  nist_r4: ['SI-2', 'SI-2 (5)']
+  cci: ['CCI-001227']
+  ksi: ['KSI-CMT-VTD']
+  rationale: >-
+    Without automatic version upgrades, a published engine patch is applied only when someone schedules it.
+
+CKV_AWS_321:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-7', 'AC-4']
+  nist_r4: ['SC-7', 'AC-4']
+  cci: ['CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    Without enhanced VPC routing, COPY and UNLOAD traffic leaves through the public endpoint, where VPC controls and flow logs do not see it.
+
+CKV_AWS_343:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9']
+  nist_r4: ['CP-9']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    A retention period of zero disables automated snapshots entirely: there is no recovery point that was not taken by hand.
+
+CKV_AWS_320:
+  severity: low
+  impact: 0.3
+  nist: ['CM-6']
+  nist_r4: ['CM-6']
+  cci: ['CCI-000366']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    The default database name is a known target: naming it explicitly is one less thing an untargeted scan can assume. The API reports this as db_name, not the Terraform database_name.
+
+CKV_AWS_29:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Cache contents are frequently a copy of the most sensitive rows in the database, held in the least protected place.
+
+CKV_AWS_30:
+  severity: high
+  impact: 0.7
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    Without in-transit encryption the cache protocol is plaintext on the wire, including the values it returns.
+
+CKV_AWS_191:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-12', 'SC-28 (1)']
+  nist_r4: ['SC-12', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data; a customer-managed key can.
+
+CKV_AWS_134:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9']
+  nist_r4: ['CP-9']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    A retention limit of zero disables backups entirely, so a cache holding the only copy of a computed result has no recovery point.
