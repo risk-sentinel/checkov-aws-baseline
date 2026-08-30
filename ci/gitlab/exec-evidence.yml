@@ -1,0 +1,234 @@
+# GitLab template — run this baseline and produce audit-ready HDF evidence.
+#
+# Include it (nothing else needs to be copied into your repository):
+#
+#   include:
+#     - project: <your-org>/checkov-aws-baseline
+#       ref: v0.1.7
+#       file: /ci/gitlab/exec-evidence.yml
+#       inputs:
+#         target: my-account
+#         profile_name: checkov-aws-v3.3.16
+#         profile_version: "0.1.0"
+#
+# Or clone the profile on the fly in your own job and paste the script below;
+# both work. See docs/ci-templates.md for why the logic lives in YAML and is
+# duplicated across forges.
+
+spec:
+  inputs:
+    target:
+      description: What is being assessed — account alias, host, resource. Not an ARN.
+    target_type:
+      description: repository | host | cloudAccount | cloudResource | database
+      default: cloudAccount
+    boundary:
+      description: >-
+        Authorization boundary the evidence is filed under. Required and
+        deliberately undefaulted: it labels the evidence and decides where it
+        lands in the evidence store, so a default would file an including
+        project's results under somebody else's boundary. GitLab refuses the
+        include when it is missing, which is the intended behaviour.
+    scan_type:
+      description: Evidence class recorded in the audit record — runtime, sast, dast.
+      default: runtime
+    target_uri:
+      description: InSpec transport — aws://, local://, or ssh://user@host.
+      default: "aws://"
+    scan_mode:
+      description: What the scanner was told to do — recorded, self-asserted.
+      default: "aws:// read-only"
+    profile_name:
+      description: Value of `name:` in the profile's inspec.yml.
+    profile_version:
+      description: Value of `version:` in the profile's inspec.yml.
+    benchmark:
+      description: Benchmark the profile implements, e.g. CIS AWS Foundations. Empty when none.
+      default: ""
+    benchmark_version:
+      description: Version of that benchmark, e.g. 7.0.0. Empty when none.
+      default: ""
+    inputs_file:
+      description: InSpec input file passed to the exec via --input-file.
+      default: inputs/example.yml
+    aws_region:
+      description: >-
+        Region for aws:// scans and for any cloud-evidence reads. Region is environment-specific and deliberately undefaulted: a wrong region does not error, it reads an empty account and reports a clean result.
+        GitLab refuses the include when it is missing.
+    image:
+      description: Pinned auditor image supplying cinc-auditor, hdf, saf and jq.
+      default: risksentinel/sparc-auditor:v0.5.0
+    job_name:
+      description: Name of the generated job, so a caller can include this template twice.
+      default: profile-exec-evidence
+---
+
+"$[[ inputs.job_name ]]":
+  image: "$[[ inputs.image ]]"
+  variables:
+    TARGET: "$[[ inputs.target ]]"
+    TARGET_TYPE: "$[[ inputs.target_type ]]"
+    BOUNDARY: "$[[ inputs.boundary ]]"
+    SCAN_TYPE: "$[[ inputs.scan_type ]]"
+    SCAN_MODE: "$[[ inputs.scan_mode ]]"
+    TARGET_URI: "$[[ inputs.target_uri ]]"
+    PROFILE: "$[[ inputs.profile_name ]]"
+    PROFILE_VERSION: "$[[ inputs.profile_version ]]"
+    BENCHMARK: "$[[ inputs.benchmark ]]"
+    BENCHMARK_VERSION: "$[[ inputs.benchmark_version ]]"
+    INPUTS_FILE: "$[[ inputs.inputs_file ]]"
+    AWS_REGION: "$[[ inputs.aws_region ]]"
+  script:
+    # 1 — the audit record, built BEFORE the scan, because that is when the
+    #     honest start time and the pipeline provenance are known.
+    - |
+      set -euo pipefail
+      STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      jq -n \
+        --arg target "$TARGET" --arg target_type "$TARGET_TYPE" --arg boundary "$BOUNDARY" \
+        --arg scan_type "$SCAN_TYPE" --arg scan_mode "$SCAN_MODE" --arg started "$STARTED_AT" \
+        --arg profile "$PROFILE" --arg profile_version "$PROFILE_VERSION" \
+        --arg profile_sha "${CI_COMMIT_SHA:-}" \
+        --arg benchmark "$BENCHMARK" --arg benchmark_version "$BENCHMARK_VERSION" \
+        --arg repo "${CI_PROJECT_PATH:-}" --arg commit "${CI_COMMIT_SHA:-}" \
+        --arg ref "${CI_COMMIT_REF_NAME:-}" --arg workflow "${CI_JOB_NAME:-}" \
+        --arg run_id "${CI_PIPELINE_ID:-}" --arg run_attempt "${CI_JOB_ID:-}" \
+        --arg run_url "${CI_PIPELINE_URL:-}" \
+        --arg actor "${GITLAB_USER_LOGIN:-}" --arg trigger "${CI_PIPELINE_SOURCE:-}" \
+        '{
+           schema_version: 1,
+           target:     {id: $target, type: $target_type, boundary: $boundary},
+           scan:       {type: $scan_type, mode: $scan_mode, started_at: $started},
+           assessment: {profile: $profile, profile_version: $profile_version,
+                        profile_sha: $profile_sha, benchmark: $benchmark,
+                        benchmark_version: $benchmark_version},
+           provenance: {forge: "gitlab", repo: $repo, commit: $commit, ref: $ref,
+                        workflow: $workflow, run_id: $run_id, run_attempt: $run_attempt,
+                        run_url: (if ($run_url|length) > 0 then $run_url else null end)},
+           actor:      {triggered_by: $actor, trigger: $trigger},
+           corroborable: ["provenance.run_id","provenance.run_url","provenance.commit",
+                          "conversion.raw_digest","assessment.profile_sha"]
+         }
+         | walk(if type == "object" then with_entries(select(.value != "")) else . end)' \
+        > audit.pre.json
+      echo "Audit record staged for $(jq -r '.target.id' audit.pre.json)"
+
+    # 2 — the scan. A failing control is expected output, not a failed job — but
+    #     an empty or absent artifact is a failed job, because it means nothing
+    #     was assessed and the pipeline would otherwise go green having looked
+    #     at nothing.
+    - |
+      set -uo pipefail
+      # Checked before the exec, because the exec is `|| true` and a missing
+      # inputs file would otherwise surface as a generic "no results" failure.
+      if [ ! -f "$INPUTS_FILE" ]; then
+        echo "inputs file not found: $INPUTS_FILE -- point inputs_file at a file that exists in the profile, or copy inputs/example.yml and edit it." >&2
+        exit 1
+      fi
+      cinc-auditor vendor . --overwrite
+      cinc-auditor exec . -t "$TARGET_URI" --input-file "$INPUTS_FILE" \
+        --reporter cli json:results.json || true
+      FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "$FINISHED_AT" > .finished_at
+      test -s results.json || { echo "ERROR: no results.json produced"; exit 1; }
+      COUNT=$(jq '[.profiles[].controls[]?.results[]?] | length' results.json)
+      echo "Executed $COUNT results"
+      [ "$COUNT" -gt 0 ] || { echo "ERROR: 0 results — the profile assessed nothing"; exit 1; }
+
+    # 3 — first gate.
+    #
+    # inspec-aws's aws_iam_password_policy returns the whole policy OBJECT as its
+    # resource_id, where InSpec exec-json requires a string, and hdf convert
+    # rejects the entire document over it. One malformed field would otherwise
+    # block all evidence for the run. Coercing it to JSON text leaves results,
+    # statuses and counts untouched. Upstream cause is inspec/inspec-aws.
+    - |
+      set -euo pipefail
+      jq '(.profiles[]?.controls[]?.results[]?.resource_id)
+          |= (if . == null or type == "string" then . else tojson end)' \
+         results.json > results.normalized.json
+      hdf convert results.normalized.json -o results.v3.json
+
+    # 4 — the facts that could not exist until the scan had run.
+    - |
+      set -euo pipefail
+      DIGEST="sha256:$(sha256sum results.normalized.json | cut -d' ' -f1)"
+      jq --slurpfile a audit.pre.json --arg digest "$DIGEST" \
+         --arg finished "$(cat .finished_at)" --arg raw results.normalized.json \
+         --arg key "${BOUNDARY}/latest/${TARGET}/inspec/results.json" '
+         ([.baselines[]?.requirements[]?.results[]?.status]
+          + [.profiles[]?.controls[]?.results[]?.status]) as $st
+         | .passthrough = ((.passthrough // {}) + {
+             audit: ($a[0]
+               + {scan: ($a[0].scan + {finished_at: $finished})}
+               + {scanner: {name: $a[0].assessment.profile,
+                            version: $a[0].assessment.profile_version}}
+               + {conversion: {converter: (.generator.name // null),
+                               converter_version: (.generator.version // null),
+                               raw_artifact: $raw, raw_digest: $digest}}
+               + {outcome: (if ($st|length) == 0 then null else {
+                    total: ($st|length),
+                    passed: ($st|map(select(.=="passed"))|length),
+                    failed: ($st|map(select(.=="failed"))|length),
+                    skipped: ($st|map(select(.=="skipped"))|length),
+                    not_applicable: ($st|map(select(.!="passed" and .!="failed"
+                                              and .!="skipped"))|length)
+                  } end)}
+               + {evidence_key: $key})
+           })
+         | .target = ($a[0].target + {scan_type: $a[0].scan.type})' \
+         results.v3.json > results.audited.json
+      jq -e '.passthrough.audit.outcome.total > 0' results.audited.json >/dev/null \
+        || { echo "ERROR: audit record carries no outcome counts"; exit 1; }
+
+    # 5 — second gate. `hdf label set` reports success even when it labels
+    #     nothing, so its exit status proves nothing on its own.
+    - |
+      set -euo pipefail
+      hdf label set results.audited.json target="$TARGET" scan_type="$SCAN_TYPE" \
+        -o results.final.json
+      hdf label show results.final.json | grep -q '^Component:' \
+        || { echo "ERROR: hdf label wrote no labels — no components in the document"; exit 1; }
+
+    # 6 — third gate.
+    - hdf validate --type results results.final.json
+
+    # 7 — the Heimdall copy.
+    #
+    # Heimdall loads the InSpec exec-json shape (`profiles[]`), which cinc-auditor
+    # already wrote in step 2 — so this is a carry-across, not a conversion.
+    #
+    # Version-namespace trap: in the Heimdall/SAF world "HDF" means this
+    # exec-json shape, but in hdf-libs 3.4.1 `--to hdf@2` IS the CLI default and
+    # emits `baselines[]`, which Heimdall does not take. `--to hdf@1` reaches the
+    # right shape but drops resource_class, resource_id, resource_params,
+    # attributes, sha256, depends and waiver_data. Copying what we already have
+    # loses nothing.
+    - |
+      set -euo pipefail
+      jq --slurpfile f results.final.json \
+         '.passthrough = ((.passthrough // {}) + {audit: $f[0].passthrough.audit})
+          | .target = $f[0].target' \
+         results.json > results-heimdall.json
+      jq -e '[.profiles[]?.controls[]?.results[]?] | length > 0' results-heimdall.json >/dev/null \
+        || { echo "ERROR: Heimdall copy carries no results"; exit 1; }
+      jq -e '.passthrough.audit != null' results-heimdall.json >/dev/null \
+        || { echo "ERROR: audit record did not carry into the Heimdall copy"; exit 1; }
+      jq -e '.target.id != null' results-heimdall.json >/dev/null \
+        || { echo "ERROR: target element did not carry into the Heimdall copy"; exit 1; }
+      echo "Heimdall copy: $(jq '[.profiles[]?.controls[]?.results[]?] | length' results-heimdall.json) results, audit record carried"
+
+    # 8 — make the result readable in the job log, not only downloadable.
+    - |
+      echo "===== Compliance summary ====="
+      saf view summary -i results.json || true
+      echo "===== HDF v3 rollup ====="
+      hdf list results.final.json || true
+      echo "===== Audit record ====="
+      jq '.passthrough.audit' results.final.json
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - results.final.json
+      - results-heimdall.json
