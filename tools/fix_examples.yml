@@ -315,3 +315,109 @@ CKV2_AWS_61:
     cli: |
       aws s3api put-bucket-lifecycle-configuration --bucket <name> \
         --lifecycle-configuration file://lifecycle.json
+
+CKV_AWS_16:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        storage_encrypted = true
+        kms_key_id        = aws_kms_key.rds.arn
+      }
+    cli: |
+      Encryption cannot be enabled in place: snapshot, copy the snapshot with --kms-key-id, and restore.
+
+CKV_AWS_17:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        publicly_accessible = false
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --no-publicly-accessible --apply-immediately
+
+CKV_AWS_157:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        multi_az = true
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --multi-az --apply-immediately
+
+CKV_AWS_161:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        iam_database_authentication_enabled = true
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --enable-iam-database-authentication --apply-immediately
+
+CKV_AWS_226:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        auto_minor_version_upgrade = true
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --auto-minor-version-upgrade --apply-immediately
+
+CKV_AWS_293:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        deletion_protection = true
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --deletion-protection --apply-immediately
+
+CKV_AWS_353:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        performance_insights_enabled = true
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> --enable-performance-insights --apply-immediately
+
+CKV_AWS_354:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        performance_insights_enabled    = true
+        performance_insights_kms_key_id = aws_kms_key.rds.arn
+      }
+    cli: |
+      Set at enable time: aws rds modify-db-instance --db-instance-identifier <id> \
+        --enable-performance-insights --performance-insights-kms-key-id <key-arn>
+
+CKV_AWS_129:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> \
+        --cloudwatch-logs-export-configuration EnableLogTypes=audit,error --apply-immediately
+
+CKV_AWS_118:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        monitoring_interval = 30
+        monitoring_role_arn = aws_iam_role.rds_monitoring.arn
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> \
+        --monitoring-interval 30 --monitoring-role-arn <role-arn> --apply-immediately
+
+CKV_AWS_211:
+  aws_db_instance:
+    terraform: |
+      resource "aws_db_instance" "example" {
+        ca_cert_identifier = "rds-ca-rsa2048-g1"
+      }
+    cli: |
+      aws rds modify-db-instance --db-instance-identifier <id> \
+        --ca-certificate-identifier rds-ca-rsa2048-g1 --apply-immediately

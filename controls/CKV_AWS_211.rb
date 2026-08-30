@@ -2,30 +2,43 @@
 #
 # Rule:        CKV_AWS_211 (checkov 3.3.16)
 # Applies to:  aws_db_instance
-# Status:      PLANNED — no deployed-asset reader exists for aws_db_instance yet.
+# Read with:   aws_rds_instances -> aws_rds_instance (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_211'] || []
 
 control 'CKV_AWS_211' do
-  impact 0.0
   title 'Ensure RDS uses a modern CaCert'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_db_instance in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_db_instance resources that actually exist, read through the
+    stock inspec-aws aws_rds_instance resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    The rds-ca-2019 authority expires; an instance still presenting it will
+    fail client TLS validation on expiry, and the replacement is a reboot.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_db_instance: ca_cert_identifier is rds-ca-rsa2048-g1 or rds-ca-rsa4096-g1 or rds-ca-ecc384-g1
+    Checkov looks for: aws_db_instance: ca_cert_identifier is
+    rds-ca-rsa2048-g1 or rds-ca-rsa4096-g1 or rds-ca-ecc384-g1
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#ca-cert-identifier
+    Terraform — aws_db_instance:
+
+      resource "aws_db_instance" "example" {
+        ca_cert_identifier = "rds-ca-rsa2048-g1"
+      }
+
+    Out of band — aws_db_instance:
+
+      aws rds modify-db-instance --db-instance-identifier <id> \
+        --ca-certificate-identifier rds-ca-rsa2048-g1 --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_211'
@@ -34,9 +47,28 @@ control 'CKV_AWS_211' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_db_instance]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#ca-cert-identifier'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_211 — no deployed-asset reader for aws_db_instance" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_instances.db_instance_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_db_instance', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_db_instance in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_instance(id) do
+      its('ca_certificate_identifier') { should be_in ['rds-ca-rsa2048-g1', 'rds-ca-rsa4096-g1', 'rds-ca-ecc384-g1'] }
+    end
   end
 end

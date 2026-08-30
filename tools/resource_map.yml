@@ -121,3 +121,114 @@ checks:
         arg: bucket_name
         property: "bucket_lifecycle_rules"
         satisfies: not_empty
+
+  # --- RDS instances, read through stock inspec-aws (create_resource_methods
+  #     exposes every DescribeDBInstances field as a method) ---
+  CKV_AWS_16:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "storage_encrypted"
+        satisfies: equals
+        value: true
+  CKV_AWS_17:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "publicly_accessible"
+        satisfies: equals
+        value: false
+  CKV_AWS_157:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "multi_az"
+        satisfies: equals
+        value: true
+  CKV_AWS_161:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "iam_database_authentication_enabled"
+        satisfies: equals
+        value: true
+  CKV_AWS_226:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "auto_minor_version_upgrade"
+        satisfies: equals
+        value: true
+  CKV_AWS_293:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "deletion_protection"
+        satisfies: equals
+        value: true
+  CKV_AWS_353:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "performance_insights_enabled"
+        satisfies: equals
+        value: true
+  CKV_AWS_354:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "performance_insights_kms_key_id"
+        satisfies: not_empty
+  CKV_AWS_129:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "enabled_cloudwatch_logs_exports"
+        satisfies: not_empty
+  CKV_AWS_118:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "monitoring_interval"
+        satisfies: greater_than
+        value: 0
+  CKV_AWS_211:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "ca_certificate_identifier"
+        satisfies: in_list
+        value: ['rds-ca-rsa2048-g1', 'rds-ca-rsa4096-g1', 'rds-ca-ecc384-g1']

@@ -162,3 +162,113 @@ CKV2_AWS_61:
   ksi: ['KSI-MLA-OSM']
   rationale: >-
     With no lifecycle configuration, objects accumulate indefinitely: retention becomes whatever nobody got around to deleting.
+
+CKV_AWS_16:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted database exposes its data through any snapshot copy or storage-layer access, without touching the database itself.
+
+CKV_AWS_17:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A publicly accessible instance is reachable from the internet, so its exposure is bounded only by credentials and the security group.
+
+CKV_AWS_157:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-10', 'SC-5']
+  nist_r4: ['CP-10', 'SC-5']
+  cci: ['CCI-000553', 'CCI-002385']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Without Multi-AZ, a single availability-zone failure takes the database down with no automatic failover.
+
+CKV_AWS_161:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-2', 'IA-5']
+  nist_r4: ['IA-2', 'IA-5']
+  cci: ['CCI-000764', 'CCI-000196']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    IAM database authentication removes long-lived database passwords in favour of short-lived tokens tied to an IAM principal.
+
+CKV_AWS_226:
+  severity: medium
+  impact: 0.5
+  nist: ['SI-2', 'SI-2 (5)']
+  nist_r4: ['SI-2', 'SI-2 (5)']
+  cci: ['CCI-001227', 'CCI-002605']
+  ksi: ['KSI-CMT-VTD']
+  rationale: >-
+    Without automatic minor upgrades, a published engine patch is applied only when someone remembers to schedule it.
+
+CKV_AWS_293:
+  severity: low
+  impact: 0.3
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535', 'CCI-001678']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    Deletion protection is the difference between a mistyped identifier costing an argument and costing the database.
+
+CKV_AWS_353:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Performance Insights is what makes a slow-query or lock-contention question answerable after the fact rather than during the next incident.
+
+CKV_AWS_354:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Performance Insights data includes query text, which can carry the values a query filtered on; unencrypted, it is a second copy of the data outside the database.
+
+CKV_AWS_129:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Database logs that never leave the instance are lost when it is replaced, and cannot be alerted on or retained centrally.
+
+CKV_AWS_118:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Enhanced monitoring reads the host's own metrics; without it, a database starved of CPU or IO looks identical to one that is merely busy. An interval of 0 means disabled.
+
+CKV_AWS_211:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418', 'CCI-002421']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    The rds-ca-2019 authority expires; an instance still presenting it will fail client TLS validation on expiry, and the replacement is a reboot.

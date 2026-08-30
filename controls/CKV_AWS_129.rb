@@ -2,30 +2,43 @@
 #
 # Rule:        CKV_AWS_129 (checkov 3.3.16)
 # Applies to:  aws_db_instance
-# Status:      PLANNED — no deployed-asset reader exists for aws_db_instance yet.
+# Read with:   aws_rds_instances -> aws_rds_instance (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_129'] || []
 
 control 'CKV_AWS_129' do
-  impact 0.0
   title 'Ensure that respective logs of Amazon Relational Database Service (Amazon RDS) are enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_db_instance in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_db_instance resources that actually exist, read through the
+    stock inspec-aws aws_rds_instance resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Database logs that never leave the instance are lost when it is
+    replaced, and cannot be alerted on or retained centrally.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_db_instance: enabled_cloudwatch_logs_exports/[0] is CKV_ANY
+    Checkov looks for: aws_db_instance: enabled_cloudwatch_logs_exports/[0]
+    is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#enabled-cloudwatch-logs-exports
+    Terraform — aws_db_instance:
+
+      resource "aws_db_instance" "example" {
+        enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
+      }
+
+    Out of band — aws_db_instance:
+
+      aws rds modify-db-instance --db-instance-identifier <id> \
+        --cloudwatch-logs-export-configuration EnableLogTypes=audit,error --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_129'
@@ -34,9 +47,28 @@ control 'CKV_AWS_129' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_db_instance]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#enabled-cloudwatch-logs-exports'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_129 — no deployed-asset reader for aws_db_instance" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_instances.db_instance_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_db_instance', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_db_instance in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_instance(id) do
+      its('enabled_cloudwatch_logs_exports') { should_not be_empty }
+    end
   end
 end

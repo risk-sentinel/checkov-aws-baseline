@@ -2,30 +2,42 @@
 #
 # Rule:        CKV_AWS_161 (checkov 3.3.16)
 # Applies to:  aws_db_instance
-# Status:      PLANNED — no deployed-asset reader exists for aws_db_instance yet.
+# Read with:   aws_rds_instances -> aws_rds_instance (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_161'] || []
 
 control 'CKV_AWS_161' do
-  impact 0.0
   title 'Ensure RDS database has IAM authentication enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_db_instance in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_db_instance resources that actually exist, read through the
+    stock inspec-aws aws_rds_instance resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    IAM database authentication removes long-lived database passwords in
+    favour of short-lived tokens tied to an IAM principal.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_db_instance: iam_database_authentication_enabled is True
+    Checkov looks for: aws_db_instance: iam_database_authentication_enabled
+    is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#iam-database-authentication-enabled
+    Terraform — aws_db_instance:
+
+      resource "aws_db_instance" "example" {
+        iam_database_authentication_enabled = true
+      }
+
+    Out of band — aws_db_instance:
+
+      aws rds modify-db-instance --db-instance-identifier <id> --enable-iam-database-authentication --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_161'
@@ -34,9 +46,28 @@ control 'CKV_AWS_161' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_db_instance]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance#iam-database-authentication-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-2', 'IA-5']
+  tag nist_r4:               ['IA-2', 'IA-5']
+  tag cci:                   ['CCI-000764', 'CCI-000196']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_161 — no deployed-asset reader for aws_db_instance" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_instances.db_instance_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_db_instance', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_db_instance in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_instance(id) do
+      its('iam_database_authentication_enabled') { should eq true }
+    end
   end
 end

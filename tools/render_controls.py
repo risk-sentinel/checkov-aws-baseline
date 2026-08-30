@@ -155,7 +155,7 @@ control '{cid}' do
   only_if('no {tf_type} in scope') {{ applicable }}
 
   in_scope.each do |id|
-    describe {singular}({arg}: id) do
+    describe {singular}({arg_expr}) do
       its('{prop}') {{ {matcher} }}
     end
   end
@@ -340,12 +340,20 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
     spec = mapping[tf_type]
     enum, assertion = spec["enumerate"], spec["assert"]
     satisfies = assertion.get("satisfies", "equals")
+    value = assertion.get("value")
     if satisfies == "equals":
-        matcher = f"should eq {str(assertion['value']).lower()}"
+        matcher = f"should eq {str(value).lower()}"
     elif satisfies == "not_empty":
         matcher = "should_not be_empty"
     elif satisfies == "empty":
         matcher = "should be_empty"
+    elif satisfies == "greater_than":
+        matcher = f"should be > {value}"
+    elif satisfies == "in_list":
+        # A literal array in the control, so the accepted set is visible in the
+        # result rather than hidden behind a helper.
+        allowed = ", ".join(f"'{v}'" for v in value)
+        matcher = f"should be_in [{allowed}]"
     else:
         raise SystemExit(f"{cid}: unknown satisfies '{satisfies}'")
 
@@ -365,7 +373,9 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
         nist=meta["nist"], nist_r4=meta["nist_r4"], cci=meta["cci"], ksi=meta["ksi"],
         sev=meta["severity"], impact=meta["impact"],
         plural=enum["resource"], ids_column=enum["ids"],
-        singular=assertion["resource"], arg=assertion["arg"],
+        singular=assertion["resource"],
+        arg_expr=("id" if assertion.get("arg") in (None, "", "positional")
+                  else f"{assertion['arg']}: id"),
         prop=assertion["property"], matcher=matcher)
 
 
