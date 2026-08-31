@@ -35,6 +35,20 @@ API_SPECS = {
     'id' => 'name',
     'list' => 'list_work_groups'
   },
+  'aws_backup_protected_resource' => {
+    'arn' => 'resource_arn',
+    'client' => 'Aws::Backup::Client',
+    'collection' => 'results',
+    'fields' => {
+      'last_backup_time' => 'last_backup_time',
+      'resource_name' => 'resource_name',
+      'resource_type' => 'resource_type'
+    },
+    'gem' => 'aws-sdk-backup',
+    'id' => 'resource_arn',
+    'list' => 'list_protected_resources',
+    'scope' => 'regional'
+  },
   'aws_backup_vault' => {
     'arn' => 'backup_vault_arn',
     'client' => 'Aws::Backup::Client',
@@ -96,6 +110,18 @@ API_SPECS = {
     'gem' => 'aws-sdk-databasemigrationservice',
     'id' => 'replication_instance_identifier',
     'list' => 'describe_replication_instances'
+  },
+  'aws_ebs_volume' => {
+    'client' => 'Aws::EC2::Client',
+    'collection' => 'volumes',
+    'fields' => {
+      'encrypted' => 'encrypted',
+      'state' => 'state'
+    },
+    'gem' => 'aws-sdk-ec2',
+    'id' => 'volume_id',
+    'list' => 'describe_volumes',
+    'scope' => 'regional'
   },
   'aws_ec2_transit_gateway' => {
     'arn' => 'transit_gateway_arn',
@@ -236,6 +262,19 @@ API_SPECS = {
     'gem' => 'aws-sdk-networkfirewall',
     'id' => 'firewall_name',
     'list' => 'list_firewalls'
+  },
+  'aws_rds_cluster' => {
+    'arn' => 'db_cluster_arn',
+    'client' => 'Aws::RDS::Client',
+    'collection' => 'db_clusters',
+    'fields' => {
+      'engine' => 'engine',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-rds',
+    'id' => 'db_cluster_identifier',
+    'list' => 'describe_db_clusters',
+    'scope' => 'regional'
   },
   'aws_rds_global_cluster' => {
     'arn' => 'global_cluster_arn',

@@ -11,6 +11,114 @@
 #   CKV_AWS_339: same as CKV_AWS_37
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
 checks:
+  CKV2_AWS_8:
+    aws_rds_cluster:
+      reader: membership
+      assert: every_left_covered
+      match_region: true
+      left:
+        type: aws_rds_cluster
+        key: arn
+        key_form: verbatim
+        noun: RDS or Aurora cluster
+        noun_plural: RDS and Aurora clusters
+      right:
+        type: aws_backup_protected_resource
+        key: id
+        key_form: verbatim
+        noun: AWS Backup protected resource
+        where:
+          resource_type: [Aurora, RDS]
+      uncovered_message: AWS Backup holds no recovery point for this cluster
+      divergence: >-
+        Checkov asserts that a backup_selection resource EXISTS in the plan and
+        names the cluster. ListProtectedResources reports what has actually been
+        backed up -- it carries last_backup_time -- so a cluster selected by a
+        plan that has never run reports as absent here and passes there. That is
+        a stricter question than Checkov's, deliberately: a selection that has
+        never produced a recovery point restores nothing.
+      empty_right_means: >-
+        AWS Backup holds no recovery point for any RDS or Aurora cluster in this
+        account and region. That is the worst case for this rule, not an absence
+        of evidence, so it renders as every cluster failing rather than as Not
+        Applicable.
+      note: >-
+        Both sides key on a full ARN and neither is reduced, so there is no
+        identifier translation to get wrong here. rds DescribeDBClusters takes no
+        required arguments and DBCluster carries db_cluster_arn -- confirmed
+        against Aws::RDS::Types::DBCluster in the auditor image. The stock
+        aws_rds_clusters plural registers cluster_identifier but not the ARN,
+        which is why the left side goes through the api reader.
+  CKV2_AWS_9:
+    aws_backup_selection:
+      reader: membership
+      assert: every_left_covered
+      match_region: true
+      left:
+        type: aws_ebs_volume
+        key: id
+        key_form: verbatim
+        noun: EBS volume
+      right:
+        type: aws_backup_protected_resource
+        key: id
+        key_form: terminal_segment
+        noun: AWS Backup protected resource
+        where:
+          resource_type: [EBS]
+      uncovered_message: AWS Backup holds no recovery point for this EBS volume
+      divergence: >-
+        Checkov asserts that a backup_selection resource EXISTS in the plan and
+        names the volume. ListProtectedResources reports what has actually been
+        backed up, so a volume selected by a plan that has never run reports as
+        absent here and passes there.
+      empty_right_means: >-
+        AWS Backup holds no recovery point for any EBS volume in this account and
+        region. That is the worst case for this rule, not an absence of evidence,
+        so it renders as every volume failing rather than as Not Applicable.
+      note: >-
+        THE KEY MISMATCH THIS SHAPE EXISTS FOR. ec2 DescribeVolumes returns a bare
+        volume id and Aws::EC2::Types::Volume has NO Arn member at all -- confirmed
+        against the SDK shape in the auditor image -- while AWS Backup returns
+        arn:<partition>:ec2:<region>:<account>:volume/vol-... . So the right side
+        is reduced to its terminal segment and the left is taken verbatim.
+        Reducing loses the account and region, which is why the region is part of
+        the key and why the right side is filtered to resource_type EBS first: a
+        reduced key must not be able to collide with another service's.
+  CKV2_AWS_18:
+    aws_backup_selection:
+      reader: membership
+      assert: every_left_covered
+      match_region: true
+      left:
+        type: aws_efs_file_system
+        key: arn
+        key_form: verbatim
+        noun: EFS file system
+      right:
+        type: aws_backup_protected_resource
+        key: id
+        key_form: verbatim
+        noun: AWS Backup protected resource
+        where:
+          resource_type: [EFS]
+      uncovered_message: AWS Backup holds no recovery point for this EFS file system
+      divergence: >-
+        Checkov asserts that a backup_selection resource EXISTS in the plan and
+        names the file system. ListProtectedResources reports what has actually
+        been backed up, so a file system selected by a plan that has never run
+        reports as absent here and passes there.
+      empty_right_means: >-
+        AWS Backup holds no recovery point for any EFS file system in this account
+        and region. That is the worst case for this rule, not an absence of
+        evidence, so it renders as every file system failing rather than as Not
+        Applicable.
+      note: >-
+        The cleanest of the three: efs DescribeFileSystems returns file_system_arn
+        -- confirmed against Aws::EFS::Types::FileSystemDescription -- so both
+        sides key on a full ARN with no reduction. The stock aws_efs_file_systems
+        plural registers file_system_ids but not the ARN, which is why the left
+        side uses the existing api_specs row.
   CKV_AWS_116:
     aws_lambda_function:
       assert:

@@ -32,6 +32,32 @@ aws_athena_workgroup:
   gem: aws-sdk-athena
   id: name
   list: list_work_groups
+aws_backup_protected_resource:
+  # The RIGHT side of every AWS Backup coverage join. ListProtectedResources
+  # takes NO required arguments and answers for every resource type in the
+  # account at once, so one spec serves CKV2_AWS_8, _9 and _18 -- confirmed
+  # against Aws::Backup::Client.api.operation(:list_protected_resources), whose
+  # input shape has members [next_token, max_results] and no required members.
+  #
+  # DIVERGENCE from Checkov, stated in every control that uses it: Checkov
+  # asserts a backup_selection EXISTS in the plan. ListProtectedResources
+  # reports what has actually been BACKED UP -- it carries last_backup_time --
+  # so a resource selected by a plan that has not yet run reports as absent.
+  # That is a stricter question, not the same one.
+  #
+  # `id` is the resource ARN because that is the only identifier this API
+  # returns; resource_name is present but is a bare name with no type or region.
+  arn: resource_arn
+  client: Aws::Backup::Client
+  collection: results
+  fields:
+    last_backup_time: last_backup_time
+    resource_name: resource_name
+    resource_type: resource_type
+  gem: aws-sdk-backup
+  id: resource_arn
+  list: list_protected_resources
+  scope: regional
 aws_backup_vault:
   arn: backup_vault_arn
   client: Aws::Backup::Client
@@ -84,6 +110,21 @@ aws_dms_replication_instance:
   gem: aws-sdk-databasemigrationservice
   id: replication_instance_identifier
   list: describe_replication_instances
+aws_ebs_volume:
+  # The LEFT side of CKV2_AWS_9. Read through the api reader rather than the
+  # stock aws_ebs_volumes because a coverage join needs a stable per-row key and
+  # a region on every row, and because ec2's Volume shape has NO Arn member at
+  # all -- confirmed against Aws::EC2::Types::Volume -- so the volume id is the
+  # only key this side can offer. The backup side reduces its ARN to match.
+  client: Aws::EC2::Client
+  collection: volumes
+  fields:
+    encrypted: encrypted
+    state: state
+  gem: aws-sdk-ec2
+  id: volume_id
+  list: describe_volumes
+  scope: regional
 aws_ec2_transit_gateway:
   arn: transit_gateway_arn
   client: Aws::EC2::Client
@@ -204,6 +245,22 @@ aws_networkfirewall_firewall:
   gem: aws-sdk-networkfirewall
   id: firewall_name
   list: list_firewalls
+aws_rds_cluster:
+  # The LEFT side of CKV2_AWS_8. describe_db_clusters has no required arguments
+  # and DBCluster carries db_cluster_arn, so this side and the AWS Backup side
+  # can be matched on a full ARN with no reduction and therefore no ambiguity.
+  # The stock aws_rds_clusters plural registers cluster_identifier but not the
+  # ARN, which is why this goes through the api reader.
+  arn: db_cluster_arn
+  client: Aws::RDS::Client
+  collection: db_clusters
+  fields:
+    engine: engine
+    storage_encrypted: storage_encrypted
+  gem: aws-sdk-rds
+  id: db_cluster_identifier
+  list: describe_db_clusters
+  scope: regional
 aws_rds_global_cluster:
   arn: global_cluster_arn
   client: Aws::RDS::Client

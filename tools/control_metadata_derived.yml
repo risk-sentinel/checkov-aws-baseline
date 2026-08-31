@@ -1456,3 +1456,57 @@ CKV_AWS_92:
     which is exactly the traffic an investigation needs.
   severity: medium
   what: an access_logs block is present and not disabled
+CKV2_AWS_8:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.7
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A database cluster with no recovery point cannot be restored. Encryption, deletion protection
+    and multi-AZ all protect availability of the running cluster; only a backup protects against the
+    data itself being wrong, and a backup plan that has never produced a recovery point protects nothing.
+  severity: high
+CKV2_AWS_9:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A volume with no recovery point is unrecoverable from corruption, ransomware or a mistaken
+    detach-and-delete. Snapshots taken by hand are not a control, because nothing asserts they were taken;
+    a backup plan that has produced a recovery point is evidence that they were.
+  severity: medium
+CKV2_AWS_18:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: An EFS file system is usually shared mutable state for several workloads at once, so a bad
+    write reaches all of them and there is no single owner who would notice. Without a recovery point
+    there is nothing to roll back to.
+  severity: medium

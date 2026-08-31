@@ -100,6 +100,141 @@ def pack():
     return out
 
 
+# --- membership (join) mappings ------------------------------------------
+#
+# A stock mapping fails loudly when it names a column that does not exist:
+# NoMethodError at exec. A MEMBERSHIP mapping does not. Name a key field the
+# api spec does not carry and every key comes back nil, nothing matches, and
+# every left asset reports as uncovered -- a 100% finding that reads exactly
+# like a real one and that neither `check` nor `json` can see, because neither
+# evaluates a control body.
+#
+# So the parts of a join that CAN be checked without an account are checked
+# here: that both sides name an api spec that exists, that each key names a
+# column that spec actually produces, that a declared filter names a field it
+# actually carries, and that the two sides agree about region scope when the
+# join pairs on region.
+#
+# What is NOT checkable, and is reported rather than assumed: whether the two
+# key spaces intersect. That is a fact about real ARNs. The rendered control
+# carries a runtime guard for it; this lint names the mappings that depend on
+# that guard so the dependence stays visible.
+MEMBERSHIP_KEY_FORMS = ("verbatim", "terminal_segment")
+MEMBERSHIP_ASSERTIONS = ("every_left_covered",)
+
+
+def api_specs():
+    return yaml.safe_load((HERE / "api_specs.yml").read_text()) or {}
+
+
+def all_mappings():
+    """Authored and derived mappings together.
+
+    lint_resource_map's stock half reads only the authored file, which is the
+    reviewed surface. A membership mapping is dangerous in a way a stock one is
+    not -- it fails silently rather than loudly -- so the derived file is
+    included here: an unreviewed join is exactly the one that most needs the
+    static check.
+    """
+    merged = {}
+    for name in ("resource_map.yml", "resource_map_derived.yml"):
+        path = HERE / name
+        if not path.is_file():
+            continue
+        for cid, spec in (yaml.safe_load(path.read_text()) or {}).get("checks", {}).items():
+            merged.setdefault(cid, spec)
+    return merged
+
+
+def membership_columns(spec):
+    """The row columns aws_api_assets writes for an api spec.
+
+    `id`, `region`, `account_id` and `type` are on every row; `arn` only when
+    the spec declares one; the rest are the declared fields.
+    """
+    columns = {"id", "region", "account_id", "type"}
+    if spec.get("arn"):
+        columns.add("arn")
+    columns |= set(spec.get("fields") or {})
+    return columns
+
+
+def check_membership(problems, unverifiable):
+    """Validate every membership mapping. Returns the number checked."""
+    specs = api_specs()
+    checked = 0
+
+    for cid, per_type in sorted(all_mappings().items()):
+        for tf_type, mapping in per_type.items():
+            if mapping.get("reader") != "membership":
+                continue
+            checked += 1
+            where = cid + "/" + tf_type
+
+            if mapping.get("assert") not in MEMBERSHIP_ASSERTIONS:
+                problems.append(f"{where}: assert '{mapping.get('assert')}' is not one of "
+                                f"{', '.join(MEMBERSHIP_ASSERTIONS)}")
+            if not str(mapping.get("empty_right_means") or "").strip():
+                problems.append(
+                    f"{where}: no `empty_right_means`. An empty right side is a FINDING — "
+                    f"nothing is covered — and the control has to say so rather than let a "
+                    f"reader assume absence of evidence")
+
+            sides = {}
+            for side in ("left", "right"):
+                decl = mapping.get(side) or {}
+                spec = specs.get(decl.get("type"))
+                sides[side] = spec
+                if spec is None:
+                    problems.append(f"{where}: {side} names api spec '{decl.get('type')}', which "
+                                    f"is not in tools/api_specs.yml")
+                    continue
+                if decl.get("key_form") not in MEMBERSHIP_KEY_FORMS:
+                    problems.append(f"{where}: {side} key_form '{decl.get('key_form')}' is not one "
+                                    f"of {', '.join(MEMBERSHIP_KEY_FORMS)}")
+                columns = membership_columns(spec)
+                if decl.get("key") not in columns:
+                    problems.append(
+                        f"{where}: {side} keys on '{decl.get('key')}', which "
+                        f"{decl.get('type')} does not produce. It produces: "
+                        f"{', '.join(sorted(columns))}. Every key would be nil and NOTHING would "
+                        f"match, which renders as every asset uncovered")
+                if not str(decl.get("noun") or "").strip():
+                    problems.append(f"{where}: {side} has no `noun` for the control's prose")
+                if decl.get("key_form") == "terminal_segment":
+                    unverifiable.append(
+                        f"{where}: {side} reduces {decl['type']}.{decl['key']} to its terminal "
+                        f"segment — whether the two key spaces then intersect is a fact about "
+                        f"real ARNs, provable only at exec, and the control's key-space guard "
+                        f"is what covers it")
+
+            right_decl = mapping.get("right") or {}
+            filters = right_decl.get("where") or {}
+            if len(filters) > 1:
+                problems.append(f"{where}: right.where takes exactly one field, got "
+                                f"{sorted(filters)} — with more than one the rendered guard "
+                                f"cannot say which of them selected nothing")
+            if filters and sides.get("right"):
+                field = next(iter(filters))
+                columns = membership_columns(sides["right"])
+                if field not in columns:
+                    problems.append(
+                        f"{where}: right.where filters on '{field}', which "
+                        f"{right_decl.get('type')} does not produce. It produces: "
+                        f"{', '.join(sorted(columns))}. The filter would select NOTHING and "
+                        f"every asset would report uncovered")
+
+            if mapping.get("match_region", True) and all(sides.values()):
+                scopes = {side: (spec.get("scope") or "regional") for side, spec in sides.items()}
+                if scopes["left"] != scopes["right"]:
+                    problems.append(
+                        f"{where}: the join pairs on region but the two sides disagree about "
+                        f"scope (left {scopes['left']}, right {scopes['right']}). A global row is "
+                        f"keyed 'global' and a regional one is not, so nothing would ever match")
+
+    return checked
+
+
 def main() -> int:
     resources = pack()
     if not resources:
@@ -155,18 +290,22 @@ def main() -> int:
                     f"{cid}/{tf_type}: {singular}.{prop} — provided by create_resource_methods "
                     f"over the API response; only a live call can confirm it")
 
+    membership = check_membership(problems, unverifiable)
+
     print(f"stock mappings checked : {checked}")
+    print(f"membership joins checked: {membership}")
     print(f"resources in the pack  : {len(resources)}")
     print(f"unverifiable statically: {len(unverifiable)} (property names, and dynamic id columns)")
 
     if problems:
-        print("::error::a stock mapping names something the resource pack does not have.")
+        print("::error::a mapping names something the resource pack or an api spec does not have.")
         for p in problems:
             print(f"  {p}")
         return 1
 
-    print("OK — every stock mapping names a resource that exists, and every "
-          "statically-checkable enumeration column is registered on it.")
+    print("OK — every stock mapping names a resource that exists, every "
+          "statically-checkable enumeration column is registered on it, and every "
+          "membership join keys both sides on a column its api spec produces.")
     return 0
 
 

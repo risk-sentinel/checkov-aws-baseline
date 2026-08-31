@@ -1299,3 +1299,42 @@ CKV_AWS_15:
         --minimum-password-length 14 --require-symbols --require-numbers \
         --require-uppercase-characters --require-lowercase-characters \
         --max-password-age 90 --password-reuse-prevention 24
+CKV2_AWS_8:
+  aws_rds_cluster:
+    cli: 'aws backup start-backup-job --backup-vault-name <vault> --resource-arn <cluster-arn> --iam-role-arn
+      <role-arn>
+
+      '
+    note: The CLI line takes ONE on-demand backup and does not make the cluster covered going forward.
+      Only a plan plus a selection does that, which is why the Terraform is the primary path here. Note
+      also that this control asserts a recovery point EXISTS, so a newly-created selection stays failing
+      until its plan first runs.
+    terraform: "resource \"aws_backup_plan\" \"daily\" {\n  name = \"daily\"\n\n  rule {\n    rule_name\
+      \         = \"daily\"\n    target_vault_name = aws_backup_vault.main.name\n    schedule       \
+      \   = \"cron(0 5 * * ? *)\"\n\n    lifecycle {\n      delete_after = 35\n    }\n  }\n}\n\nresource\
+      \ \"aws_backup_selection\" \"clusters\" {\n  iam_role_arn = aws_iam_role.backup.arn\n  name    \
+      \     = \"rds-clusters\"\n  plan_id      = aws_backup_plan.daily.id\n  resources    = [aws_rds_cluster.main.arn]\n\
+      }\n"
+CKV2_AWS_9:
+  aws_backup_selection:
+    cli: 'aws backup start-backup-job --backup-vault-name <vault> --resource-arn <volume-arn> --iam-role-arn
+      <role-arn>
+
+      '
+    note: The volume ARN is arn:<partition>:ec2:<region>:<account>:volume/<volume-id>. DescribeVolumes
+      does not return it, which is exactly the identifier mismatch this control has to translate across.
+    terraform: "resource \"aws_backup_selection\" \"volumes\" {\n  iam_role_arn = aws_iam_role.backup.arn\n\
+      \  name         = \"ebs-volumes\"\n  plan_id      = aws_backup_plan.daily.id\n\n  selection_tag\
+      \ {\n    type  = \"STRINGEQUALS\"\n    key   = \"backup\"\n    value = \"true\"\n  }\n}\n"
+CKV2_AWS_18:
+  aws_backup_selection:
+    cli: 'aws backup start-backup-job --backup-vault-name <vault> --resource-arn <file-system-arn> --iam-role-arn
+      <role-arn>
+
+      '
+    note: EFS also has its own automatic backups, which write to an AWS-managed vault. Those do NOT appear
+      as an AWS Backup protected resource in every case, so a file system relying on them alone can fail
+      this control; confirm which mechanism is in use before treating a failure as a gap.
+    terraform: "resource \"aws_backup_selection\" \"efs\" {\n  iam_role_arn = aws_iam_role.backup.arn\n\
+      \  name         = \"efs-file-systems\"\n  plan_id      = aws_backup_plan.daily.id\n  resources\
+      \    = [aws_efs_file_system.shared.arn]\n}\n"
