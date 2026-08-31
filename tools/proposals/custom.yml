@@ -1,0 +1,1672 @@
+# Checkov CUSTOM-LOGIC AWS checks, translated to deployed-asset assertions.
+#
+# Scope: every check in tools/checkov_catalog.yml with kind: custom that is not
+# already in tools/resource_map.yml or tools/resource_map_derived.yml. That is
+# 104 checks, not the ~41 the task estimated -- the 124 custom checks in the
+# catalogue minus the 20 already mapped.
+#
+# Every one of the 104 appears exactly once below:
+#
+#   mappings     6  A -- ready to merge
+#   needs_verb  88  B -- the deployed assertion is expressible, the schema is not
+#   unreachable 10  C -- no reader can answer it in this image
+#
+# Two facts about the renderer shaped almost every verdict, and neither is in
+# the schema documentation:
+#
+#   1. `satisfies` is richer than the five documented verbs. matcher_for()
+#      already implements equals, not_equals, empty, not_empty, greater_than,
+#      less_than, at_least, at_most, in_list, not_in_list, includes, excludes
+#      and matches. Only equals, not_empty, empty, greater_than, in_list,
+#      at_least and at_most are exercised by the committed maps. The A mappings
+#      below use not_equals and empty, both implemented and both unexercised, so
+#      they should be exec-checked on first run.
+#
+#   2. A nil field means opposite things depending on the reader. render_api and
+#      render() reject rows whose field is nil for every value comparison, so an
+#      absent field renders Not Applicable. render_stock applies NO nil filter,
+#      so an absent field is asserted on and the vendored resources answer it
+#      with NullResponse -- whose `==` returns other.nil? but whose
+#      method_missing returns self. So on a stock mapping `should eq true` fails
+#      an absent field (correct) while `should be <= 90` PASSES it (a silent
+#      false pass, and the reason CKV_AWS_304 is B rather than A below).
+
+mappings:
+  CKV_AWS_23:
+    aws_security_group_rule:
+      reader: api
+      field: description
+      satisfies: not_empty
+      note: 'Checkov requires a description on the security group and on every ingress/egress block. EC2
+        refuses to create a security group without a description, so the group half is always satisfied
+        on a deployed estate and the rule half is the whole question. ec2:DescribeSecurityGroupRules takes
+        no required arguments and returns every rule in the region as its own object with SecurityGroupRuleId,
+        IsEgress and Description (confirmed in botocore ec2 SecurityGroupRule), so one enumeration answers
+        both directions. Stronger than Checkov: it sees rules added in the console or by another tool,
+        which no HCL scan can.'
+  CKV_AWS_175:
+    aws_waf_web_acl:
+      reader: stock
+      scope: global
+      enumerate:
+        resource: aws_waf_web_acls
+        ids: web_acl_ids
+      assert:
+        resource: aws_waf_web_acl
+        arg: web_acl_id
+        property: rules_rule_ids
+        satisfies: not_empty
+      note: 'waf:GetWebACL always returns a Rules list; the vendored resource exposes it as rules_rule_ids.
+        An empty list is exactly Checkov''s FAILED case. Mapped on the classic type because wafv2:ListWebACLs
+        REQUIRES a Scope argument (REGIONAL or CLOUDFRONT), which the enumeration contract forbids --
+        see needs_verb for the aws_wafv2_web_acl half. aws_waf_web_acls flattens its id column with style:
+        :simple, so the ids are Strings, not the nested arrays that broke other plurals.'
+  CKV_AWS_210:
+    aws_batch_job_definition:
+      reader: stock
+      enumerate:
+        resource: aws_batch_job_definitions
+        ids: job_definition_names
+      assert:
+        resource: aws_batch_job_definition
+        arg: job_definition_name
+        property: container_properties.privileged
+        satisfies: not_equals
+        value: true
+      note: 'botocore batch ContainerProperties carries `privileged`; the Ruby SDK snake-cases the JobDefinition
+        member to container_properties, and create_resource_methods turns the nested hash into a probe,
+        so container_properties.privileged is reachable. not_equals rather than equals false on purpose:
+        AWS omits the member entirely when it was never set, and the vendored resource answers a missing
+        member with NullResponse, whose == returns other.nil?. `should eq false` would therefore fail
+        every non-privileged job definition; `should_not eq true` passes it and still fails a genuinely
+        privileged one. Note describe_job_definitions returns every revision of a name and the resource
+        reads job_definitions[0], so a name whose latest revision is clean can still be assessed on an
+        older one -- conservative, not wrong.'
+  CKV_AWS_315:
+    aws_autoscaling_group:
+      reader: stock
+      enumerate:
+        resource: aws_auto_scaling_groups
+        ids: names
+      assert:
+        resource: aws_auto_scaling_group
+        arg: auto_scaling_group_name
+        property: launch_configuration_name
+        satisfies: empty
+      note: 'Checkov passes when either launch_template or mixed_instances_policy.launch_template is present
+        -- two fields joined by OR, which the schema cannot express. The deployed equivalent is single-field
+        because botocore autoscaling AutoScalingGroup carries LaunchConfigurationName, LaunchTemplate
+        and MixedInstancesPolicy as mutually exclusive members: an ASG that is not on a launch configuration
+        reports LaunchConfigurationName as absent. So `launch_configuration_name is empty` is the exact
+        complement of Checkov''s disjunction, not an approximation. Caveat: the vendored aws_auto_scaling_group
+        calls .split('','') on vpc_zone_identifier without a nil guard, so an ASG with no VPC subnets
+        (EC2-Classic only) would raise.'
+  CKV_AWS_317:
+    aws_elasticsearch_domain:
+      reader: stock
+      enumerate:
+        resource: aws_elasticsearchservice_domains
+        ids: domain_names
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: log_publishing_options.AUDIT_LOGS.enabled
+        satisfies: equals
+        value: true
+      note: 'botocore es ElasticsearchDomainStatus carries LogPublishingOptions as a map keyed by log
+        type, whose values are LogPublishingOption{CloudWatchLogsLogGroupArn, Enabled}. The Ruby SDK returns
+        String keys, and create_resource_methods defines a singleton method per key, so log_publishing_options.AUDIT_LOGS.enabled
+        resolves. A domain that never enabled any log publishing omits the member, which answers NullResponse
+        and fails `should eq true` -- the correct verdict, and stock mappings apply no nil filter, so
+        absence is assessed rather than skipped. HAZARD worth an exec run: if the API ever returns LogPublishingOptions
+        as an EMPTY map rather than omitting it, create_method returns the bare {} and .AUDIT_LOGS raises
+        NoMethodError. That errors the control (visible) rather than passing it (silent), but it should
+        be confirmed against a real domain before this is trusted.'
+  CKV_AWS_350:
+    aws_emr_security_configuration:
+      reader: stock
+      enumerate:
+        resource: aws_emr_security_configurations
+        ids: security_configuration_names
+      assert:
+        resource: aws_emr_security_configuration
+        arg: security_configuration_name
+        property: local_disk_encryption
+        satisfies: equals
+        value: true
+      note: 'emr:DescribeSecurityConfiguration returns the configuration as a JSON STRING; the vendored
+        resource parses it and precomputes local_disk_encryption as EncryptionConfiguration/AtRestEncryptionConfiguration/LocalDiskEncryptionConfiguration
+        present and non-empty. Checkov additionally requires EnableAtRestEncryption true and reads the
+        EnableEbsEncryption leaf specifically, so a configuration that declares the LocalDiskEncryptionConfiguration
+        block with EnableEbsEncryption false would pass here and fail Checkov. That is the one residual
+        gap; the reader exposes no finer field. Second caveat: the vendored resource indexes parsed_json[''EncryptionConfiguration'']
+        without a nil guard, so a security configuration that carries only InstanceMetadataServiceConfiguration
+        raises.'
+api_specs:
+  aws_security_group_rule:
+    client: Aws::EC2::Client
+    gem: aws-sdk-ec2
+    list: describe_security_group_rules
+    collection: security_group_rules
+    id: security_group_rule_id
+    arn: security_group_rule_arn
+    fields:
+      description: description
+      group_id: group_id
+      is_egress: is_egress
+      ip_protocol: ip_protocol
+      from_port: from_port
+      to_port: to_port
+      cidr_ipv4: cidr_ipv4
+      cidr_ipv6: cidr_ipv6
+    scope: regional
+metadata:
+  CKV_AWS_23:
+    severity: low
+    impact: 0.3
+    nist:
+    - CM-6
+    - CM-7 (1)
+    nist_r4:
+    - CM-6
+    - CM-7 (1)
+    cci:
+    - CCI-000366
+    - CCI-000381
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    rationale: An undescribed firewall rule cannot be reviewed. Nobody can say whose it is, what it was
+      opened for, or whether the reason still holds, so the periodic review that is supposed to close
+      stale openings degrades into a guess and the rule survives every review it should not have.
+  CKV_AWS_175:
+    severity: medium
+    impact: 0.5
+    nist:
+    - SC-7
+    - SI-4
+    nist_r4:
+    - SC-7
+    - SI-4
+    cci:
+    - CCI-001097
+    - CCI-000169
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    rationale: A web ACL with no rules inspects nothing. It is attached, it appears in the architecture
+      diagram and it shows up as a control in the SSP, and every request reaching the protected resource
+      passes it untouched.
+  CKV_AWS_210:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-6
+    - CM-7
+    nist_r4:
+    - AC-6
+    - CM-7
+    cci:
+    - CCI-000225
+    - CCI-000381
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    rationale: A privileged container has the host's capabilities and device access. Whatever isolation
+      the job was placed in stops mattering, and a compromise of the job becomes a compromise of the instance
+      running it and of every other job on it.
+  CKV_AWS_315:
+    severity: low
+    impact: 0.3
+    nist:
+    - CM-2
+    - CM-2 (2)
+    nist_r4:
+    - CM-2
+    - CM-2 (2)
+    cci:
+    - CCI-000293
+    - CCI-000366
+    ksi:
+    - KSI-CMT-CFG
+    nist_source: agent-drafted
+    rationale: 'Launch configurations are immutable and undeletable-in-place: changing the baseline means
+      creating a new one and re-pointing the group, so the version that instances actually launch from
+      drifts from the one under change control. Launch templates version the baseline in the service itself,
+      which is what makes the running fleet''s configuration auditable.'
+  CKV_AWS_317:
+    severity: medium
+    impact: 0.5
+    nist:
+    - AU-2
+    - AU-12
+    nist_r4:
+    - AU-2
+    - AU-12
+    cci:
+    - CCI-000169
+    - CCI-000172
+    ksi:
+    - KSI-MLA-LOG
+    nist_source: agent-drafted
+    rationale: Audit logs are the only record of who queried or changed the index. Without them a search-domain
+      compromise leaves no evidence of what was read, so the incident cannot be scoped and the breach-notification
+      decision has nothing to rest on.
+  CKV_AWS_350:
+    severity: medium
+    impact: 0.5
+    nist:
+    - SC-28
+    - SC-28 (1)
+    nist_r4:
+    - SC-28
+    - SC-28 (1)
+    cci:
+    - CCI-001199
+    - CCI-002475
+    ksi:
+    - KSI-SVC-CER
+    nist_source: agent-drafted
+    rationale: EMR spills intermediate results, shuffle data and HDFS blocks to the cluster's local disks.
+      Those disks hold the same data as the source store while the job runs, so leaving them unencrypted
+      keeps a plaintext copy of the dataset on every node for the life of the cluster.
+fixes:
+  CKV_AWS_23:
+    aws_security_group_rule:
+      terraform: "resource \"aws_vpc_security_group_ingress_rule\" \"app_https\" {\n  security_group_id\
+        \ = aws_security_group.app.id\n  description       = \"HTTPS from the public ALB only\"\n  ip_protocol\
+        \       = \"tcp\"\n  from_port         = 443\n  to_port           = 443\n  referenced_security_group_id\
+        \ = aws_security_group.alb.id\n}\n"
+      cli: 'aws ec2 modify-security-group-rules --group-id <sg-id> --security-group-rules SecurityGroupRuleId=<sgr-id>,SecurityGroupRule=''{Description="HTTPS
+        from the public ALB only",IpProtocol=tcp,FromPort=443,ToPort=443,ReferencedGroupId=<sg-id>}''
+
+        '
+      note: modify-security-group-rules replaces the whole rule, so every field must be resupplied or
+        it is reset. Read the rule with describe-security-group-rules first and echo its current values
+        back with the description added.
+  CKV_AWS_175:
+    aws_waf_web_acl:
+      terraform: "resource \"aws_wafv2_web_acl\" \"app\" {\n  name  = \"app\"\n  scope = \"REGIONAL\"\n\
+        \n  default_action {\n    allow {}\n  }\n\n  rule {\n    name     = \"aws-managed-common\"\n \
+        \   priority = 1\n\n    override_action {\n      none {}\n    }\n\n    statement {\n      managed_rule_group_statement\
+        \ {\n        name        = \"AWSManagedRulesCommonRuleSet\"\n        vendor_name = \"AWS\"\n \
+        \     }\n    }\n\n    visibility_config {\n      cloudwatch_metrics_enabled = true\n      metric_name\
+        \                = \"aws-managed-common\"\n      sampled_requests_enabled   = true\n    }\n  }\n\
+        \n  visibility_config {\n    cloudwatch_metrics_enabled = true\n    metric_name              \
+        \  = \"app\"\n    sampled_requests_enabled   = true\n  }\n}\n"
+      cli: 'aws wafv2 update-web-acl --scope REGIONAL --id <id> --name <name> --lock-token <token> --default-action
+        Allow={} --visibility-config file://vis.json --rules file://rules.json
+
+        '
+      note: Classic WAF (aws_waf_web_acl) is the type this control reads because wafv2's list call requires
+        a Scope argument the enumerator cannot supply. New ACLs should be wafv2; the remediation above
+        is the wafv2 form.
+  CKV_AWS_210:
+    aws_batch_job_definition:
+      terraform: "resource \"aws_batch_job_definition\" \"etl\" {\n  name = \"etl\"\n  type = \"container\"\
+        \n\n  container_properties = jsonencode({\n    image      = \"${var.ecr_registry}/etl:1.4.2\"\n\
+        \    jobRoleArn = aws_iam_role.etl_task.arn\n    privileged = false\n    resourceRequirements\
+        \ = [\n      { type = \"VCPU\", value = \"2\" },\n      { type = \"MEMORY\", value = \"4096\"\
+        \ },\n    ]\n  })\n}\n"
+      cli: 'aws batch register-job-definition --job-definition-name etl --type container --container-properties
+        file://container.json
+
+        '
+      note: 'Job definitions are immutable: there is no in-place fix. register-job-definition creates
+        a new revision, and every job queue and submission that names the old revision must be re-pointed
+        before the old one is deregistered.'
+  CKV_AWS_315:
+    aws_autoscaling_group:
+      terraform: "resource \"aws_launch_template\" \"app\" {\n  name_prefix   = \"app-\"\n  image_id \
+        \     = var.ami_id\n  instance_type = \"m6i.large\"\n\n  metadata_options {\n    http_tokens =\
+        \ \"required\"\n  }\n}\n\nresource \"aws_autoscaling_group\" \"app\" {\n  name               \
+        \ = \"app\"\n  min_size            = 2\n  max_size            = 6\n  desired_capacity    = 2\n\
+        \  vpc_zone_identifier = var.private_subnet_ids\n\n  launch_template {\n    id      = aws_launch_template.app.id\n\
+        \    version = \"$Latest\"\n  }\n}\n"
+      cli: 'aws autoscaling update-auto-scaling-group --auto-scaling-group-name app --launch-template
+        LaunchTemplateId=<lt-id>,Version=''$Latest''
+
+        '
+      note: The switch takes effect for instances launched after it. Existing instances keep the launch
+        configuration's settings until they are replaced, so pair this with an instance refresh if the
+        baseline change is the point.
+  CKV_AWS_317:
+    aws_elasticsearch_domain:
+      terraform: "resource \"aws_cloudwatch_log_group\" \"search_audit\" {\n  name              = \"/aws/opensearch/app/audit\"\
+        \n  retention_in_days = 365\n}\n\nresource \"aws_opensearch_domain\" \"app\" {\n  domain_name\
+        \ = \"app\"\n\n  advanced_security_options {\n    enabled = true\n  }\n\n  log_publishing_options\
+        \ {\n    log_type                 = \"AUDIT_LOGS\"\n    cloudwatch_log_group_arn = aws_cloudwatch_log_group.search_audit.arn\n\
+        \    enabled                  = true\n  }\n}\n"
+      cli: 'aws opensearch update-domain-config --domain-name app --log-publishing-options ''AUDIT_LOGS={CloudWatchLogsLogGroupArn=<log-group-arn>,Enabled=true}''
+
+        '
+      note: Audit logging requires fine-grained access control (advanced_security_options) to be enabled
+        first; the API rejects the log-publishing change otherwise. The log group's resource policy must
+        also allow es.amazonaws.com to write to it.
+  CKV_AWS_350:
+    aws_emr_security_configuration:
+      terraform: "resource \"aws_emr_security_configuration\" \"cluster\" {\n  name = \"cluster-encryption\"\
+        \n\n  configuration = jsonencode({\n    EncryptionConfiguration = {\n      EnableAtRestEncryption\
+        \ = true\n      AtRestEncryptionConfiguration = {\n        S3EncryptionConfiguration = {\n   \
+        \       EncryptionMode  = \"SSE-KMS\"\n          AwsKmsKey       = aws_kms_key.emr.arn\n     \
+        \   }\n        LocalDiskEncryptionConfiguration = {\n          EncryptionKeyProviderType = \"\
+        AwsKms\"\n          AwsKmsKey                 = aws_kms_key.emr.arn\n          EnableEbsEncryption\
+        \       = true\n        }\n      }\n      EnableInTransitEncryption = true\n      InTransitEncryptionConfiguration\
+        \ = {\n        TLSCertificateConfiguration = {\n          CertificateProviderType = \"PEM\"\n\
+        \          S3Object                = \"s3://${var.certs_bucket}/emr-certs.zip\"\n        }\n \
+        \     }\n    }\n  })\n}\n"
+      cli: 'aws emr create-security-configuration --name cluster-encryption --security-configuration file://security-configuration.json
+
+        '
+      note: Security configurations are immutable and are bound at cluster creation. Fixing one means
+        creating a new configuration and launching replacement clusters against it; a running cluster
+        cannot be moved onto it.
+needs_verb:
+  CKV2_AWS_70:
+    verb: policy_document(no_wildcard_principal) + parent_child(3 levels)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_api_gateway_method: enumerate apigateway:GetRestApis -> GetResources(restApiId) -> GetMethod(restApiId,
+      resourceId, httpMethod). Only OPTIONS methods with AuthorizationType NONE and ApiKeyRequired false
+      are in scope, and the verdict then comes from the REST API''s endpointConfiguration.types (PRIVATE
+      passes) or its resource policy. Three chained parent ids and a policy parse.'
+  CKV_AWS_24:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_security_group: enumerate aws_security_groups.group_ids -> ec2:DescribeSecurityGroups
+      IpPermissions[], and assert none_of(ip_permissions, [from_port <= 22, to_port >= 22, ip_ranges any
+      cidr_ip == ''0.0.0.0/0'' or ipv_6_ranges any cidr_ipv_6 == ''::/0'']). Port -1 in Checkov means
+      ''protocol -1 with the full 0-65535 range''. The vendored aws_security_group already implements
+      this as allow_in?(port:, ipv4_range:), but it is a PREDICATE TAKING ARGUMENTS and the schema''s
+      `property` is a bare method name, so it is unreachable from a mapping. An alternative that needs
+      no collection walk at all: enumerate ec2:DescribeSecurityGroupRules (no required args -- the same
+      new spec CKV_AWS_23 uses) so each RULE is its own asset, and then the assertion is a per-asset conjunction
+      rather than a collection walk.'
+  CKV_AWS_25:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_security_group: enumerate aws_security_groups.group_ids -> ec2:DescribeSecurityGroups
+      IpPermissions[], and assert none_of(ip_permissions, [from_port <= 3389, to_port >= 3389, ip_ranges
+      any cidr_ip == ''0.0.0.0/0'' or ipv_6_ranges any cidr_ipv_6 == ''::/0'']). Port -1 in Checkov means
+      ''protocol -1 with the full 0-65535 range''. The vendored aws_security_group already implements
+      this as allow_in?(port:, ipv4_range:), but it is a PREDICATE TAKING ARGUMENTS and the schema''s
+      `property` is a bare method name, so it is unreachable from a mapping. An alternative that needs
+      no collection walk at all: enumerate ec2:DescribeSecurityGroupRules (no required args -- the same
+      new spec CKV_AWS_23 uses) so each RULE is its own asset, and then the assertion is a per-asset conjunction
+      rather than a collection walk.'
+  CKV_AWS_27:
+    verb: any_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_sqs_queue: any_of -- sqs_managed_enabled == ''true'' OR kms_master_key_id present. Both
+      come from GetQueueAttributes and the vendored aws_sqs_queue already exposes both, so this is purely
+      the missing disjunction. A single-field mapping would be wrong in both directions: SSE-SQS is on
+      by default for new queues so kms_master_key_id alone under-reports, and a CMK-encrypted queue reports
+      SqsManagedSseEnabled false so that field alone would fail it.'
+  CKV_AWS_31:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_elasticache_replication_group: all_of -- transit_encryption_enabled true AND (auth_token_enabled
+      true OR user_group_ids non-empty). The vendored resource exposes encrypted_at_transit? but not the
+      auth-token half, so this needs both the verb and one more field off elasticache:DescribeReplicationGroups
+      (AuthTokenEnabled, UserGroupIds -- both confirmed members). Deployed is stronger: AuthTokenEnabled
+      reports whether a token is actually in force, where the HCL only shows that one was passed at create
+      time.'
+  CKV_AWS_32:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_ecr_repository_policy: enumerate aws_ecr_repositories.repository_names -> aws_ecr_repository_policy(repository_name:
+      id).policy (vendored; ecr:GetRepositoryPolicy), then no_wildcard_principal. Checkov uses cloudsplaining''s
+      internet_accessible_actions, which is the same predicate with a curated condition allow-list.'
+  CKV_AWS_33:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_kms_key: enumerate aws_kms_keys.key_arns -> kms:GetKeyPolicy(KeyId, PolicyName=''default'').
+      The vendored aws_kms_key does not fetch the policy, so this also needs the second describe call.
+      Checkov skips statements carrying a Condition, so the deployed predicate must too, or every AWS-managed
+      key''s default policy reads as a finding.'
+  CKV_AWS_37:
+    verb: all_of + known-broken enumerator
+    semantics: 'all_of over a collection, plus a fix to the enumeration. eks:DescribeCluster returns logging.clusterLogging[]
+      as {types: [...], enabled: bool}; the assertion is that the union of types where enabled is true
+      covers api, audit, authenticator, controllerManager and scheduler. That is a set-cover over a collection,
+      which no current verb expresses.'
+    mapping: 'aws_eks_cluster: NOTE this mapping was already tried and REMOVED -- resource_map_derived.yml
+      records that aws_eks_clusters.names yields nil rows in an account with no EKS clusters and the singular
+      then rejects a nil cluster_name. So the enumerator needs a nil guard before any EKS mapping is safe,
+      independent of the verb.'
+  CKV_AWS_38:
+    verb: any_of
+    semantics: 'any_of over two fields: PASS if vpc_config.endpoint_public_access is false, OR if public_access_cidrs
+      excludes ''0.0.0.0/0''. The disjunction is load-bearing -- EKS reports publicAccessCidrs as [''0.0.0.0/0'']
+      by default even when the public endpoint is disabled, so a single-field mapping on public_access_cidrs
+      alone would fail every correctly private cluster.'
+    mapping: 'aws_eks_cluster: eks:ListClusters -> eks:DescribeCluster resources_vpc_config.{endpoint_public_access,
+      public_access_cidrs}. Same nil-row enumerator caveat as CKV_AWS_37.'
+  CKV_AWS_45:
+    verb: secret_scan
+    semantics: 'secret_scan(<map field>): apply entropy and pattern detection to every VALUE of a map-valued
+      field. Not a comparison -- it is a classifier, and it needs the AWS-key and generic-secret patterns
+      Checkov''s string_has_secrets uses. Reading environment variables also raises a handling question
+      the other verbs do not: the failure message must name the KEY and never echo the value, or the HDF
+      artefact becomes the leak.'
+    mapping: 'aws_lambda_function: enumerate aws_lambdas.names -> aws_lambda(lambda_name: id) -- lambda:GetFunctionConfiguration
+      returns Environment.Variables, so the data is there. Deployed is stronger for the obvious reason:
+      it sees the resolved value, where the HCL usually shows a var reference and Checkov cannot judge
+      it.'
+  CKV_AWS_59:
+    verb: parent_child(3 levels)
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_api_gateway_method: apigateway:GetRestApis -> GetResources(restApiId) -> GetMethod(restApiId,
+      resourceId, httpMethod). Both vendored API Gateway method resources demand all three ids up front,
+      so nothing enumerates methods today. Assertion once enumerable: fail when http_method != ''OPTIONS''
+      AND authorization_type == ''NONE'' AND api_key_required is false -- a three-field conjunction, so
+      all_of too.'
+  CKV_AWS_60:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_iam_role: enumerate aws_iam_roles.role_names -> iam:GetRole AssumeRolePolicyDocument
+      (URL-encoded JSON, must be unescaped before parsing), then no_wildcard_principal over Principal.AWS.
+      Stronger than Checkov: it sees roles created outside Terraform, which is where a ''*'' trust policy
+      usually comes from.'
+  CKV_AWS_61:
+    verb: policy_document(no_account_root_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_iam_role: same enumeration as CKV_AWS_60; predicate is the ACCOUNT_ACCESS regex (\d{12}|arn:aws:iam::\d{12}:root)
+      against Principal.AWS on any non-Deny statement.'
+  CKV_AWS_62:
+    verb: policy_document(no_admin_star_star)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_iam_policy: enumerate aws_iam_policies (customer-managed only -- iam:ListPolicies must
+      be called with Scope=Local or every AWS-managed policy is assessed) -> iam:GetPolicyVersion for
+      the default version, then Allow with ''*'' in Action and ''*'' in Resource. The inline-policy types
+      (aws_iam_role_policy, aws_iam_user_policy, aws_iam_group_policy) need iam:ListRolePolicies/GetRolePolicy
+      and their peers, which is a second parent/child walk.'
+  CKV_AWS_63:
+    verb: policy_document(no_wildcard_action)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_iam_policy: same enumeration as CKV_AWS_62; predicate is Allow with ''*'' in Action,
+      regardless of Resource.'
+  CKV_AWS_65:
+    verb: list_args
+    semantics: 'list_args: constant arguments on an api_specs `list` call. Not a parent id -- a fixed
+      value the spec author supplies (include: [''SETTINGS''], Scope: ''REGIONAL'', Owners: [''self''],
+      PolicyArn: ''arn:aws:iam::aws:policy/AdministratorAccess''). Cheap to add and it unlocks several
+      checks whose only obstacle is that AWS omits the interesting field unless you ask for it.'
+    mapping: 'aws_ecs_cluster: ecs:ListClusters (no args) then ecs:DescribeClusters(clusters, include:
+      [''SETTINGS'']). Settings[] is only populated when include is passed -- without it the response
+      omits containerInsights entirely, and the vendored aws_ecs_cluster does not pass it. With list_args
+      plus one collection walk the assertion is: any_of(settings, [name == ''containerInsights'', value
+      in [''enabled'',''enhanced'']]).'
+  CKV_AWS_70:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_s3_bucket: enumerate aws_s3_buckets.bucket_names -> aws_s3_bucket(bucket_name: id).bucket_policy
+      (vendored, already fetches s3:GetBucketPolicy and rescues NoSuchBucketPolicy). Checkov''s check_conditions()
+      allow-list (aws:PrincipalOrgID, aws:SourceVpc, aws:PrincipalArn, aws:userid, ...) has to come across
+      verbatim or every VPC-endpoint-scoped bucket policy reads as public.'
+  CKV_AWS_72:
+    verb: policy_document(no_wildcard_action)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_sqs_queue_policy: enumerate aws_sqs_queues.queue_urls -> aws_sqs_queue(queue_url: id).policy
+      (vendored; the Policy attribute of GetQueueAttributes). Note the vendored resource also declares
+      policy_statement_action_all_permissions_enabled? and its siblings, but the ivars they read are never
+      assigned, so they raise on nil -- do not map onto them.'
+  CKV_AWS_80:
+    verb: any_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_msk_cluster: any_of over the three broker log destinations -- logging_info.broker_logs.{cloudwatch_logs,firehose,s3}.enabled,
+      at least one true. kafka:ListClustersV2 takes no required arguments and returns Cluster.Provisioned.LoggingInfo
+      inline, so the enumeration is a clean new api spec once the disjunction exists. The collection here
+      is three named siblings rather than an array, so any_of must also accept a list of dotted paths,
+      not only a collection field.'
+  CKV_AWS_85:
+    verb: includes_any + where
+    semantics: 'includes_any(<field>, [<values>]): the array must contain at least one of the listed values,
+      and -- critically -- a nil or absent array must FAIL rather than be skipped. matcher_for has `includes`
+      for a single value, but nil_filter_for treats every value comparison as ''the asset does not express
+      this setting'' and rejects the row, so on the api reader an unconfigured cluster would render Not
+      Applicable instead of failing. enumerate.where: a column/value filter applied to the plural resource''s
+      FilterTable (or to the api reader''s rows) before the per-asset assertion runs. Checkov''s custom
+      checks are full of ''this rule only applies when engine == X''; today that scoping has nowhere to
+      live, and folding it into the assertion makes an inapplicable asset FAIL. Without it the choice
+      is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_docdb_cluster: api_specs already has an aws_docdb_cluster entry; it needs one more field,
+      enabled_cloudwatch_logs_exports (confirmed member of the DocDB DBCluster shape). Assertion: includes_any
+      [''audit'',''profiler''].'
+  CKV_AWS_90:
+    verb: parent_child + none_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_docdb_cluster_parameter_group: same enumeration as CKV_AWS_104; assertion is that no
+      parameter named tls has value ''disabled''.'
+  CKV_AWS_93:
+    verb: policy_document(no_root_lockout)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate. Plus one more sub-predicate: no_root_lockout
+      -- a Deny statement with Principal ''*'' (or Principal.AWS containing ''*''), no Condition, no NotAction,
+      and an Action in [s3:PutBucketPolicy, s3:*BucketPolicy, s3:Put*, s3:*, *].'
+    mapping: 'aws_s3_bucket: same enumeration and same fetched policy as CKV_AWS_70; different predicate.'
+  CKV_AWS_94:
+    verb: singleton_api_spec + all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_glue_data_catalog_encryption_settings: glue:GetDataCatalogEncryptionSettings takes no
+      required arguments but returns a single STRUCT, not a list. The api reader does Array(page.public_send(collection)),
+      and Array() on an Aws Struct calls to_a and yields its MEMBERS as rows -- silently wrong, not an
+      error. So this needs a singleton api-spec shape (the analogue of SINGLETON_TEMPLATE, which today
+      only accepts a stock InSpec resource), plus all_of over encryption_at_rest.catalog_encryption_mode
+      == ''SSE-KMS'' AND connection_password_encryption.return_connection_password_encrypted == true.'
+  CKV_AWS_97:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_ecs_task_definition: all_of(volumes, [efs_volume_configuration.transit_encryption ==
+      ''ENABLED'']) -- scoped to volumes that HAVE an efs_volume_configuration, which is itself a condition
+      on the element. Same broken enumerator as CKV_AWS_334.'
+  CKV_AWS_99:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_glue_security_configuration: glue:GetSecurityConfigurations takes no required arguments
+      and returns SecurityConfigurations[].EncryptionConfiguration. The assertion is a conjunction of
+      three: cloud_watch_encryption.cloud_watch_encryption_mode == ''SSE-KMS'', job_bookmarks_encryption.job_bookmarks_encryption_mode
+      == ''CSE-KMS'', and s3_encryption[].s3_encryption_mode != ''DISABLED'' (itself an array). One of
+      the three is nested a level deeper, which is why this needs all_of rather than three separate controls.'
+  CKV_AWS_100:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_eks_node_group: eks:ListClusters -> eks:ListNodegroups(clusterName) -> eks:DescribeNodegroup.
+      Assertion: when remote_access.ec2_ssh_key is present, remote_access.source_security_groups must
+      be non-empty -- an SSH key with no source SG means EKS opens 22/tcp to 0.0.0.0/0 on the managed
+      node SG.'
+  CKV_AWS_101:
+    verb: includes_any + where
+    semantics: 'See CKV_AWS_85 for includes_any. enumerate.where: a column/value filter applied to the
+      plural resource''s FilterTable (or to the api reader''s rows) before the per-asset assertion runs.
+      Checkov''s custom checks are full of ''this rule only applies when engine == X''; today that scoping
+      has nowhere to live, and folding it into the assertion makes an inapplicable asset FAIL. Without
+      it the choice is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_neptune_cluster: api_specs already has an aws_neptune_cluster entry. Add enabled_cloudwatch_logs_exports
+      and assert it includes ''audit''. If the aws-sdk-neptune gem is genuinely absent, rds:DescribeDBClusters
+      returns Neptune clusters too (they share the RDS control plane), which makes this reachable via
+      the allowed rds gem plus a where filter on engine == ''neptune''.'
+  CKV_AWS_104:
+    verb: parent_child + any_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_docdb_cluster_parameter_group: docdb:DescribeDBClusterParameterGroups (no args) -> docdb:DescribeDBClusterParameters(DBClusterParameterGroupName).
+      Assertion: a parameter named audit_logs whose value is one of enabled/ddl/all. Materially stronger
+      deployed, because the API returns the EFFECTIVE value including the engine default, where the HCL
+      only shows what was overridden.'
+  CKV_AWS_105:
+    verb: parent_child + any_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_redshift_parameter_group: redshift:DescribeClusterParameterGroups (no args -- the vendored
+      aws_redshift_cluster_parameter_groups already does this) -> redshift:DescribeClusterParameters(ParameterGroupName),
+      which the vendored singular does NOT call: it re-calls describe_cluster_parameter_groups and so
+      only ever sees group metadata. Assertion: a parameter named require_ssl with value ''true''.'
+  CKV_AWS_112:
+    verb: parent_child + json_path + when
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. json_path(<field>, <path>): parse a string-valued
+      field as JSON or YAML and extract a dotted path from the result, then compare with the existing
+      verbs. AWS returns several policy and document bodies as embedded strings, and today a mapping can
+      only compare the whole blob. when/unless: a per-asset APPLICABILITY predicate, distinct from the
+      assertion. Same idea as enumerate.where but evaluated on the asset rather than on the enumeration,
+      which matters when the deciding field comes from the singular describe rather than the list. An
+      asset failing the predicate should render Not Applicable, not Pass and not Fail.'
+    mapping: 'aws_ssm_document: ssm:ListDocuments (no args) -> ssm:GetDocument(Name) for Content. The
+      vendored aws_ssm_document calls describe_document, which returns metadata only and never the body.
+      Scope is document_type == ''Session'' (when), the body is JSON or YAML by document_format (json_path),
+      and the assertion is inputs.kmsKeyId present.'
+  CKV_AWS_113:
+    verb: parent_child + json_path + when + any_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. json_path(<field>, <path>): parse a string-valued
+      field as JSON or YAML and extract a dotted path from the result, then compare with the existing
+      verbs. AWS returns several policy and document bodies as embedded strings, and today a mapping can
+      only compare the whole blob. when/unless: a per-asset APPLICABILITY predicate, distinct from the
+      assertion. Same idea as enumerate.where but evaluated on the asset rather than on the enumeration,
+      which matters when the deciding field comes from the singular describe rather than the list. An
+      asset failing the predicate should render Not Applicable, not Pass and not Fail.'
+    mapping: 'aws_ssm_document: same enumeration and parse as CKV_AWS_112; assertion is (inputs.s3BucketName
+      AND inputs.s3EncryptionEnabled) OR (inputs.cloudWatchLogGroupName AND inputs.cloudWatchEncryptionEnabled)
+      -- a disjunction of conjunctions.'
+  CKV_AWS_114:
+    verb: when
+    semantics: 'when/unless: a per-asset APPLICABILITY predicate, distinct from the assertion. Same idea
+      as enumerate.where but evaluated on the asset rather than on the enumeration, which matters when
+      the deciding field comes from the singular describe rather than the list. An asset failing the predicate
+      should render Not Applicable, not Pass and not Fail. Worth flagging that this control may not be
+      worth building: EMR requires Realm whenever KerberosAttributes is supplied, so on a deployed cluster
+      the assertion is satisfied by construction. Checkov''s version has teeth only because HCL can omit
+      a required argument that the API would reject.'
+    mapping: 'aws_emr_cluster: enumerate aws_emr_clusters -> emr:DescribeCluster(ClusterId).kerberos_attributes.realm
+      not_empty, scoped by when kerberos_attributes is present. Without the when clause every non-Kerberos
+      cluster fails a rule Checkov returns UNKNOWN for.'
+  CKV_AWS_127:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_elb: all_of(listener_descriptions, [listener.ssl_certificate_id present]). elb:DescribeLoadBalancers
+      returns ListenerDescriptions[].Listener with Protocol, InstanceProtocol and SSLCertificateId. The
+      vendored aws_elbs exposes only ports and ids, and aws_elb keeps load_balancer_description as a raw
+      Aws struct, so the listener array is not reachable by dotted path today.'
+  CKV_AWS_143:
+    verb: second_describe
+    semantics: 'second_describe: a per-asset follow-up API call whose result becomes a field. The vendored
+      aws_s3_bucket already does exactly this for encryption, versioning, logging and lifecycle -- it
+      just has no object-lock method. Either add one upstream, or let a mapping name an extra call the
+      way api_specs names the first one. A second describe call is a feature, not a wall.'
+    mapping: 'aws_s3_bucket: enumerate aws_s3_buckets.bucket_names -> s3:GetObjectLockConfiguration(Bucket),
+      assert object_lock_configuration.object_lock_enabled == ''Enabled''. The call raises ObjectLockConfigurationNotFoundError
+      when lock was never enabled, which must map to a FAIL, not to an unreadable asset.'
+  CKV_AWS_165:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. Flagging Checkov''s own logic: scan_resource_conf
+      returns PASSED unconditionally with a comment that the field cannot be set in Terraform. It is a
+      placeholder, not a check, and any coverage claim resting on it is empty. The deployed version is
+      the only version that means anything.'
+    mapping: 'aws_dynamodb_global_table: dynamodb:ListTables (no args) -> dynamodb:DescribeContinuousBackups(TableName),
+      assert continuous_backups_description.point_in_time_recovery_description.point_in_time_recovery_status
+      == ''ENABLED''. Global tables v2 are ordinary tables with replicas, so scoping to ''global'' means
+      a where clause on DescribeTable''s Replicas being non-empty, and PITR is per replica -- each region''s
+      copy must be checked in its own region.'
+  CKV_AWS_168:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_sqs_queue_policy: same enumeration and policy as CKV_AWS_72; predicate is no_wildcard_principal
+      (cloudsplaining internet_accessible_actions).'
+  CKV_AWS_169:
+    verb: policy_document(no_wildcard_principal)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_sns_topic_policy: enumerate aws_sns_topics.arns -> aws_sns_topic(arn: id) -- the Policy
+      attribute of sns:GetTopicAttributes.'
+  CKV_AWS_171:
+    verb: parent_child + matches_regex
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. Plus exposing the RAW security-configuration
+      JSON string as a field, which the vendored resource does not: it parses the JSON and publishes three
+      precomputed booleans (encryption_at_rest, encryption_in_transit, local_disk_encryption) and discards
+      the rest. With the raw string this is a one-line `matches: SSE-KMS` mapping -- matcher_for already
+      implements `matches`.'
+    mapping: 'aws_emr_security_configuration: emr:ListSecurityConfigurations (no args) -> emr:DescribeSecurityConfiguration(Name).SecurityConfiguration.
+      Checkov''s own test is a naive substring search over the whole document, so it passes a configuration
+      that names SSE-KMS anywhere -- including in a disabled block. A deployed version should assert the
+      encryption mode field specifically and would be the stronger check.'
+  CKV_AWS_192:
+    verb: any_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_wafv2_web_acl: any_of(rules, [statement.managed_rule_group_statement.name == ''AWSManagedRulesKnownBadInputsRuleSet'',
+      no rule_action_override/excluded_rule named ''Log4JRCE'', override_action.none present]). Compounded
+      by the wafv2 Scope argument -- see CKV_AWS_175''s needs_verb entry.'
+  CKV_AWS_196:
+    verb: collection_empty
+    semantics: 'collection_empty: assert on the ENUMERATION rather than on each asset -- ''no resources
+      of this type exist''. The current shape cannot express it at all: with no assets, `applicable` is
+      false and the control renders Not Applicable, so the compliant state and the unassessed state are
+      the same output. That is the silence-as-success pattern in its purest form, and it is why these
+      three checks cannot be mapped by hand as a workaround.'
+    mapping: 'aws_elasticache_security_group: elasticache:DescribeCacheSecurityGroups takes no required
+      arguments (confirmed in botocore) and would be a new api spec. On a VPC-only account the call itself
+      may return InvalidParameterValue rather than an empty list, and the reader must record that as an
+      unreadable region rather than flattening it to ''found nothing'' -- the distinction the aws_api_assets
+      docstring already insists on.'
+  CKV_AWS_198:
+    verb: collection_empty
+    semantics: 'collection_empty: assert on the ENUMERATION rather than on each asset -- ''no resources
+      of this type exist''. The current shape cannot express it at all: with no assets, `applicable` is
+      false and the control renders Not Applicable, so the compliant state and the unassessed state are
+      the same output. That is the silence-as-success pattern in its purest form, and it is why these
+      three checks cannot be mapped by hand as a workaround.'
+    mapping: 'aws_db_security_group: enumerate aws_rds_db_security_groups.db_security_group_names (vendored;
+      rds:DescribeDBSecurityGroups takes no required arguments) and assert empty. These exist only for
+      EC2-Classic, so on any modern account the compliant answer is an empty list -- which today is indistinguishable
+      from ''not assessed''.'
+  CKV_AWS_204:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_ami: all_of(block_device_mappings, [ebs.encrypted == true]) over mappings with no snapshot_id.
+      Also needs an owner-scoped enumeration: the vendored aws_amis refuses to run without a filter and
+      its all_amis option enumerates every public AMI in the region, so the spec needs args: {owners:
+      [''self'']} on describe_images.'
+  CKV_AWS_205:
+    verb: parent_child + collection_empty
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. collection_empty: assert on the ENUMERATION
+      rather than on each asset -- ''no resources of this type exist''. The current shape cannot express
+      it at all: with no assets, `applicable` is false and the control renders Not Applicable, so the
+      compliant state and the unassessed state are the same output. That is the silence-as-success pattern
+      in its purest form, and it is why these three checks cannot be mapped by hand as a workaround.'
+    mapping: 'aws_ami_launch_permission: ec2:DescribeImages(Owners=[''self'']) -> ec2:DescribeImageAttribute(Attribute=''launchPermission'',
+      ImageId) per image, and assert LaunchPermissions is empty. Checkov returns FAILED unconditionally
+      for any declared aws_ami_launch_permission -- it cannot tell a share with one partner account from
+      a share with ''all''. The deployed read is strictly better: it distinguishes Group=all (public)
+      from a named UserId, which is the distinction that actually matters.'
+  CKV_AWS_208:
+    verb: version_at_least + where
+    semantics: 'version_at_least / version_not_in: compare a version string by segment rather than lexicographically.
+      ''10.9'' > ''10.11'' as strings and < as versions, so matches/in_list cannot stand in. Needs a parsed
+      comparison with a per-engine threshold table. enumerate.where: a column/value filter applied to
+      the plural resource''s FilterTable (or to the api reader''s rows) before the per-asset assertion
+      runs. Checkov''s custom checks are full of ''this rule only applies when engine == X''; today that
+      scoping has nowhere to live, and folding it into the assertion makes an inapplicable asset FAIL.
+      Without it the choice is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_mq_broker: enumerate aws_mq_brokers (vendored; column broker_ids, and engine_types is
+      on the list row) -> aws_mq_broker(broker_id: id).engine_version, compared against 5.17 for ActiveMQ
+      and 3.11 for RabbitMQ. Checkov''s own scoping is buggy: `if mq_type in ''ActiveMQ''` is a SUBSTRING
+      test, so an engine_type of ''Active'' or even '''' matches -- the deployed version should use equality.'
+  CKV_AWS_213:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_load_balancer_policy: elb:DescribeLoadBalancerPolicies takes no required arguments,
+      so the enumeration is clean. The assertion is none_of(policy_attribute_descriptions, [attribute_name
+      in [Protocol-SSLv3, Protocol-TLSv1, Protocol-TLSv1.1], attribute_value ''true'']) plus a not_in_list
+      on the Reference-Security-Policy value -- a nested collection inside each policy.'
+  CKV_AWS_224:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_ecs_cluster: all_of over configuration.execute_command_configuration -- kms_key_id present
+      AND (log_configuration.cloud_watch_encryption_enabled true OR s3_bucket_encryption_enabled true),
+      scoped to clusters whose logging is not NONE. Also blocked on the enumeration: ecs:DescribeClusters
+      returns `configuration` only when called with include: [''CONFIGURATIONS''], and neither the vendored
+      resource nor the api spec passes extra arguments -- see the args: request under CKV_AWS_65.'
+  CKV_AWS_229:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_network_acl: enumerate aws_network_acls.network_acl_ids -> ec2:DescribeNetworkAcls Entries[].
+      Assert that, walking entries in RuleNumber order, no allow entry with CidrBlock 0.0.0.0/0 (or Ipv6CidrBlock
+      ::/0) covers port 21 before a deny entry does. That is ordered evaluation over a collection, so
+      it needs none_of plus a precedence rule -- strictly more than any_of. The vendored aws_network_acls
+      exposes entries_cidr_blocks, entries_port_ranges, entries_rule_actions and entries_rule_numbers
+      as PARALLEL flattened arrays, which loses the row association the check depends on; the reader must
+      keep entries as records.'
+  CKV_AWS_230:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_network_acl: enumerate aws_network_acls.network_acl_ids -> ec2:DescribeNetworkAcls Entries[].
+      Assert that, walking entries in RuleNumber order, no allow entry with CidrBlock 0.0.0.0/0 (or Ipv6CidrBlock
+      ::/0) covers port 20 before a deny entry does. That is ordered evaluation over a collection, so
+      it needs none_of plus a precedence rule -- strictly more than any_of. The vendored aws_network_acls
+      exposes entries_cidr_blocks, entries_port_ranges, entries_rule_actions and entries_rule_numbers
+      as PARALLEL flattened arrays, which loses the row association the check depends on; the reader must
+      keep entries as records.'
+  CKV_AWS_231:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_network_acl: enumerate aws_network_acls.network_acl_ids -> ec2:DescribeNetworkAcls Entries[].
+      Assert that, walking entries in RuleNumber order, no allow entry with CidrBlock 0.0.0.0/0 (or Ipv6CidrBlock
+      ::/0) covers port 3389 before a deny entry does. That is ordered evaluation over a collection, so
+      it needs none_of plus a precedence rule -- strictly more than any_of. The vendored aws_network_acls
+      exposes entries_cidr_blocks, entries_port_ranges, entries_rule_actions and entries_rule_numbers
+      as PARALLEL flattened arrays, which loses the row association the check depends on; the reader must
+      keep entries as records.'
+  CKV_AWS_232:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_network_acl: enumerate aws_network_acls.network_acl_ids -> ec2:DescribeNetworkAcls Entries[].
+      Assert that, walking entries in RuleNumber order, no allow entry with CidrBlock 0.0.0.0/0 (or Ipv6CidrBlock
+      ::/0) covers port 22 before a deny entry does. That is ordered evaluation over a collection, so
+      it needs none_of plus a precedence rule -- strictly more than any_of. The vendored aws_network_acls
+      exposes entries_cidr_blocks, entries_port_ranges, entries_rule_actions and entries_rule_numbers
+      as PARALLEL flattened arrays, which loses the row association the check depends on; the reader must
+      keep entries as records.'
+  CKV_AWS_240:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_kinesis_firehose_delivery_stream: firehose:ListDeliveryStreams (no args, names only)
+      -> firehose:DescribeDeliveryStream(DeliveryStreamName). Assertion: delivery_stream_description.delivery_stream_encryption_configuration.status
+      == ''ENABLED''. Checkov skips streams sourced from a Kinesis stream; the deployed equivalent of
+      that scope is delivery_stream_type == ''KinesisStreamAsSource'', which needs the when verb as well.'
+  CKV_AWS_241:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_kinesis_firehose_delivery_stream: same enumeration as CKV_AWS_240; assertion is delivery_stream_encryption_configuration.key_type
+      == ''CUSTOMER_MANAGED_CMK'' (and key_arn present, which is a second field).'
+  CKV_AWS_249:
+    verb: field_compare
+    semantics: 'field_compare(<field_a>, <op>, <field_b>): compare two fields of the SAME asset. Every
+      verb today compares a field against a literal from the mapping. This is the only check that needs
+      it, so it is low priority, but it is not expressible at all otherwise.'
+    mapping: 'aws_ecs_task_definition: execution_role_arn != task_role_arn, scoped to task definitions
+      that set both. Also blocked on the broken aws_ecs_task_definitions enumerator described under CKV_AWS_334.'
+  CKV_AWS_250:
+    verb: version_at_least + where
+    semantics: 'version_at_least / version_not_in: compare a version string by segment rather than lexicographically.
+      ''10.9'' > ''10.11'' as strings and < as versions, so matches/in_list cannot stand in. Needs a parsed
+      comparison with a per-engine threshold table. enumerate.where: a column/value filter applied to
+      the plural resource''s FilterTable (or to the api reader''s rows) before the per-asset assertion
+      runs. Checkov''s custom checks are full of ''this rule only applies when engine == X''; today that
+      scoping has nowhere to live, and folding it into the assertion makes an inapplicable asset FAIL.
+      Without it the choice is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_db_instance / aws_rds_cluster: enumerate aws_rds_instances / aws_rds_clusters and compare
+      engine_version against a per-engine floor -- postgres >= 14, or 13.3+, 12.7+, 11.12+, 10.17+, 9.6.22+;
+      aurora-postgresql >= 12, or 11.9+, 10.14+. Both the segment-wise comparison and the engine scoping
+      are missing.'
+  CKV_AWS_257:
+    verb: parent_child + json_path
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. json_path(<field>, <path>): parse a string-valued
+      field as JSON or YAML and extract a dotted path from the result, then compare with the existing
+      verbs. AWS returns several policy and document bodies as embedded strings, and today a mapping can
+      only compare the whole blob.'
+    mapping: 'aws_codecommit_approval_rule_template: codecommit:ListApprovalRuleTemplates (no args) ->
+      codecommit:GetApprovalRuleTemplate(name). approvalRuleTemplateContent is a JSON STRING; the assertion
+      is Statements[0].NumberOfApprovalsNeeded >= 2, which needs json_path plus the existing at_least.'
+  CKV_AWS_259:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_cloudfront_response_headers_policy: cloudfront:ListResponseHeadersPolicies takes no
+      required arguments, but the collection lives at response_headers_policy_list.items, and the api
+      reader calls page.public_send(collection) with a bare method name -- so this also needs `collection`
+      to accept a dotted path. The assertion is all_of over response_headers_policy_config.security_headers_config.strict_transport_security:
+      access_control_max_age_sec >= 31536000, include_subdomains true, preload true, override true.'
+  CKV_AWS_260:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_security_group: enumerate aws_security_groups.group_ids -> ec2:DescribeSecurityGroups
+      IpPermissions[], and assert none_of(ip_permissions, [from_port <= 80, to_port >= 80, ip_ranges any
+      cidr_ip == ''0.0.0.0/0'' or ipv_6_ranges any cidr_ipv_6 == ''::/0'']). Port -1 in Checkov means
+      ''protocol -1 with the full 0-65535 range''. The vendored aws_security_group already implements
+      this as allow_in?(port:, ipv4_range:), but it is a PREDICATE TAKING ARGUMENTS and the schema''s
+      `property` is a bare method name, so it is unreachable from a mapping. An alternative that needs
+      no collection walk at all: enumerate ec2:DescribeSecurityGroupRules (no required args -- the same
+      new spec CKV_AWS_23 uses) so each RULE is its own asset, and then the assertion is a per-asset conjunction
+      rather than a collection walk.'
+  CKV_AWS_261:
+    verb: when
+    semantics: 'when/unless: a per-asset APPLICABILITY predicate, distinct from the assertion. Same idea
+      as enumerate.where but evaluated on the asset rather than on the enumeration, which matters when
+      the deciding field comes from the singular describe rather than the list. An asset failing the predicate
+      should render Not Applicable, not Pass and not Fail. And a warning about the result: ELBv2 assigns
+      HealthCheckPath ''/'' by default for HTTP and HTTPS target groups, so a deployed assertion on health_check_path
+      being set passes essentially everywhere. Checkov''s check has meaning against HCL (it wants the
+      health check declared deliberately); the deployed restatement of it is close to vacuous, and the
+      useful deployed rule is a different one -- that the target group has healthy targets, or that health_check_enabled
+      is true.'
+    mapping: 'aws_lb_target_group: elbv2:DescribeTargetGroups takes no required arguments, so the enumeration
+      is clean. When protocol in [HTTP, HTTPS], assert health_check_path not_empty.'
+  CKV_AWS_265:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_keyspaces_table: keyspaces:ListKeyspaces (no args) -> keyspaces:ListTables(keyspaceName)
+      -> keyspaces:GetTable(keyspaceName, tableName). Assertion: encryption_specification.type == ''CUSTOMER_MANAGED_KMS_KEY''.
+      Three levels, so the parent walk must nest.'
+  CKV_AWS_273:
+    verb: collection_empty
+    semantics: 'collection_empty: assert on the ENUMERATION rather than on each asset -- ''no resources
+      of this type exist''. The current shape cannot express it at all: with no assets, `applicable` is
+      false and the control renders Not Applicable, so the compliant state and the unassessed state are
+      the same output. That is the silence-as-success pattern in its purest form, and it is why these
+      three checks cannot be mapped by hand as a workaround.'
+    mapping: 'aws_iam_user: enumerate aws_iam_users.usernames (vendored) and assert the collection is
+      empty. A cleaner variant worth considering, since a break-glass user is a legitimate exception:
+      assert the count is at most an input-supplied allowance, with the allowed usernames named in exempt_assets.'
+  CKV_AWS_274:
+    verb: list_args
+    semantics: 'list_args: constant arguments on an api_specs `list` call. Not a parent id -- a fixed
+      value the spec author supplies (include: [''SETTINGS''], Scope: ''REGIONAL'', Owners: [''self''],
+      PolicyArn: ''arn:aws:iam::aws:policy/AdministratorAccess''). Cheap to add and it unlocks several
+      checks whose only obstacle is that AWS omits the interesting field unless you ask for it.'
+    mapping: 'aws_iam_role / *_policy_attachment: iam:ListEntitiesForPolicy(PolicyArn=''arn:aws:iam::aws:policy/AdministratorAccess'')
+      requires an argument, but a CONSTANT one, not a parent id -- so list_args alone unlocks it. The
+      assertion then inverts: the enumeration itself must come back empty (see collection_empty), because
+      every returned role, user or group IS the finding. Far stronger than Checkov, which only sees attachments
+      declared in the HCL it was pointed at.'
+  CKV_AWS_277:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_security_group: enumerate aws_security_groups.group_ids -> ec2:DescribeSecurityGroups
+      IpPermissions[], and assert none_of(ip_permissions, [from_port <= -1, to_port >= -1, ip_ranges any
+      cidr_ip == ''0.0.0.0/0'' or ipv_6_ranges any cidr_ipv_6 == ''::/0'']). Port -1 in Checkov means
+      ''protocol -1 with the full 0-65535 range''. The vendored aws_security_group already implements
+      this as allow_in?(port:, ipv4_range:), but it is a PREDICATE TAKING ARGUMENTS and the schema''s
+      `property` is a bare method name, so it is unreachable from a mapping. An alternative that needs
+      no collection walk at all: enumerate ec2:DescribeSecurityGroupRules (no required args -- the same
+      new spec CKV_AWS_23 uses) so each RULE is its own asset, and then the assertion is a per-asset conjunction
+      rather than a collection walk.'
+  CKV_AWS_296:
+    verb: when + not_equals_default
+    semantics: 'when/unless: a per-asset APPLICABILITY predicate, distinct from the assertion. Same idea
+      as enumerate.where but evaluated on the asset rather than on the enumeration, which matters when
+      the deciding field comes from the singular describe rather than the list. An asset failing the predicate
+      should render Not Applicable, not Pass and not Fail. Plus a not_equals_default sub-verb: ''this
+      KMS key is not the AWS-managed default for the service''. DMS always reports a KmsKeyId -- it substitutes
+      the aws/dms managed key when none is given -- so not_empty on kms_key_id is vacuous and would pass
+      every endpoint. The predicate has to compare the key''s alias or ARN account against the caller''s.'
+    mapping: 'aws_dms_endpoint: enumerate aws_dms_endpoints (vendored; endpoint_arns, engine_names, kms_key_ids
+      and s3_settings are all columns). When engine_name == ''s3'', assert s3_settings.server_side_encryption_kms_key_id
+      is set; otherwise assert kms_key_id is a CMK.'
+  CKV_AWS_300:
+    verb: any_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_s3_bucket_lifecycle_configuration: any_of(bucket_lifecycle_rules, [status == ''Enabled'',
+      abort_incomplete_multipart_upload present, filter empty]). aws_s3_bucket#bucket_lifecycle_rules
+      is already fetched by the vendored resource (s3:GetBucketLifecycleConfiguration); the ''filter empty''
+      clause is what makes it a conjunction rather than a presence test -- a rule scoped to one prefix
+      does not cover the bucket.'
+  CKV_AWS_304:
+    verb: enumerate.where
+    semantics: 'enumerate.where: a column/value filter applied to the plural resource''s FilterTable (or
+      to the api reader''s rows) before the per-asset assertion runs. Checkov''s custom checks are full
+      of ''this rule only applies when engine == X''; today that scoping has nowhere to live, and folding
+      it into the assertion makes an inapplicable asset FAIL. Without it the choice is a false finding
+      or a mapping that silently drops the condition.'
+    mapping: 'aws_secretsmanager_secret_rotation: enumerate aws_secretsmanager_secrets.names -> aws_secretsmanager_secret(secret_id:
+      id) and assert rotation_rules.automatically_after_days at_most 90. Both the field (botocore RotationRulesType.AutomaticallyAfterDays)
+      and the verb (at_most) exist -- this is A in every respect EXCEPT scoping, and without the scope
+      it is dangerous: a secret with no rotation answers NullResponse, whose method_missing returns self,
+      so `should be <= 90` gets a truthy object back and PASSES. Every unrotated secret would report compliant.
+      Needs where: {rotation_enabled: true}, which is a registered column on the plural. A secret rotating
+      on a schedule_expression rather than automatically_after_days is a second scoping question, and
+      a lesser one -- it under-reports rather than false-passes.'
+  CKV_AWS_310:
+    verb: collection_dotted_path
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_cloudfront_distribution: origin_groups.quantity > 0 is a single field and would fit
+      greater_than -- but cloudfront:ListDistributions nests its collection at distribution_list.items,
+      and neither the vendored aws_cloudfront_distributions nor aws_cloudfront_distribution exposes origin_groups.
+      So this is blocked on `collection` accepting a dotted path in api_specs, not on a comparison verb.
+      Once that exists it is a one-line A mapping.'
+  CKV_AWS_312:
+    verb: parent_child + any_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. Applied here to elasticbeanstalk:DescribeConfigurationSettings,
+      which requires ApplicationName and EnvironmentName.'
+    mapping: 'aws_elastic_beanstalk_environment: elasticbeanstalk:DescribeEnvironments (no args) -> DescribeConfigurationSettings(ApplicationName,
+      EnvironmentName), then find the option in namespace aws:elasticbeanstalk:healthreporting:system
+      named HealthStreamingEnabled and assert its Value is True -- a find-in-collection, so any_of as
+      well. Note the check''s NAME and its BODY disagree: it is titled ''enhanced health reporting'' but
+      asserts log STREAMING. If the title is what matters, DescribeEnvironments already answers it directly
+      -- HealthStatus is populated only for environments on enhanced health reporting, so `health_status
+      not_empty` would be a clean A mapping for the titled rule.'
+  CKV_AWS_318:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_elasticsearch_domain: all_of over two fields of elasticsearch_cluster_config -- dedicated_master_count
+      >= 3 AND zone_awareness_enabled true. Enumeration is already proven (it is the one CKV_AWS_317 uses).
+      A single-field mapping on dedicated_master_count alone would pass a three-master domain confined
+      to one AZ, which is the failure this rule exists to catch, so it is not a safe partial.'
+  CKV_AWS_325:
+    verb: includes + where
+    semantics: 'See CKV_AWS_85 for the nil-is-failure requirement on includes. enumerate.where: a column/value
+      filter applied to the plural resource''s FilterTable (or to the api reader''s rows) before the per-asset
+      assertion runs. Checkov''s custom checks are full of ''this rule only applies when engine == X'';
+      today that scoping has nowhere to live, and folding it into the assertion makes an inapplicable
+      asset FAIL. Without it the choice is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_rds_cluster: enumerate aws_rds_clusters (vendored, column cluster_identifier) and assert
+      enabled_cloudwatch_logs_exports includes ''audit'', scoped by where engine in [aurora, aurora-mysql,
+      mysql]. Without the where clause every Postgres cluster fails a rule that Checkov explicitly returns
+      UNKNOWN for.'
+  CKV_AWS_332:
+    verb: parent_child + when
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. when/unless: a per-asset APPLICABILITY
+      predicate, distinct from the assertion. Same idea as enumerate.where but evaluated on the asset
+      rather than on the enumeration, which matters when the deciding field comes from the singular describe
+      rather than the list. An asset failing the predicate should render Not Applicable, not Pass and
+      not Fail.'
+    mapping: 'aws_ecs_service: ecs:ListClusters -> ecs:ListServices(cluster) -> ecs:DescribeServices.
+      The vendored aws_ecs_services accepts an optional cluster and defaults to the DEFAULT cluster only,
+      so it silently assesses a fraction of the estate. Assertion once enumerable: when launch_type ==
+      ''FARGATE'', platform_version equals ''LATEST''. Its fetch_data also references `opts` outside initialize,
+      which will raise -- worth fixing upstream before anything maps onto it.'
+  CKV_AWS_334:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_ecs_task_definition: none_of(container_definitions, [privileged == true]). Blocked twice
+      over: (1) collection walk, (2) the enumerator is broken -- aws_ecs_task_definitions registers task_definition_arns
+      with field :task_definition_arns and its fetch_data assigns the whole per-page ARRAY to that field,
+      so the column yields arrays of arns, not arns. Passing one to aws_ecs_task_definition(task_definition:)
+      hands the SDK an Array. This is the same defect class as the aws_guardduty_detectors non-String
+      ids already recorded in resource_map_derived.yml. Also note Checkov reads the key ''privilege'',
+      which is not an ECS field -- the API member is ''privileged'' -- so Checkov''s version of this check
+      can never fire.'
+  CKV_AWS_335:
+    verb: not_equals + fixed enumerator
+    semantics: 'No new verb: not_equals already exists in matcher_for, and a stock mapping applies no
+      nil filter, so `its(''pid_mode'') { should_not eq ''host'' }` correctly passes a task definition
+      that omits pidMode (NullResponse == ''host'' is false) and fails one that sets it. The ONLY blocker
+      is the enumerator.'
+    mapping: 'aws_ecs_task_definition: aws_ecs_task_definitions registers task_definition_arns with field
+      :task_definition_arns and assigns the whole per-page array to it, so the ids column yields arrays,
+      not arns. Fix that column (or add an api spec on ecs:ListTaskDefinitions, which takes no required
+      arguments) and this becomes a one-line A mapping: {property: pid_mode, satisfies: not_equals, value:
+      host}.'
+  CKV_AWS_336:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_ecs_task_definition: all_of(container_definitions, [readonly_root_filesystem == true]).
+      Same broken enumerator as CKV_AWS_334.'
+  CKV_AWS_340:
+    verb: parent_child + any_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_elastic_beanstalk_environment: same enumeration and same option-lookup shape as CKV_AWS_312;
+      namespace aws:elasticbeanstalk:managedactions, option ManagedActionsEnabled, value True.'
+  CKV_AWS_342:
+    verb: all_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_wafv2_web_acl: all_of(rules, [action present OR override_action present OR statement.managed_rule_group_statement
+      present]) -- a disjunction INSIDE the per-element condition, so the condition list needs an any-of
+      mode of its own. Classic WAF is reachable today (aws_waf_web_acls/aws_waf_web_acl are vendored and
+      the ids are flattened), but rules_actions returns nil entries for GROUP-type rules, so not_empty
+      on it would be a restatement of CKV_AWS_175 rather than this check.'
+  CKV_AWS_352:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_network_acl_rule: same enumeration as the NACL port checks. Checkov''s own logic here
+      is close to vacuous -- it passes any rule that merely SETS from_port, so a rule with from_port 0
+      / to_port 65535 passes. The deployed assertion worth writing instead is none_of(entries, [egress
+      false, rule_action ''allow'', cidr_block ''0.0.0.0/0'', port_range absent or 0-65535]), which is
+      the check''s title rather than its body.'
+  CKV_AWS_357:
+    verb: parent_child
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet.'
+    mapping: 'aws_transfer_server: transfer:ListServers (no args) returns ListedServer, which does NOT
+      carry Protocols; transfer:DescribeServer(ServerId) does. Assertion once enumerable: protocols excludes
+      ''FTP'' -- the `excludes` verb already exists in matcher_for and has simply never been exercised.'
+  CKV_AWS_364:
+    verb: policy_document(service_principal_scoped) + parent_child
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate. Sub-predicate: for each statement whose
+      Principal.Service ends in .amazonaws.com, a Condition on AWS:SourceArn or AWS:SourceAccount must
+      be present.'
+    mapping: 'aws_lambda_permission: enumerate aws_lambdas.names -> lambda:GetPolicy(FunctionName) and
+      parse the returned resource policy. lambda:GetPolicy raises ResourceNotFoundException when no permission
+      was ever added, which must read as ''no permissions'' and not as an unreadable region.'
+  CKV_AWS_375:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_s3_bucket_acl: none_of(bucket_acl, [permission in [FULL_CONTROL, READ_ACP], grantee.uri
+      == ''http://acs.amazonaws.com/groups/global/AllUsers'']). The vendored aws_s3_bucket already fetches
+      s3:GetBucketAcl and exposes the grants as bucket_acl, so only the collection verb is missing.'
+  CKV_AWS_376:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_elb: none_of(listener_descriptions, [listener.instance_protocol in [''HTTP'',''TCP'']])
+      AND all_of(listeners whose instance_protocol is HTTPS/SSL, [ssl_certificate_id present]). Two roll-ups
+      over the same collection; same unreachable listener array as CKV_AWS_127.'
+  CKV_AWS_380:
+    verb: parent_child + date_older_than
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. Plus date_older_than: extract a YYYY-MM
+      pair from a name and assert it is less than N months old. A regex verb cannot do this -- the threshold
+      moves with the clock, so a `matches` pattern would have to be edited every quarter.'
+    mapping: 'aws_transfer_server: same enumeration as CKV_AWS_357; field security_policy_name, which
+      encodes its vintage (TransferSecurityPolicy-2018-11 is the AWS default and is the failing case).'
+  CKV_AWS_382:
+    verb: none_of
+    semantics: 'any_of / all_of / none_of(<field>, [<condition>...]): apply a conjunction of field comparisons
+      to each element of a collection-valued field and roll the element verdicts up. Today the schema
+      extracts ONE scalar by dotted path and compares it once; a dotted path that crosses an array returns
+      the array, and no comparison in matcher_for means anything against it. The condition list must support
+      the existing satisfies verbs on the element''s own sub-paths, so a condition is {path, satisfies,
+      value} and the roll-up verb says whether one, all or none must match.'
+    mapping: 'aws_security_group: identical shape to CKV_AWS_277 but over egress rules -- none_of(ip_permissions_egress,
+      [protocol ''-1'' or 0-65535 range, cidr 0.0.0.0/0]). The same DescribeSecurityGroupRules-per-rule
+      alternative applies, filtered on is_egress true.'
+  CKV_AWS_385:
+    verb: policy_document(no_cross_account_principal_without_condition)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_sns_topic_policy: same enumeration and policy as CKV_AWS_169; predicate is Allow whose
+      Principal.AWS is a concrete arn:aws:iam:: ARN and which carries no Condition. Reading this deployed
+      is materially stronger: the account number in the ARN can be compared against the organisation,
+      which the HCL scan cannot do.'
+  CKV_AWS_387:
+    verb: policy_document(no_wildcard_principal_on_service_action)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate. One narrower sub-predicate: the statement
+      must also name an sqs:/SQS:/''*'' action before the wildcard principal counts.'
+    mapping: 'aws_sqs_queue_policy: same enumeration and policy as CKV_AWS_72.'
+  CKV_AWS_388:
+    verb: not_in_list + where
+    semantics: 'not_in_list already exists in matcher_for but has never been used. enumerate.where: a
+      column/value filter applied to the plural resource''s FilterTable (or to the api reader''s rows)
+      before the per-asset assertion runs. Checkov''s custom checks are full of ''this rule only applies
+      when engine == X''; today that scoping has nowhere to live, and folding it into the assertion makes
+      an inapplicable asset FAIL. Without it the choice is a false finding or a mapping that silently
+      drops the condition.'
+    mapping: 'aws_db_instance: engine_version not_in_list [10.11, 10.12, 10.13, 11.6, 11.7, 11.8], scoped
+      by where engine == ''aurora-postgresql''. The where clause is NOT optional here: MariaDB 10.11 is
+      a real, current, supported version, so an unscoped not_in_list would raise a false finding on every
+      MariaDB 10.11 instance in the estate.'
+  CKV_AWS_391:
+    verb: all_of + where
+    semantics: 'all_of over two fields on the same asset. enumerate.where: a column/value filter applied
+      to the plural resource''s FilterTable (or to the api reader''s rows) before the per-asset assertion
+      runs. Checkov''s custom checks are full of ''this rule only applies when engine == X''; today that
+      scoping has nowhere to live, and folding it into the assertion makes an inapplicable asset FAIL.
+      Without it the choice is a false finding or a mapping that silently drops the condition.'
+    mapping: 'aws_redshift_cluster: enumerate aws_redshift_clusters (vendored; master_usernames is on
+      the list row, publicly_accessible is not) -> aws_redshift_cluster(cluster_identifier: id). Fail
+      when master_username in [awsuser, administrator, admin] AND publicly_accessible is true. A single-field
+      mapping on master_username alone would be STRICTER than Checkov, which is a different rule, not
+      a faithful one.'
+  CKV_AWS_392:
+    verb: parent_child + list_args + all_of
+    semantics: 'parent_child enumeration: an api_specs entry whose `list` operation requires a parent
+      id, supplied by walking a second, argument-free list call first. Concretely the spec grows `parent:
+      {list, collection, id}` and `list_args: {<param>: <parent id field>}`, and one row is produced per
+      child with the parent id carried on the row so the control can name it. This is the single biggest
+      structural gap: roughly a fifth of the remaining custom checks are blocked on it and nothing else.
+      The rule that an enumeration takes no required arguments is what makes it a gap rather than an oversight
+      -- the shape is expressible, it just is not expressed yet. list_args: constant arguments on an api_specs
+      `list` call. Not a parent id -- a fixed value the spec author supplies (include: [''SETTINGS''],
+      Scope: ''REGIONAL'', Owners: [''self''], PolicyArn: ''arn:aws:iam::aws:policy/AdministratorAccess'').
+      Cheap to add and it unlocks several checks whose only obstacle is that AWS omits the interesting
+      field unless you ask for it.'
+    mapping: 'aws_s3_access_point: s3control:ListAccessPoints requires AccountId -- available from sts:GetCallerIdentity,
+      which aws_api_assets already calls, so this is list_args fed from the reader''s own account_id rather
+      than a parent walk. Then GetAccessPoint(AccountId, Name) for PublicAccessBlockConfiguration and
+      all_of over its four booleans. Do NOT map onto the vendored aws_s3_access_point / aws_s3_access_points:
+      despite the names they call get_bucket_metrics_configuration and list_bucket_metrics_configurations
+      -- they are bucket METRICS resources and have nothing to do with access points. Also note Checkov''s
+      own logic is half-broken here: it tests `''ignore_public_acls'' in block_config` and then reads
+      block_public_acls, so a config that omits ignore_public_acls but sets the other three to false passes.'
+  CKV_AWS_393:
+    verb: policy_document(gh_oidc_sub_safe)
+    semantics: 'policy_document(<sub_predicate>): fetch a resource-based or trust policy, JSON-parse it,
+      and evaluate a named predicate over Statement[]. It is not a field comparison and never will be
+      -- the unit of judgement is a statement, and the verdict depends on Effect, Principal, Action and
+      Condition together. Sub-predicates the 17 policy checks need, in the order they pay off: no_wildcard_principal
+      (Effect Allow, Principal ''*'' or Principal.AWS containing ''*'', no Condition); no_wildcard_action
+      (Effect Allow and Action containing ''*''); no_admin_star_star (Allow with ''*'' in both Action
+      and Resource); no_cross_account_principal_without_condition (Allow whose Principal.AWS is a specific
+      arn:aws:iam:: ARN and which carries no Condition); no_account_root_principal (Allow whose Principal.AWS
+      matches 12 digits or arn:aws:iam::<acct>:root); gh_oidc_sub_safe (Federated principal on token.actions.githubusercontent.com
+      must carry a Condition constraining :sub to a repo:<org>/<repo> value, not ''*'', not a bare claim,
+      not an abusable claim). Every one of these is a pure function of a parsed document, so they belong
+      in one shared library that the mapping names by predicate.'
+    mapping: 'aws_iam_role: same enumeration as CKV_AWS_60. Deployed is strictly stronger here -- the
+      trust policy is read as AWS resolved it, and it catches roles whose trust was widened in the console
+      after the Terraform apply, which is the exact failure mode this rule exists for.'
+unreachable:
+  CKV_AWS_78: 'aws_codebuild_project. codebuild:BatchGetProjects returns artifacts.encryptionDisabled,
+    so the state is in the API -- but aws-sdk-codebuild is not in the declared gem inventory, and no other
+    service''s API reports a CodeBuild project''s artifact encryption. CAVEAT ON THIS WHOLE SECTION: the
+    exclusion is the declared gem inventory, not the AWS API. Every one of these services exposes the
+    state through a public, argument-free-or-parent-walkable call, so if the gem is added to the image
+    the check moves straight to B. That distinction matters because the inventory as given is already
+    contradicted by the repository: tools/api_specs.yml ships live specs against aws-sdk-docdb, aws-sdk-neptune,
+    aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains, none of which appear on the list. Confirm
+    the image contents before treating any of these as closed.'
+  CKV_AWS_147: 'aws_codebuild_project. codebuild:BatchGetProjects returns encryptionKey (AWS populates
+    it with the aws/s3 managed key when none was set, so the deployed check would have to distinguish
+    a CMK). Same missing aws-sdk-codebuild gem. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared
+    gem inventory, not the AWS API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_167: 'aws_glacier_vault. glacier:ListVaults takes no required arguments and GetVaultAccessPolicy(vaultName)
+    returns the policy, so the check is a parent walk plus the policy_document verb -- except that aws-sdk-glacier
+    is not in the declared gem inventory. S3 Glacier VAULTS are a separate service from the S3 Glacier
+    storage CLASSES; the s3 gem cannot see them, so there is no substitute reader. CAVEAT ON THIS WHOLE
+    SECTION: the exclusion is the declared gem inventory, not the AWS API. Every one of these services
+    exposes the state through a public, argument-free-or-parent-walkable call, so if the gem is added
+    to the image the check moves straight to B. That distinction matters because the inventory as given
+    is already contradicted by the repository: tools/api_specs.yml ships live specs against aws-sdk-docdb,
+    aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains, none of which appear
+    on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_200: 'aws_imagebuilder_image_recipe. imagebuilder:ListImageRecipes / GetImageRecipe return blockDeviceMappings[].ebs.{encrypted,kmsKeyId},
+    but aws-sdk-imagebuilder is not in the declared gem inventory. ec2:DescribeImages is NOT a substitute:
+    it reports the encryption of the AMI a recipe produced, not the recipe''s own mapping, so a recipe
+    that has never been built would be invisible and a recipe changed after its last build would be judged
+    on stale evidence. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory, not
+    the AWS API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_253: 'aws_dlm_lifecycle_policy. dlm:GetLifecyclePolicies takes no required arguments and GetLifecyclePolicy
+    returns PolicyDetails.Actions[].CrossRegionCopy[].EncryptionConfiguration.Encrypted, so the state
+    is fully exposed -- aws-sdk-dlm is simply not in the declared gem inventory, and DLM state is not
+    mirrored by ec2 or backup. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory,
+    not the AWS API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_254: 'aws_dlm_lifecycle_policy. Same DLM path as CKV_AWS_253; the field is EncryptionConfiguration.CmkArn.
+    CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory, not the AWS API. Every
+    one of these services exposes the state through a public, argument-free-or-parent-walkable call, so
+    if the gem is added to the image the check moves straight to B. That distinction matters because the
+    inventory as given is already contradicted by the repository: tools/api_specs.yml ships live specs
+    against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_255: 'aws_dlm_lifecycle_policy. Same DLM path; the field is PolicyDetails.Schedules[].CrossRegionCopyRules[].Encrypted.
+    CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory, not the AWS API. Every
+    one of these services exposes the state through a public, argument-free-or-parent-walkable call, so
+    if the gem is added to the image the check moves straight to B. That distinction matters because the
+    inventory as given is already contradicted by the repository: tools/api_specs.yml ships live specs
+    against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_256: 'aws_dlm_lifecycle_policy. Same DLM path; the fields are CrossRegionCopyRules[].Encrypted
+    and .CmkArn. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory, not the AWS
+    API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_314: 'aws_codebuild_project. codebuild:BatchGetProjects returns logsConfig.{cloudWatchLogs,s3Logs}.status.
+    Same missing aws-sdk-codebuild gem. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem
+    inventory, not the AWS API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'
+  CKV_AWS_381: 'aws_codegurureviewer_repository_association. codeguru-reviewer:DescribeRepositoryAssociation
+    returns KMSKeyDetails.EncryptionOption, and ListRepositoryAssociations takes no required arguments,
+    so the shape would be trivial -- but aws-sdk-codegurureviewer is not in the declared gem inventory
+    and no other service reports it. CAVEAT ON THIS WHOLE SECTION: the exclusion is the declared gem inventory,
+    not the AWS API. Every one of these services exposes the state through a public, argument-free-or-parent-walkable
+    call, so if the gem is added to the image the check moves straight to B. That distinction matters
+    because the inventory as given is already contradicted by the repository: tools/api_specs.yml ships
+    live specs against aws-sdk-docdb, aws-sdk-neptune, aws-sdk-dax, aws-sdk-bedrockagent and aws-sdk-route53domains,
+    none of which appear on the list. Confirm the image contents before treating any of these as closed.'

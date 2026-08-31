@@ -1,0 +1,1341 @@
+# batch1 — 73 Checkov AWS checks triaged against the vendored inspec-aws pack
+# (vendor/8d70ebd.../libraries) and the botocore service models shipped with the
+# checkov 3.3.16 venv, which is the authority used here for API field names and
+# for whether a list operation takes required arguments.
+#
+# 16 mapped / 57 skipped. Every skip names the specific thing that blocks it.
+
+mappings:
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch / OpenSearch
+  #
+  # inspec-aws ships the LEGACY es-API resources: aws_elasticsearchservice_domains
+  # (ListDomainNames, no required parameters, registers :domain_names) and
+  # aws_elasticsearchservice_domain(domain_name:) which calls
+  # DescribeElasticsearchDomain and hands domain_status.to_h to
+  # create_resource_methods. That endpoint still enumerates and describes
+  # OpenSearch domains, so ONE reader answers both Terraform types.
+  #
+  # Nested structures become AwsResourceProbe objects, so a dotted property is a
+  # real method chain and rspec-its splits it. A member AWS omits is not defined
+  # at all -> method_missing -> NullResponse, whose nil?/empty? are true and
+  # whose == is `other.nil?`. So an absent member fails `eq true` and fails
+  # `should_not be_empty`, which is the correct direction for every mapping here.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_5:
+    aws_elasticsearch_domain: &es_encrypt_at_rest
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "encryption_at_rest_options.enabled"
+        satisfies: equals
+        value: true
+      note: >-
+        Terraform writes encrypt_at_rest { enabled }; the API returns
+        EncryptionAtRestOptions.Enabled -> encryption_at_rest_options.enabled.
+        Confirmed from the botocore es/DescribeElasticsearchDomain output shape.
+    aws_opensearch_domain: *es_encrypt_at_rest
+
+  CKV_AWS_6:
+    aws_elasticsearch_domain: &es_n2n
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "node_to_node_encryption_options.enabled"
+        satisfies: equals
+        value: true
+      note: >-
+        Terraform writes node_to_node_encryption { enabled }; the API returns
+        NodeToNodeEncryptionOptions.Enabled. STRICTER than the IaC check:
+        Checkov passes a domain whose cluster_config.instance_count <= 1 without
+        looking at node-to-node encryption at all. A single-node domain that has
+        it disabled passes Checkov and fails here. That divergence is stated in
+        the rationale so it renders into the control.
+    aws_opensearch_domain: *es_n2n
+
+  CKV_AWS_83:
+    aws_elasticsearch_domain: &es_https
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "domain_endpoint_options.enforce_https"
+        satisfies: equals
+        value: true
+      note: >-
+        API member is EnforceHTTPS (all caps), which aws-sdk-ruby renders as
+        enforce_https — not enforce_h_t_t_p_s.
+    aws_opensearch_domain: *es_https
+
+  CKV_AWS_228:
+    aws_elasticsearch_domain: &es_tls
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "domain_endpoint_options.tls_security_policy"
+        satisfies: in_list
+        value: ['Policy-Min-TLS-1-2-2019-07', 'Policy-Min-TLS-1-2-PFS-2023-10']
+      note: >-
+        in_list, not equals, because render_stock() still carries its own inline
+        matcher chain and has NOT been moved onto matcher_for()/ruby_literal():
+        it emits `should eq {str(value).lower()}`, so a string value would render
+        as a bare, lowercased Ruby identifier. No stock mapping in the repo
+        currently passes a string, so this is a latent trap rather than a live
+        bug; in_list quotes its values in both code paths and is safe either way.
+    aws_opensearch_domain: *es_tls
+
+  CKV_AWS_137:
+    aws_elasticsearch_domain: &es_vpc
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "vpc_options.vpc_id"
+        satisfies: not_empty
+      note: >-
+        API member is VPCOptions.VPCId -> vpc_options.vpc_id. A public-endpoint
+        domain omits VPCOptions entirely, so the chain yields NullResponse and
+        `should_not be_empty` fails, which is the intended verdict. vpc_id is a
+        String, so `empty?` is String#empty? and not the probe trap described
+        under CKV_AWS_84 in `skipped`.
+    aws_opensearch_domain: *es_vpc
+
+  CKV_AWS_248:
+    aws_elasticsearch_domain: &es_sg
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: "vpc_options.security_group_ids"
+        satisfies: not_empty
+      note: >-
+        SecurityGroupIds is a list of strings, which AwsResourceDynamicMethods
+        returns as a raw Ruby Array (scalar-element arrays are not wrapped in
+        probes), so `empty?` is Array#empty? and the assertion is real.
+    aws_opensearch_domain: *es_sg
+
+  # ---------------------------------------------------------------------------
+  # Lambda — aws_lambdas (ListFunctions, no required parameters, registers
+  # :names) -> aws_lambda(lambda_name:) which calls GetFunction and feeds
+  # configuration.to_h to create_resource_methods.
+  #
+  # Deliberately STOCK and not the existing `aws_lambda_function` api spec:
+  # API_TEMPLATE rejects every asset whose field is nil before asserting, so an
+  # api-reader `not_empty` check can never fail. Both of these are `not_empty`.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_116:
+    aws_lambda_function:
+      reader: stock
+      enumerate: {resource: aws_lambdas, ids: names}
+      assert:
+        resource: aws_lambda
+        arg: lambda_name
+        property: "dead_letter_config.target_arn"
+        satisfies: not_empty
+      note: >-
+        Terraform writes dead_letter_config { target_arn }; the API member is
+        DeadLetterConfig.TargetArn -> dead_letter_config.target_arn, confirmed
+        from botocore lambda/GetFunction. Absent for a function with no DLQ, so
+        the chain is NullResponse and the assertion fails.
+
+  CKV_AWS_117:
+    aws_lambda_function:
+      reader: stock
+      enumerate: {resource: aws_lambdas, ids: names}
+      assert:
+        resource: aws_lambda
+        arg: lambda_name
+        property: "vpc_config.vpc_id"
+        satisfies: not_empty
+      note: >-
+        Checkov asserts the presence of the vpc_config BLOCK. The deployed
+        equivalent is VpcConfig.VpcId, which AWS populates only when the
+        function is actually attached to a VPC — a function with an empty
+        vpc_config block satisfies Checkov and fails here, correctly.
+
+  # ---------------------------------------------------------------------------
+  # EKS — aws_eks_clusters (ListClusters + DescribeCluster per cluster; no
+  # required parameters) -> aws_eks_cluster(cluster_name:).
+  #
+  # aws_eks_clusters populates its filter table from the response
+  # (populate_filter_table_from_response), which pluralises every response key,
+  # so the cluster hash's :name becomes the :names column. tools/lint_resource_map.py
+  # will report this as statically unverifiable rather than as an error.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_37:
+    aws_eks_cluster:
+      reader: stock
+      enumerate: {resource: aws_eks_clusters, ids: names}
+      assert:
+        resource: aws_eks_cluster
+        arg: cluster_name
+        property: "disabled_logging_types"
+        satisfies: empty
+      note: >-
+        Asserted as the COMPLEMENT. Checkov requires all five of api, audit,
+        authenticator, controllerManager and scheduler to appear in
+        enabled_cluster_log_types; the schema has no "contains all of" satisfies.
+        DescribeCluster returns logging.clusterLogging with every type marked
+        enabled or disabled, and aws_eks_cluster pre-computes both sides as
+        attr_readers. "nothing is disabled" is exactly "all five are enabled",
+        with no list to keep in sync.
+
+  CKV_AWS_58:
+    aws_eks_cluster:
+      reader: stock
+      enumerate: {resource: aws_eks_clusters, ids: names}
+      assert:
+        resource: aws_eks_cluster
+        arg: cluster_name
+        property: "encryption_config"
+        satisfies: not_empty
+      note: >-
+        Checkov's expected value is the stringified list "['secrets']", which
+        cannot become a Ruby literal. Asserted instead on the presence of
+        encryptionConfig, which is faithful because "secrets" is the only
+        resource EKS envelope encryption supports — a non-empty encryptionConfig
+        IS secrets encryption. It is a list of structures, so
+        AwsResourceDynamicMethods returns an Array of probes and `empty?` is
+        Array#empty?; absent entirely it is NullResponse, whose empty? is true.
+
+  # ---------------------------------------------------------------------------
+  # Athena — aws_athena_work_groups (ListWorkGroups, no required parameters,
+  # registers :names) -> aws_athena_work_group(work_group:) over GetWorkGroup.
+  # Note the argument is `work_group`, not `work_group_name` and not `name`.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_159:
+    aws_athena_workgroup:
+      reader: stock
+      enumerate: {resource: aws_athena_work_groups, ids: names}
+      assert:
+        resource: aws_athena_work_group
+        arg: work_group
+        property: "configuration.result_configuration.encryption_configuration.encryption_option"
+        satisfies: not_empty
+      note: >-
+        Terraform nests this as configuration/result_configuration/
+        encryption_configuration/encryption_option and so does the API
+        (Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption),
+        so the path is identical here. The leaf is a String; an unencrypted
+        workgroup omits EncryptionConfiguration and the chain is NullResponse.
+
+  CKV_AWS_82:
+    aws_athena_workgroup:
+      reader: stock
+      enumerate: {resource: aws_athena_work_groups, ids: names}
+      assert:
+        resource: aws_athena_work_group
+        arg: work_group
+        property: "configuration.enforce_workgroup_configuration"
+        satisfies: equals
+        value: true
+
+  # ---------------------------------------------------------------------------
+  # Step Functions — aws_stepfunctions_state_machines (ListStateMachines,
+  # registers :state_machine_arns) -> aws_stepfunctions_state_machine(
+  # state_machine_arn:) over DescribeStateMachine.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_284:
+    aws_sfn_state_machine:
+      reader: stock
+      enumerate: {resource: aws_stepfunctions_state_machines, ids: state_machine_arns}
+      assert:
+        resource: aws_stepfunctions_state_machine
+        arg: state_machine_arn
+        property: "tracing_configuration.enabled"
+        satisfies: equals
+        value: true
+      note: >-
+        Terraform writes tracing_configuration { enabled }; the API member is
+        tracingConfiguration.enabled (Step Functions models members in
+        lowerCamelCase) -> tracing_configuration.enabled.
+        Stock rather than the existing aws_sfn_state_machine api spec, whose
+        list_state_machines summary carries only name/arn/type and cannot answer
+        either of these two checks.
+
+  CKV_AWS_285:
+    aws_sfn_state_machine:
+      reader: stock
+      enumerate: {resource: aws_stepfunctions_state_machines, ids: state_machine_arns}
+      assert:
+        resource: aws_stepfunctions_state_machine
+        arg: state_machine_arn
+        property: "logging_configuration.include_execution_data"
+        satisfies: equals
+        value: true
+
+  # ---------------------------------------------------------------------------
+  # GuardDuty — aws_guardduty_detectors (ListDetectors, registers :detector_ids)
+  # -> aws_guardduty_detector(detector_id:) over GetDetector.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      reader: stock
+      enumerate: {resource: aws_guardduty_detectors, ids: detector_ids}
+      assert:
+        resource: aws_guardduty_detector
+        arg: detector_id
+        property: "enabled?"
+        satisfies: equals
+        value: true
+      note: >-
+        DIVERGENCE. Terraform's argument is the boolean `enable`; there is no
+        such API field. GetDetector returns Status, a string enum
+        ENABLED|DISABLED (botocore guardduty/GetDetector). aws_guardduty_detector
+        defines enabled? as status.upcase == "ENABLED", so the predicate is used
+        rather than the raw field — which also avoids the string-value problem
+        described under CKV_AWS_228.
+
+  # ---------------------------------------------------------------------------
+  # Transit Gateway — the pack ships aws_transit_gateway(transit_gateway_id:)
+  # but NO plural, so there is nothing to enumerate with. DescribeTransitGateways
+  # takes no required arguments, so a declarative api spec covers it.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_331:
+    aws_ec2_transit_gateway:
+      reader: api
+      field: auto_accept_shared_attachments
+      satisfies: in_list
+      value: ['disable']
+      note: >-
+        The Terraform argument and the API member are both named
+        auto_accept_shared_attachments / AutoAcceptSharedAttachments, but the
+        API nests it under Options, hence the dotted path in the spec.
+        Expressed as in_list ['disable'] rather than "not enable" because the
+        schema has no not_in_list; the enum has exactly two values, so the
+        allow-list form is exact rather than approximate. The field is always
+        present, so API_TEMPLATE's nil-rejection does not hollow it out.
+
+  # ---------------------------------------------------------------------------
+  # MemoryDB snapshots and Bedrock agents — both api, both `not_empty`, which is
+  # safe here: nil_filter_for() omits the nil-reject for not_empty/empty
+  # precisely so a presence check stays failable.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_278:
+    aws_memorydb_snapshot:
+      reader: api
+      field: kms_key_arn
+      satisfies: not_empty
+      note: >-
+        DIVERGENCE. Terraform's argument is kms_key_arn; the API member is
+        KmsKeyId (botocore memorydb/DescribeSnapshots). The field name here is
+        kept as kms_key_arn to match the check's vocabulary, and the api spec
+        maps it onto the real member. MemoryDB returns KmsKeyId only when a
+        customer-managed key was used — the default is an AWS-owned key that is
+        not reported — so not_empty does discriminate, which is the same basis
+        as the repo's existing CKV_AWS_191 ElastiCache mapping.
+
+  CKV_AWS_383:
+    aws_bedrockagent_agent:
+      reader: api
+      field: guardrail_identifier
+      satisfies: not_empty
+      note: >-
+        guardrailConfiguration.guardrailIdentifier is present in the ListAgents
+        SUMMARY (confirmed against the botocore bedrock-agent model), so no
+        per-agent GetAgent call is needed. Caveat: no existing api spec uses
+        aws-sdk-bedrockagent, so gem presence in the sparc-auditor image is
+        unverified here. A missing gem raises LoadError, which aws_api_assets
+        converts to an unreadable region and an empty row set — the control then
+        renders Not Applicable rather than erroring, so this must be confirmed on
+        a live exec, not from `check`.
+
+api_specs:
+
+  # NEW — no stock plural exists for transit gateways.
+  aws_ec2_transit_gateway:
+    gem: aws-sdk-ec2
+    client: Aws::EC2::Client
+    list: describe_transit_gateways      # botocore ec2/DescribeTransitGateways: no required members
+    collection: transit_gateways
+    id: transit_gateway_id
+    arn: transit_gateway_arn
+    scope: regional
+    fields:
+      auto_accept_shared_attachments: options.auto_accept_shared_attachments
+      default_route_table_association: options.default_route_table_association
+      dns_support: options.dns_support
+      state: state
+
+  # NEW — the pack ships no MemoryDB snapshot resource at all.
+  aws_memorydb_snapshot:
+    gem: aws-sdk-memorydb                # already required by aws_memorydb_cluster
+    client: Aws::MemoryDB::Client
+    list: describe_snapshots             # botocore memorydb/DescribeSnapshots: no required members
+    collection: snapshots
+    id: name
+    arn: arn                             # API member is "ARN"; aws-sdk-ruby names it arn
+    scope: regional
+    fields:
+      kms_key_arn: kms_key_id            # TF kms_key_arn -> API KmsKeyId
+      status: status
+      source: source
+
+  # NEW — no stock resource; ListAgents is the only no-argument enumeration.
+  # Gem presence in the image is UNVERIFIED; see the note on CKV_AWS_383.
+  aws_bedrockagent_agent:
+    gem: aws-sdk-bedrockagent
+    client: Aws::BedrockAgent::Client
+    list: list_agents                    # botocore bedrock-agent/ListAgents: no required members
+    collection: agent_summaries          # API member agentSummaries
+    id: agent_id
+    scope: regional
+    fields:
+      guardrail_identifier: guardrail_configuration.guardrail_identifier
+      guardrail_version: guardrail_configuration.guardrail_version
+      agent_status: agent_status
+
+metadata:
+
+  CKV_AWS_5:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A search domain holds a denormalised copy of whatever it indexes, which is
+      usually the same records the source database encrypts. Without encryption
+      at rest the domain's underlying storage and its automated snapshots are
+      readable by anyone who reaches them.
+
+  CKV_AWS_6:
+    what: node-to-node encryption is enabled on any domain with more than one instance
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      Shard replication and query fan-out cross the network in the clear unless
+      node-to-node encryption is on, so a domain that terminates TLS at its
+      endpoint can still be read off the wire between its own nodes. Note this
+      is asserted on every domain: Checkov exempts single-instance domains,
+      where the traffic is real as soon as the domain is scaled out.
+
+  CKV_AWS_83:
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      Without enforce_https the domain answers plaintext HTTP, so credentials
+      and query results travel unprotected whenever a client omits the scheme.
+      TLS becomes a client-side choice rather than a property of the service.
+
+  CKV_AWS_228:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-8 (1)', 'SC-13']
+    nist_r4: ['SC-8 (1)', 'SC-13']
+    cci: ['CCI-002421', 'CCI-002450']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      The older endpoint policy still negotiates TLS 1.0 and 1.1. Enforcing HTTPS
+      while accepting a deprecated protocol version means the connection is
+      encrypted with a cipher suite the organisation has already retired
+      everywhere else.
+
+  CKV_AWS_137:
+    severity: high
+    impact: 0.7
+    nist: ['SC-7', 'SC-7 (5)']
+    nist_r4: ['SC-7', 'SC-7 (5)']
+    cci: ['CCI-001097', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A domain outside a VPC has a public endpoint whose only barrier is its
+      access policy, so a mistake in that document exposes the index to the
+      internet. Inside a VPC the security group and route table bound reachability
+      before the policy is consulted at all.
+
+  CKV_AWS_248:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-7', 'SC-7 (5)', 'CM-7']
+    nist_r4: ['SC-7', 'SC-7 (5)', 'CM-7']
+    cci: ['CCI-001097', 'CCI-000382']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A domain placed in a VPC without an explicit security group inherits the
+      VPC default group, which permits all traffic between anything else that
+      also inherited it. The domain then has no ingress boundary of its own.
+
+  CKV_AWS_116:
+    severity: low
+    impact: 0.3
+    nist: ['SI-11']
+    nist_r4: ['SI-11']
+    cci: ['CCI-001312']
+    ksi: ['KSI-RPL-RCY']
+    rationale: >-
+      An asynchronous invocation that exhausts its retries is discarded silently
+      when there is no dead-letter target. The work is lost and nothing records
+      that it existed, so the failure is invisible to both operations and audit.
+
+  CKV_AWS_117:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-7', 'SC-7 (5)']
+    nist_r4: ['SC-7', 'SC-7 (5)']
+    cci: ['CCI-001097', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A function outside a VPC reaches the internet directly and is not subject
+      to the account's egress controls, flow logs or endpoint policies, so its
+      outbound traffic cannot be observed or constrained alongside everything else.
+
+  CKV_AWS_37:
+    what: enabled_cluster_log_types contains all of api, audit, authenticator, controllerManager and scheduler
+    severity: medium
+    impact: 0.5
+    nist: ['AU-2', 'AU-12']
+    nist_r4: ['AU-2', 'AU-12']
+    cci: ['CCI-000169', 'CCI-000172']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      The control plane is where authentication decisions and API authorisations
+      are made, and the audit and authenticator logs are the only record of them.
+      A cluster with partial logging cannot answer who called what after the fact.
+
+  CKV_AWS_58:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Without envelope encryption a Kubernetes Secret is stored in etcd as base64,
+      which is an encoding and not a protection. Anyone who can read the cluster's
+      backing store, or restore it from a backup, reads every credential in it.
+
+  CKV_AWS_159:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Query results are written to S3 as ordinary objects, and they contain the
+      rows the query selected. An unencrypted result location leaves a growing
+      archive of extracted data protected only by the bucket's own settings.
+
+  CKV_AWS_82:
+    severity: medium
+    impact: 0.5
+    nist: ['CM-7', 'AC-3']
+    nist_r4: ['CM-7', 'AC-3']
+    cci: ['CCI-000382', 'CCI-000213']
+    ksi: ['KSI-CMT-CFG']
+    rationale: >-
+      Unless the workgroup configuration is enforced, a client can override the
+      result location and the encryption settings per query, so the encryption
+      the workgroup declares is advisory rather than binding.
+
+  CKV_AWS_284:
+    severity: low
+    impact: 0.3
+    nist: ['AU-2', 'AU-12']
+    nist_r4: ['AU-2', 'AU-12']
+    cci: ['CCI-000169', 'CCI-000172']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Without tracing, a failed execution shows which state errored but not what
+      the downstream call did, so the boundary between the workflow's fault and a
+      dependency's fault cannot be established from the record.
+
+  CKV_AWS_285:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-2', 'AU-3', 'AU-12']
+    nist_r4: ['AU-2', 'AU-3', 'AU-12']
+    cci: ['CCI-000130', 'CCI-000169']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Execution history is retained for ninety days inside Step Functions and
+      then gone. Logging with execution data is what puts the input and output of
+      each state into a log group that retention policy and alerting can reach.
+
+  CKV_AWS_238:
+    severity: medium
+    impact: 0.5
+    nist: ['SI-4', 'RA-5']
+    nist_r4: ['SI-4', 'RA-5']
+    cci: ['CCI-002664']
+    ksi: ['KSI-MLA-OSM']
+    rationale: >-
+      A detector that exists but is suspended keeps its configuration and its
+      findings history while analysing nothing, so the account looks monitored in
+      an inventory and is not. This is the deployed state Terraform cannot show.
+
+  CKV_AWS_331:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'SC-7', 'CM-7']
+    nist_r4: ['AC-3', 'SC-7', 'CM-7']
+    cci: ['CCI-000213', 'CCI-001097']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      With auto-accept on, any account the gateway is shared with can attach a VPC
+      and reach everything else on the gateway without anyone in this account
+      approving it. Attachment stops being a reviewed decision.
+
+  CKV_AWS_278:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      A snapshot outlives the cluster it came from and holds the same data. Under
+      an AWS-owned key the account cannot audit who used the key, cannot revoke
+      it, and cannot prove the snapshot became unreadable when it was retired.
+
+  CKV_AWS_383:
+    severity: medium
+    impact: 0.5
+    nist: ['SI-4', 'AC-4', 'SC-7']
+    nist_r4: ['SI-4', 'AC-4', 'SC-7']
+    cci: ['CCI-002664', 'CCI-001097']
+    ksi: ['KSI-SVC-VRI']
+    rationale: >-
+      A guardrail is the only place the agent's input and output filtering is
+      enforced. Without one attached, prompt content and model responses pass
+      through unfiltered no matter what the application layer intends.
+
+fixes:
+
+  CKV_AWS_5:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          encrypt_at_rest {
+            enabled    = true
+            kms_key_id = aws_kms_key.search.arn
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name <name> --encryption-at-rest-options Enabled=true,KmsKeyId=<key-arn>
+      note: >-
+        Encryption at rest cannot be turned on for an existing domain in every
+        engine version; where the update is rejected the domain must be recreated
+        and reindexed, so treat this as a migration rather than a setting change.
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          encrypt_at_rest {
+            enabled    = true
+            kms_key_id = aws_kms_key.search.arn
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name <name> --encryption-at-rest-options Enabled=true,KmsKeyId=<key-arn>
+
+  CKV_AWS_6:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          node_to_node_encryption {
+            enabled = true
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name <name> --node-to-node-encryption-options Enabled=true
+      note: >-
+        Enabling node-to-node encryption on a running domain triggers a blue/green
+        deployment; on older engine versions it is only settable at creation.
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          node_to_node_encryption {
+            enabled = true
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name <name> --node-to-node-encryption-options Enabled=true
+
+  CKV_AWS_83:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          domain_endpoint_options {
+            enforce_https       = true
+            tls_security_policy = "Policy-Min-TLS-1-2-PFS-2023-10"
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name <name> --domain-endpoint-options EnforceHTTPS=true
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          domain_endpoint_options {
+            enforce_https       = true
+            tls_security_policy = "Policy-Min-TLS-1-2-PFS-2023-10"
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name <name> --domain-endpoint-options EnforceHTTPS=true
+
+  CKV_AWS_228:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          domain_endpoint_options {
+            enforce_https       = true
+            tls_security_policy = "Policy-Min-TLS-1-2-PFS-2023-10"
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name <name> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-PFS-2023-10
+      note: >-
+        Raising the minimum version breaks clients that only offer TLS 1.0/1.1;
+        check the domain's access logs for such clients before applying.
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          domain_endpoint_options {
+            enforce_https       = true
+            tls_security_policy = "Policy-Min-TLS-1-2-PFS-2023-10"
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name <name> --domain-endpoint-options EnforceHTTPS=true,TLSSecurityPolicy=Policy-Min-TLS-1-2-PFS-2023-10
+
+  CKV_AWS_137:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          vpc_options {
+            subnet_ids         = var.private_subnet_ids
+            security_group_ids = [aws_security_group.search.id]
+          }
+        }
+      note: >-
+        There is no in-place fix. A domain is created either public or VPC-bound
+        and cannot be moved between the two; closing this finding means creating
+        a VPC domain, reindexing into it and retiring the public one.
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          vpc_options {
+            subnet_ids         = var.private_subnet_ids
+            security_group_ids = [aws_security_group.search.id]
+          }
+        }
+      note: >-
+        Same constraint as the Elasticsearch resource: public-to-VPC is a
+        migration, not an update.
+
+  CKV_AWS_248:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_security_group" "search" {
+          name   = "search-domain"
+          vpc_id = var.vpc_id
+
+          ingress {
+            from_port       = 443
+            to_port         = 443
+            protocol        = "tcp"
+            security_groups = [aws_security_group.app.id]
+          }
+        }
+
+        resource "aws_elasticsearch_domain" "search" {
+          domain_name           = "search"
+          elasticsearch_version = "7.10"
+
+          vpc_options {
+            subnet_ids         = var.private_subnet_ids
+            security_group_ids = [aws_security_group.search.id]
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name <name> --vpc-options SecurityGroupIds=<sg-id>,SubnetIds=<subnet-ids>
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "search" {
+          domain_name    = "search"
+          engine_version = "OpenSearch_2.11"
+
+          vpc_options {
+            subnet_ids         = var.private_subnet_ids
+            security_group_ids = [aws_security_group.search.id]
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name <name> --vpc-options SecurityGroupIds=<sg-id>,SubnetIds=<subnet-ids>
+
+  CKV_AWS_116:
+    aws_lambda_function:
+      terraform: |
+        resource "aws_sqs_queue" "dlq" {
+          name = "app-dlq"
+        }
+
+        resource "aws_lambda_function" "app" {
+          function_name = "app"
+          role          = aws_iam_role.app.arn
+          handler       = "index.handler"
+          runtime       = "python3.12"
+          filename      = "app.zip"
+
+          dead_letter_config {
+            target_arn = aws_sqs_queue.dlq.arn
+          }
+        }
+      cli: |
+        aws lambda update-function-configuration --function-name <name> --dead-letter-config TargetArn=<queue-or-topic-arn>
+      note: >-
+        The function's execution role also needs sqs:SendMessage (or sns:Publish)
+        on the target; without it the delivery fails silently and the check still
+        passes, because the configuration is present.
+
+  CKV_AWS_117:
+    aws_lambda_function:
+      terraform: |
+        resource "aws_lambda_function" "app" {
+          function_name = "app"
+          role          = aws_iam_role.app.arn
+          handler       = "index.handler"
+          runtime       = "python3.12"
+          filename      = "app.zip"
+
+          vpc_config {
+            subnet_ids         = var.private_subnet_ids
+            security_group_ids = [aws_security_group.lambda.id]
+          }
+        }
+      cli: |
+        aws lambda update-function-configuration --function-name <name> --vpc-config SubnetIds=<subnet-ids>,SecurityGroupIds=<sg-ids>
+      note: >-
+        The execution role needs the AWSLambdaVPCAccessExecutionRole permissions
+        to create the ENIs, and a VPC function reaches AWS APIs only through a NAT
+        gateway or VPC endpoints.
+
+  CKV_AWS_37:
+    aws_eks_cluster:
+      terraform: |
+        resource "aws_eks_cluster" "main" {
+          name     = "main"
+          role_arn = aws_iam_role.cluster.arn
+          version  = "1.31"
+
+          enabled_cluster_log_types = [
+            "api",
+            "audit",
+            "authenticator",
+            "controllerManager",
+            "scheduler",
+          ]
+
+          vpc_config {
+            subnet_ids = var.private_subnet_ids
+          }
+        }
+      cli: |
+        aws eks update-cluster-config --name <cluster> --logging '{"clusterLogging":[{"types":["api","audit","authenticator","controllerManager","scheduler"],"enabled":true}]}'
+
+  CKV_AWS_58:
+    aws_eks_cluster:
+      terraform: |
+        resource "aws_eks_cluster" "main" {
+          name     = "main"
+          role_arn = aws_iam_role.cluster.arn
+          version  = "1.31"
+
+          encryption_config {
+            resources = ["secrets"]
+
+            provider {
+              key_arn = aws_kms_key.eks.arn
+            }
+          }
+
+          vpc_config {
+            subnet_ids = var.private_subnet_ids
+          }
+        }
+      cli: |
+        aws eks associate-encryption-config --cluster-name <cluster> --encryption-config '[{"resources":["secrets"],"provider":{"keyArn":"<key-arn>"}}]'
+      note: >-
+        Association is one-way and cannot be undone or repointed at another key,
+        and existing Secrets are only re-encrypted when they are next written —
+        run a rewrite of every Secret after associating.
+
+  CKV_AWS_159:
+    aws_athena_workgroup:
+      terraform: |
+        resource "aws_athena_workgroup" "analytics" {
+          name = "analytics"
+
+          configuration {
+            enforce_workgroup_configuration = true
+
+            result_configuration {
+              output_location = "s3://${aws_s3_bucket.results.bucket}/output/"
+
+              encryption_configuration {
+                encryption_option = "SSE_KMS"
+                kms_key_arn       = aws_kms_key.athena.arn
+              }
+            }
+          }
+        }
+      cli: |
+        aws athena update-work-group --work-group <name> --configuration-updates ResultConfigurationUpdates={EncryptionConfiguration={EncryptionOption=SSE_KMS,KmsKey=<key-arn>}}
+
+  CKV_AWS_82:
+    aws_athena_workgroup:
+      terraform: |
+        resource "aws_athena_workgroup" "analytics" {
+          name = "analytics"
+
+          configuration {
+            enforce_workgroup_configuration    = true
+            publish_cloudwatch_metrics_enabled = true
+
+            result_configuration {
+              output_location = "s3://${aws_s3_bucket.results.bucket}/output/"
+
+              encryption_configuration {
+                encryption_option = "SSE_KMS"
+                kms_key_arn       = aws_kms_key.athena.arn
+              }
+            }
+          }
+        }
+      cli: |
+        aws athena update-work-group --work-group <name> --configuration-updates EnforceWorkGroupConfiguration=true
+      note: >-
+        Enforcing the configuration overrides any client-side result location, so
+        confirm callers are not relying on writing results to their own bucket
+        before applying it.
+
+  CKV_AWS_284:
+    aws_sfn_state_machine:
+      terraform: |
+        resource "aws_sfn_state_machine" "orders" {
+          name       = "orders"
+          role_arn   = aws_iam_role.sfn.arn
+          definition = file("${path.module}/orders.asl.json")
+
+          tracing_configuration {
+            enabled = true
+          }
+        }
+      cli: |
+        aws stepfunctions update-state-machine --state-machine-arn <arn> --tracing-configuration enabled=true
+      note: >-
+        The state machine's role also needs the X-Ray write permissions
+        (xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules,
+        xray:GetSamplingTargets) or no segments are recorded.
+
+  CKV_AWS_285:
+    aws_sfn_state_machine:
+      terraform: |
+        resource "aws_cloudwatch_log_group" "sfn" {
+          name              = "/aws/vendedlogs/states/orders"
+          retention_in_days = 365
+        }
+
+        resource "aws_sfn_state_machine" "orders" {
+          name       = "orders"
+          role_arn   = aws_iam_role.sfn.arn
+          definition = file("${path.module}/orders.asl.json")
+
+          logging_configuration {
+            log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+            include_execution_data = true
+            level                  = "ALL"
+          }
+        }
+      cli: |
+        aws stepfunctions update-state-machine --state-machine-arn <arn> --logging-configuration level=ALL,includeExecutionData=true,destinations=[{cloudWatchLogsLogGroup={logGroupArn=<log-group-arn>:*}}]
+      note: >-
+        Execution data includes state input and output, so the log group inherits
+        whatever sensitivity the workflow carries — set its retention and KMS key
+        accordingly rather than leaving it at the defaults.
+
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      terraform: |
+        resource "aws_guardduty_detector" "main" {
+          enable                       = true
+          finding_publishing_frequency = "FIFTEEN_MINUTES"
+
+          datasources {
+            s3_logs {
+              enable = true
+            }
+            kubernetes {
+              audit_logs {
+                enable = true
+              }
+            }
+            malware_protection {
+              scan_ec2_instance_with_findings {
+                ebs_volumes {
+                  enable = true
+                }
+              }
+            }
+          }
+        }
+      cli: |
+        aws guardduty update-detector --detector-id <id> --enable
+      note: >-
+        A detector is per region. An account with a detector in one region and
+        none in another is not covered in the second, and this control only sees
+        the regions in scan_regions.
+
+  CKV_AWS_331:
+    aws_ec2_transit_gateway:
+      terraform: |
+        resource "aws_ec2_transit_gateway" "main" {
+          description                     = "main"
+          auto_accept_shared_attachments  = "disable"
+          default_route_table_association = "disable"
+          default_route_table_propagation = "disable"
+          dns_support                     = "enable"
+        }
+      cli: |
+        aws ec2 modify-transit-gateway --transit-gateway-id <tgw-id> --options AutoAcceptSharedAttachments=disable
+      note: >-
+        Turning auto-accept off does not detach anything already attached. Review
+        the existing attachments with describe-transit-gateway-attachments and
+        remove the ones that were never approved.
+
+  CKV_AWS_278:
+    aws_memorydb_snapshot:
+      terraform: |
+        resource "aws_memorydb_snapshot" "nightly" {
+          cluster_name = aws_memorydb_cluster.cache.name
+          name         = "cache-nightly"
+          kms_key_arn  = aws_kms_key.memorydb.arn
+        }
+      cli: |
+        aws memorydb copy-snapshot --source-snapshot-name <name> --target-snapshot-name <name>-cmk --kms-key-id <key-arn>
+      note: >-
+        A snapshot's key cannot be changed in place. The fix is to copy it under
+        the customer-managed key and delete the original; for scheduled snapshots,
+        set kms_key_arn on the cluster so future ones inherit it.
+
+  CKV_AWS_383:
+    aws_bedrockagent_agent:
+      terraform: |
+        resource "aws_bedrockagent_agent" "assistant" {
+          agent_name              = "assistant"
+          agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
+          foundation_model        = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+          instruction             = var.agent_instruction
+
+          guardrail_configuration {
+            guardrail_identifier = aws_bedrock_guardrail.assistant.guardrail_id
+            guardrail_version    = aws_bedrock_guardrail.assistant.version
+          }
+        }
+      cli: |
+        aws bedrock-agent update-agent --agent-id <id> --guardrail-configuration guardrailIdentifier=<guardrail-id>,guardrailVersion=<version>
+      note: >-
+        update-agent replaces the whole agent configuration, so the call must
+        repeat agent-name, agent-resource-role-arn and foundation-model or they
+        are cleared. The agent must also be re-prepared before the change is live.
+
+skipped:
+
+  # --- IAM account-level singletons -----------------------------------------
+  # GetAccountPasswordPolicy returns ONE policy for the account. inspec-aws ships
+  # aws_iam_password_policy with no plural, because there is nothing to
+  # enumerate. Schema A requires `enumerate: {resource, ids}` and STOCK_TEMPLATE
+  # renders `ids = <plural>.<column>`, so there is no shape for a singleton.
+  # These are CIS-standard checks and worth a third reader shape (a singleton
+  # variant with no enumerate); they are not blocked by anything on the AWS side.
+  #
+  # Two live traps for whoever builds that reader: max_password_age_in_days RAISES
+  # "this policy does not expire passwords" when max_password_age is 0, and
+  # number_of_passwords_to_remember RAISES when password_reuse_prevention is nil.
+  # Both must be guarded by expire_passwords? / prevent_password_reuse? first.
+  CKV_AWS_9: >-
+    aws_iam_account_password_policy is an account singleton (GetAccountPasswordPolicy).
+    inspec-aws ships aws_iam_password_policy with no plural, so schema A's
+    `enumerate` has no resource to name. Needs a singleton reader shape.
+  CKV_AWS_10: >-
+    Same singleton problem as CKV_AWS_9. The field is minimum_password_length and
+    the assertion would be `>= 14`, which the schema also lacks — greater_than is
+    strict, so 14 exactly would fail.
+  CKV_AWS_11: Same singleton problem as CKV_AWS_9 (require_lowercase_characters?).
+  CKV_AWS_12: Same singleton problem as CKV_AWS_9 (require_numbers?).
+  CKV_AWS_13: >-
+    Same singleton problem as CKV_AWS_9. Additionally number_of_passwords_to_remember
+    RAISES rather than returning nil when reuse prevention is unset.
+  CKV_AWS_14: Same singleton problem as CKV_AWS_9 (require_symbols?).
+  CKV_AWS_15: Same singleton problem as CKV_AWS_9 (require_uppercase_characters?).
+  CKV_AWS_348: >-
+    The root user is a singleton read through GetAccountSummary
+    (AccountAccessKeysPresent); inspec-aws ships aws_iam_root_user with no plural.
+    ListAccessKeys never returns root's keys, so aws_iam_access_keys.usernames
+    cannot answer it either.
+
+  # --- IAM policy documents and relationships (pitfall 7) --------------------
+  CKV_AWS_40: >-
+    A relationship check: it asks whether a policy is attached to a USER rather
+    than to a group or role. That is an edge between two resources, not a field
+    on one, and neither schema expresses an edge.
+  CKV_AWS_60: >-
+    Parses the role's assume_role_policy document to see which principals may
+    assume it. Policy-document analysis; not expressible as a field assertion.
+  CKV_AWS_61: >-
+    Parses the trust policy for a wildcarded AWS principal. Policy-document
+    analysis.
+  CKV_AWS_62: >-
+    Parses inline and managed policy documents for Action "*" with Resource "*".
+    Policy-document analysis, across five Terraform types.
+  CKV_AWS_63: >-
+    Parses policy documents for a statement whose Action is "*".
+    Policy-document analysis.
+  CKV_AWS_274: >-
+    Needs the identity of the ATTACHED policy (AdministratorAccess) for each
+    attachment, which is an edge from a role/user/group to a policy ARN.
+    Relationship check.
+  CKV_AWS_273: >-
+    scan_resource_conf returns FAILED unconditionally: the assertion is "no IAM
+    users exist at all". Schema A renders one describe per enumerated id, so it
+    cannot express an empty-collection claim — with zero users it would render
+    zero examples and skip.
+  CKV_AWS_393: >-
+    Parses the GitHub Actions OIDC trust policy for unsafe claims and claim
+    ordering. Policy-document analysis.
+
+  # --- Elasticsearch / OpenSearch, remainder ---------------------------------
+  CKV_AWS_84: >-
+    LogPublishingOptions is a MAP. AwsResourceDynamicMethods wraps a non-empty
+    Hash in an AwsResourceProbe, and AwsResourceProbe does not define empty? — its
+    method_missing returns a NullResponse INSTANCE, which is truthy. So be_empty
+    reports true for a fully-configured domain and `not_empty` would fail exactly
+    the domains that comply. There is no scalar field on the domain that answers
+    "logging is on", so this needs a reader that inspects the map.
+  CKV_AWS_317: >-
+    Needs log_publishing_options['AUDIT_LOGS'].enabled. Beyond the probe/empty?
+    problem above, create_method returns the RAW Hash (not a probe) when the map
+    is empty, so `.AUDIT_LOGS` on a domain with no log publishing raises
+    NoMethodError — a control error, not a failure.
+  CKV_AWS_247: >-
+    Cannot discriminate a CMK. DescribeElasticsearchDomain returns
+    EncryptionAtRestOptions.KmsKeyId for the AWS-managed aws/es key as well, so
+    `not_empty` would restate CKV_AWS_5 (encryption is on) while claiming to
+    verify customer-managed keys. Needs a key-ownership lookup the schema has no
+    room for.
+  CKV_AWS_318: >-
+    A conjunction: dedicated_master_count >= 3 AND zone_awareness_enabled. The
+    schema asserts one property, and asserting only the master count would PASS a
+    three-master single-AZ domain that Checkov fails.
+
+  # --- Lambda ----------------------------------------------------------------
+  CKV_AWS_115: >-
+    Reserved concurrency is not in the function configuration. GetFunction returns
+    it under a separate Concurrency member that aws_lambda discards (it keeps
+    details.configuration only), and ListFunctions omits it entirely; the real
+    source is GetFunctionConcurrency, one call per function.
+  CKV_AWS_258: >-
+    aws_lambda_function_url has no stock resource, and lambda:ListFunctionUrlConfigs
+    requires FunctionName (confirmed in the botocore model), so it cannot
+    enumerate an account.
+  CKV_AWS_301: >-
+    aws_lambda_permissions requires function_name and therefore cannot enumerate
+    an account. The permission set is also a resource policy, read per function.
+  CKV_AWS_363: >-
+    A forbidden-list check (25 deprecated runtimes). The schema has no
+    not_in_list, and inverting it into an allow-list would mean inventing and
+    then maintaining the set of currently-supported runtimes, which drifts every
+    time AWS adds one.
+  CKV_AWS_364: >-
+    Same enumeration block as CKV_AWS_301, plus a conjunction (service principal
+    AND source_arn-or-source_account).
+  CKV_AWS_45: >-
+    Entropy and pattern matching over environment-variable VALUES. Not a field
+    assertion, and GetFunctionConfiguration returns the variables only to callers
+    with lambda:GetFunctionConfiguration on the function.
+
+  # --- CodeBuild -------------------------------------------------------------
+  # One blocker covers all five: no stock resource, and codebuild:ListProjects
+  # returns a list of NAMES only (botocore codebuild/ListProjects: projects is a
+  # list of string). Everything these checks read lives in BatchGetProjects,
+  # which requires the names argument, so no single no-argument list call can
+  # feed an api spec.
+  CKV_AWS_78: >-
+    No stock aws_codebuild_project resource; ListProjects returns only names and
+    the artifacts block is in BatchGetProjects, which requires `names`.
+  CKV_AWS_147: Same as CKV_AWS_78 — artifacts/encryption_key needs BatchGetProjects.
+  CKV_AWS_311: Same as CKV_AWS_78 — logs_config.s3_logs needs BatchGetProjects.
+  CKV_AWS_314: Same as CKV_AWS_78 — logs_config needs BatchGetProjects.
+  CKV_AWS_316: Same as CKV_AWS_78 — environment.privileged_mode needs BatchGetProjects.
+
+  # --- EKS, remainder --------------------------------------------------------
+  CKV_AWS_38: >-
+    A disjunction: PASS if endpoint_public_access is false OR public_access_cidrs
+    excludes 0.0.0.0/0. The schema has no not-includes matcher over a list, and
+    asserting endpoint_public_access == false instead would fail every cluster
+    whose public endpoint is correctly restricted to a corporate CIDR — a
+    different rule (CKV_AWS_39) wearing this one's id.
+  CKV_AWS_100: >-
+    aws_eks_node_group has no resource in the vendored pack at all, and
+    eks:ListNodegroups requires clusterName, so no no-argument list call
+    enumerates node groups.
+
+  # --- AMI -------------------------------------------------------------------
+  CKV_AWS_204: >-
+    aws_amis requires the `all_amis` parameter and so cannot enumerate. The
+    underlying ec2:DescribeImages takes no required arguments but without an
+    Owners filter returns every public AMI in the region, which the api spec
+    schema has no way to constrain.
+  CKV_AWS_205: >-
+    aws_ami_launch_permission has no deployed identity of its own; launch
+    permissions are read with DescribeImageAttribute(ImageId, Attribute), one
+    call per AMI, on top of the enumeration problem above.
+  CKV_AWS_235: >-
+    aws_ami_copy has no deployed identity: a copied AMI is indistinguishable from
+    any other AMI in DescribeImages, so there is nothing to scope the check to —
+    plus the aws_amis enumeration blocker.
+  CKV_AWS_236: Same as CKV_AWS_235 — a copy is not identifiable in the deployed state.
+
+  # --- SSM -------------------------------------------------------------------
+  CKV_AWS_112: >-
+    Parses the JSON/YAML CONTENT of the SSM-SessionManagerRunShell document for
+    inputs.kmsKeyId. DescribeDocument returns metadata only; the content comes
+    from GetDocument, and the assertion is a parse of that document rather than a
+    field.
+  CKV_AWS_113: >-
+    Same document-content parse as CKV_AWS_112, and a disjunction over four
+    inputs (s3BucketName+s3EncryptionEnabled OR cloudWatchLogGroupName+
+    cloudWatchEncryptionEnabled).
+  CKV_AWS_303: >-
+    Document sharing is read with DescribeDocumentPermission(Name,
+    PermissionType), a per-document call with required arguments that
+    aws_ssm_document does not make and neither schema can issue.
+
+  # --- Athena ----------------------------------------------------------------
+  CKV_AWS_77: >-
+    aws_athena_database has no stock resource, and athena:ListDatabases requires
+    CatalogName, so there is no account-wide enumeration. The Glue catalog is the
+    real backing store and its per-database encryption is a separate shape.
+
+  # --- DMS -------------------------------------------------------------------
+  # All three fail the same way: the DMS API returns a KmsKeyId whether or not a
+  # customer key was chosen, because the field defaults to the DMS service key.
+  # `not_empty` on it would pass every endpoint and instance in the account while
+  # reporting that CMK use had been verified.
+  CKV_AWS_212: >-
+    Terraform's kms_key_arn maps to the API's KmsKeyId (confirmed by
+    aws_dms_replication_instances' register_column(:kms_key_ids, field:
+    :kms_key_id)), but DMS populates it with the service default key when none is
+    given, so not_empty cannot discriminate a CMK and would always pass.
+  CKV_AWS_296: >-
+    Same non-discriminating KmsKeyId as CKV_AWS_212, plus a branch on
+    engine_name == "s3" that reads s3_settings.server_side_encryption_kms_key_id
+    instead — a conditional the schema cannot express.
+  CKV_AWS_298: >-
+    aws_dms_s3_endpoint has no stock resource of its own; it is the same
+    DescribeEndpoints row with engine_name "s3", and selecting those rows
+    requires a filter the schema has no field for.
+
+  # --- EBS / ElastiCache / load balancers -----------------------------------
+  CKV_AWS_106: >-
+    ec2:GetEbsEncryptionByDefault takes no arguments but returns a single boolean
+    for the account+region, not a collection. The api spec schema requires
+    collection/id, and the stock schema requires a plural to enumerate; this is a
+    third shape (an account-scoped scalar).
+  CKV_AWS_183: >-
+    aws_ebs_snapshot_copy has no deployed identity — DescribeSnapshots does not
+    distinguish a copied snapshot from an original — so there is nothing to scope
+    the check to.
+  CKV_AWS_196: >-
+    scan_resource_conf returns FAILED unconditionally: the rule is "no
+    aws_elasticache_security_group exists". Like CKV_AWS_273 this is an
+    empty-collection claim, which the per-asset render shape cannot make. (These
+    are EC2-Classic only, which AWS has retired.)
+  CKV_AWS_31: >-
+    A conjunction: transit_encryption_enabled AND (auth_token OR user_group_ids).
+    Asserting only transit_encryption_enabled would pass a group with encryption
+    but no authentication, which is precisely the state the rule exists to catch.
+  CKV_AWS_261: >-
+    Conditional on protocol: Checkov returns UNKNOWN for anything that is not
+    HTTP/HTTPS. Asserting health_check_path on every target group would fail
+    every TCP, TLS and UDP group, where HealthCheckPath is legitimately absent.
+  CKV_AWS_328: >-
+    desync_mitigation_mode is a load-balancer ATTRIBUTE
+    (routing.http.desync_mitigation_mode), returned by
+    DescribeLoadBalancerAttributes(LoadBalancerArn). aws_alb fetches it only
+    through the private alb_attributes method and exposes no reader for it, so
+    there is no property to name.
+
+  # --- Bedrock / Timestream / MemoryDB / Batch / Secrets / Global Accelerator -
+  CKV_AWS_373: >-
+    customerEncryptionKeyArn is not in the ListAgents summary (confirmed against
+    the botocore bedrock-agent model); it is only in GetAgent, which requires
+    agentId. No no-argument list call carries the field.
+  CKV_AWS_160: >-
+    timestream:ListDatabases returns KmsKeyId for every database, including ones
+    using the AWS-managed default key, so not_empty cannot discriminate a CMK.
+    Same class as the DMS checks.
+  CKV_AWS_210: >-
+    containerProperties.privileged is optional in the DescribeJobDefinitions
+    response, and an omitted member becomes NullResponse, which is not == false.
+    `equals false` would therefore fail every job definition that never set
+    privileged at all — the compliant majority. A negative assertion needs a
+    satisfies that treats absent as passing.
+  CKV_AWS_304: >-
+    The assertion is rotation_rules.automatically_after_days <= 90 (or a rate()
+    schedule under 90 days). The schema has greater_than but no less_than, and
+    the schedule_expression branch needs parsing.
+  CKV_AWS_75: >-
+    Flow logs are an accelerator ATTRIBUTE, read with
+    DescribeAcceleratorAttributes(AcceleratorArn) — a per-accelerator call.
+    ListAccelerators, the only no-argument list call, does not carry the field.

@@ -1,0 +1,712 @@
+# Drafted 2026-08-31 against tools/checkov_catalog.yml, tools/resource_map.yml,
+# tools/resource_map_derived.yml and tools/api_specs.yml as they stood at
+# 05:47 (resource_map.yml was being edited by a parallel session mid-pass).
+#
+# Population considered: every check NOT in either resource map, whose kind is
+# `value` or `negative`, and whose Terraform type has no stock inspec-aws
+# resource (89 checks at the time of the last re-scan).
+#
+# Every field below was read out of
+# ~/.venvs/checkov-3.3.16/lib/python3.12/site-packages/botocore/data/<svc>/*/service-2.json
+# in this session. Nothing is from memory.
+#
+# NOTE on `satisfies`: two entries use `not_equals` and `not_in_list`, which are
+# outside the five-value vocabulary given in the task but ARE implemented in
+# tools/render_controls.py:matcher_for (lines 626-630). A negative check with a
+# forbidden value cannot be expressed with equals/in_list without inverting the
+# check's meaning, so the renderer's real vocabulary is used and flagged here.
+
+api_specs:
+
+  # CKV_AWS_252. DescribeTrails takes no required arguments (botocore
+  # cloudtrail/DescribeTrailsRequest required=[]), returns trailList as a list of
+  # Trail STRUCTURES, and SnsTopicARN / SnsTopicName are both members of Trail on
+  # that list response — no per-trail GetTrail is needed.
+  #
+  # Caveat worth carrying into the note: includeShadowTrails defaults to true, so
+  # a multi-region trail is returned once per region and produces one row per
+  # region with the same id. The rows all answer the same way; the count is
+  # inflated, the verdict is not.
+  #
+  # This type has no stock resource under the Terraform name, but inspec-aws DOES
+  # ship aws_cloudtrail_trail/aws_cloudtrail_trails under a different name. That
+  # singular exposes kms_key_id, s3_bucket_name, cloud_watch_logs_* and friends
+  # via attr_reader — but NOT sns_topic_arn, which is why this goes through the
+  # API reader rather than a stock mapping.
+  aws_cloudtrail:
+    gem: aws-sdk-cloudtrail
+    client: Aws::CloudTrail::Client
+    list: describe_trails
+    collection: trail_list
+    id: name
+    arn: trail_arn
+    scope: regional
+    fields:
+      sns_topic_arn: sns_topic_arn          # botocore Trail.SnsTopicARN
+      sns_topic_name: sns_topic_name        # botocore Trail.SnsTopicName (deprecated by AWS)
+      kms_key_id: kms_key_id
+      is_multi_region_trail: is_multi_region_trail
+      log_file_validation_enabled: log_file_validation_enabled
+
+  # CKV_AWS_298. DescribeEndpoints takes no required arguments (botocore
+  # dms/DescribeEndpointsMessage required=[]) and returns Endpoints as a list of
+  # Endpoint structures. S3Settings is a member of Endpoint on the list response.
+  #
+  # DescribeEndpoints returns EVERY endpoint, not only S3 ones. That is safe here
+  # because a non-S3 endpoint omits S3Settings entirely, dig_path yields nil, and
+  # render_controls' nil filter drops nil rows for any satisfies other than
+  # not_empty/empty. The mapping below deliberately asserts encryption_mode
+  # (always populated on a real S3 endpoint) rather than the KMS key id (nil when
+  # the endpoint uses SSE_S3, which the nil filter would silently drop —
+  # silence-as-success).
+  aws_dms_s3_endpoint:
+    gem: aws-sdk-databasemigrationservice
+    client: Aws::DatabaseMigrationService::Client
+    list: describe_endpoints
+    collection: endpoints
+    id: endpoint_identifier
+    arn: endpoint_arn
+    scope: regional
+    fields:
+      engine_name: engine_name                                        # botocore Endpoint.EngineName
+      endpoint_type: endpoint_type                                    # botocore Endpoint.EndpointType
+      s3_encryption_mode: s3_settings.encryption_mode                 # botocore S3Settings.EncryptionMode
+      s3_kms_key_arn: s3_settings.server_side_encryption_kms_key_id   # botocore S3Settings.ServerSideEncryptionKmsKeyId
+
+  # CKV_AWS_329 and CKV_AWS_330. DescribeAccessPoints takes no required arguments
+  # (botocore efs/DescribeAccessPointsRequest required=[]; AccessPointId and
+  # FileSystemId are optional filters) and returns AccessPoints as a list of
+  # AccessPointDescription structures. PosixUser{Uid,Gid,SecondaryGids} and
+  # RootDirectory{Path,CreationInfo} are both members of that list item.
+  aws_efs_access_point:
+    gem: aws-sdk-efs
+    client: Aws::EFS::Client
+    list: describe_access_points
+    collection: access_points
+    id: access_point_id
+    arn: access_point_arn
+    scope: regional
+    fields:
+      file_system_id: file_system_id                  # botocore AccessPointDescription.FileSystemId
+      life_cycle_state: life_cycle_state              # botocore AccessPointDescription.LifeCycleState
+      root_directory_path: root_directory.path        # botocore RootDirectory.Path
+      posix_user_uid: posix_user.uid                  # botocore PosixUser.Uid
+      posix_user_gid: posix_user.gid                  # botocore PosixUser.Gid
+
+mappings:
+
+  # --- new specs -----------------------------------------------------------
+
+  CKV_AWS_252:
+    aws_cloudtrail:
+      reader: api
+      field: sns_topic_arn
+      satisfies: not_empty
+      note: >-
+        Checkov reads the Terraform argument `sns_topic_name`; the API member that
+        actually resolves is Trail.SnsTopicARN (Trail.SnsTopicName is present but
+        AWS documents it as deprecated and it is not reliably populated), confirmed
+        from botocore cloudtrail/DescribeTrails. TF-vs-API divergence: name -> ARN.
+        `not_empty` is correct here rather than merely convenient — a trail with no
+        SNS topic returns no SnsTopicARN at all, and nil is exactly the failing
+        state, which is why not_empty (which does NOT nil-filter) is used.
+        DescribeTrails defaults to includeShadowTrails=true, so a multi-region
+        trail yields one row per region; the rows agree, the count is inflated.
+
+  CKV_AWS_298:
+    aws_dms_s3_endpoint:
+      reader: api
+      field: s3_encryption_mode
+      satisfies: equals
+      value: "SSE_KMS"
+      note: >-
+        TF-vs-API divergence: Checkov inspects `kms_key_arn`; the API member is
+        S3Settings.ServerSideEncryptionKmsKeyId (botocore dms/S3Settings), and it
+        is nested one level below the endpoint, not on it. The mapping deliberately
+        does NOT assert that field. It is nil on an SSE_S3 endpoint, and for any
+        satisfies other than not_empty/empty render_controls drops nil rows, so
+        asserting it would make the exact failing population disappear rather than
+        fail. S3Settings.EncryptionMode is populated on every S3 endpoint, and DMS
+        requires ServerSideEncryptionKmsKeyId whenever EncryptionMode is SSE_KMS,
+        so SSE_KMS is equivalent to "a KMS key is in use". Non-S3 endpoints return
+        no S3Settings, so they nil-out and fall out of scope, which is right —
+        the Checkov check only applies to aws_dms_s3_endpoint.
+
+  CKV_AWS_329:
+    aws_efs_access_point:
+      reader: api
+      field: root_directory_path
+      satisfies: not_equals
+      value: "/"
+      note: >-
+        Checkov is a negative check with a single forbidden value ("/") and
+        missing_attribute_result=FAILED. `not_equals` is used because inverting it
+        into equals/in_list would require enumerating every acceptable path.
+        EFS always returns RootDirectory.Path — an access point created without a
+        root_directory block reports "/" rather than omitting the member — so the
+        nil filter that not_equals triggers should never fire in practice. If it
+        ever does, the row is dropped rather than failed; that is the one soft spot
+        in this mapping and it is stated rather than hidden.
+
+  CKV_AWS_330:
+    aws_efs_access_point:
+      reader: api
+      field: posix_user_gid
+      satisfies: not_empty
+      note: >-
+        Checkov inspects posix_user/[0]/gid with expected ANY_VALUE. PosixUser is
+        omitted from AccessPointDescription entirely when no user identity is
+        enforced, so the field is nil and nil is the failing state — which is why
+        not_empty (no nil filtering) is the right satisfies. Gid is a Long, and the
+        not_empty matcher guards with respond_to?(:empty?), so an Integer 0 passes
+        as "set" rather than raising or reading as unset.
+
+  # --- specs already in tools/api_specs.yml; mapping only ------------------
+  #
+  # These four need no api_specs change: the field they assert is already
+  # declared. Flagging one thing the reviewer should settle first — aws-sdk-docdb,
+  # aws-sdk-neptune, aws-sdk-dax, aws-sdk-route53domains and aws-sdk-bedrockagent
+  # all appear in tools/api_specs.yml but are NOT in the runtime gem list I was
+  # given. Either the list is incomplete or those five specs are already dead at
+  # exec. These mappings do not make that worse (aws_api_assets#client raises
+  # ArgumentError on LoadError, which rows_for records as an unreadable region),
+  # but they do depend on the answer.
+
+  CKV_AWS_182:
+    aws_docdb_cluster:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+      note: >-
+        Confirmed against botocore docdb/DescribeDBClusters -> DBCluster.KmsKeyId
+        (no TF/API divergence; DescribeDBClusters takes no required arguments).
+        DocumentDB returns KmsKeyId only when StorageEncrypted is true, so
+        not_empty does discriminate. It does NOT separate a customer-managed key
+        from the AWS-managed aws/rds key — and neither does Checkov, whose whole
+        assertion is that kms_key_id is set. Same basis as the shipped
+        CKV_AWS_266 and CKV_AWS_278 mappings.
+
+  CKV_AWS_280:
+    aws_neptune_cluster_snapshot:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+      note: >-
+        Confirmed against botocore neptune/DescribeDBClusterSnapshots ->
+        DBClusterSnapshot.KmsKeyId (no required arguments on the list call).
+        KmsKeyId is returned only for an encrypted snapshot, so not_empty is the
+        encrypted/not-encrypted discriminator, on the same basis as CKV_AWS_266.
+
+  CKV_AWS_347:
+    aws_neptune_cluster:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+      note: >-
+        TF-vs-API divergence: Checkov inspects `kms_key_arn`; the API member is
+        DBCluster.KmsKeyId (botocore neptune/DescribeDBClusters). The spec already
+        declares it under the API name. KmsKeyId is present only when
+        StorageEncrypted is true, so not_empty discriminates.
+
+  CKV_AWS_363:
+    aws_lambda_function:
+      reader: api
+      field: runtime
+      satisfies: not_in_list
+      value:
+        - dotnetcore3.1
+        - nodejs12.x
+        - python3.6
+        - python2.7
+        - dotnet5.0
+        - dotnetcore2.1
+        - ruby2.5
+        - nodejs10.x
+        - nodejs8.10
+        - nodejs4.3
+        - nodejs6.10
+        - dotnetcore1.0
+        - dotnetcore2.0
+        - nodejs4.3-edge
+        - nodejs
+        - java8
+        - python3.7
+        - go1.x
+        - provided
+        - ruby2.7
+        - nodejs14.x
+        - nodejs16.x
+        - python3.9
+        - dotnet7
+        - dotnet6
+      note: >-
+        Runtime IS on the ListFunctions response (botocore lambda/FunctionList ->
+        FunctionConfiguration.Runtime), so no GetFunction is needed. The forbidden
+        list is copied verbatim from checkov 3.3.16
+        DeprecatedLambdaRuntime.get_forbidden_values(); nodejs18.x and
+        provided.al2 are commented out in that source and are therefore NOT
+        included. `not_in_list` is outside the five-value vocabulary in the brief
+        but is implemented in matcher_for. Container-image functions declare no
+        Runtime member, so they nil-out and are dropped as out of scope, which
+        matches Checkov (it only inspects a declared `runtime`).
+
+metadata:
+
+  CKV_AWS_182:
+    severity: high
+    impact: 0.7
+    nist: [SC-28, "SC-28 (1)"]
+    nist_r4: [SC-28, "SC-28 (1)"]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      An unencrypted DocumentDB cluster stores its data and its automated backups
+      in plaintext on AWS-managed storage, and encryption cannot be turned on
+      after the cluster exists. Reading the deployed cluster is the only way to
+      know whether the storage that actually holds the data is encrypted, because
+      a cluster restored or created outside Terraform carries no record of it.
+
+  CKV_AWS_252:
+    severity: low
+    impact: 0.3
+    nist: [SI-4, AU-12]
+    nist_r4: [SI-4, AU-12]
+    cci: [CCI-002664, CCI-000172]
+    ksi: [KSI-MLA-LOG]
+    nist_source: agent-drafted
+    rationale: >-
+      Without an SNS topic on the trail, nothing announces that a new log file has
+      been delivered, so any detection built on CloudTrail has to poll the bucket
+      and finds out late. The deployed trail is what matters here: the topic
+      association can be removed with a single UpdateTrail call that leaves the
+      Terraform unchanged.
+
+  CKV_AWS_280:
+    severity: medium
+    impact: 0.5
+    nist: [SC-28, "SC-28 (1)"]
+    nist_r4: [SC-28, "SC-28 (1)"]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      A Neptune cluster snapshot holds the full graph and outlives the cluster it
+      came from. If the snapshot is unencrypted, the data survives in plaintext
+      after the cluster is deleted, and it can be shared or copied to another
+      region with nothing standing between the copy and its reader.
+
+  CKV_AWS_298:
+    severity: medium
+    impact: 0.5
+    nist: [SC-28, "SC-28 (1)"]
+    nist_r4: [SC-28, "SC-28 (1)"]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      A DMS S3 endpoint writes whole tables of migrated source data into a bucket.
+      Under SSE_S3 the objects are readable by anyone who can read the bucket;
+      under SSE_KMS reading them additionally requires a decrypt grant on the key,
+      so bucket access alone does not disclose the migrated records.
+
+  CKV_AWS_329:
+    severity: medium
+    impact: 0.5
+    nist: [AC-3, AC-6]
+    nist_r4: [AC-3, AC-6]
+    cci: [CCI-000213, CCI-002233]
+    ksi: [KSI-IAM-CTL]
+    nist_source: agent-drafted
+    rationale: >-
+      An access point whose root directory is "/" exposes the entire file system
+      to every client that mounts through it, which defeats the reason access
+      points exist. Because the root directory is fixed at creation, a deployed
+      access point pointing at "/" is a standing grant that no later Terraform
+      edit will narrow.
+
+  CKV_AWS_330:
+    severity: medium
+    impact: 0.5
+    nist: [AC-3, AC-6]
+    nist_r4: [AC-3, AC-6]
+    cci: [CCI-000213, CCI-002233]
+    ksi: [KSI-IAM-CTL]
+    nist_source: agent-drafted
+    rationale: >-
+      With no POSIX user enforced, the access point uses whatever uid and gid the
+      NFS client presents, so file ownership on the shared file system is decided
+      by the caller rather than by the account. Enforcing a uid and gid is what
+      makes per-workload separation on one EFS file system actually hold.
+
+  CKV_AWS_347:
+    severity: high
+    impact: 0.7
+    nist: [SC-28, "SC-28 (1)"]
+    nist_r4: [SC-28, "SC-28 (1)"]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      Neptune storage encryption can only be set when the cluster is created, so
+      an unencrypted cluster stays unencrypted for its whole life and every
+      snapshot taken from it inherits that. Checking the deployed cluster catches
+      the case where the encrypted definition was written after a cluster had
+      already been created without it.
+
+  CKV_AWS_363:
+    severity: medium
+    impact: 0.5
+    nist: [SI-2, "SI-2 (5)"]
+    nist_r4: [SI-2, "SI-2 (5)"]
+    cci: [CCI-001227, CCI-002605]
+    ksi: [KSI-CMT-VTD]
+    nist_source: agent-drafted
+    rationale: >-
+      A deprecated Lambda runtime stops receiving security patches for the
+      language runtime and the underlying OS packages, and AWS eventually blocks
+      updates and then invocations. The deployed runtime is the one that matters:
+      a function created before the runtime was deprecated keeps running on it
+      until someone changes it.
+
+fixes:
+
+  CKV_AWS_182:
+    aws_docdb_cluster:
+      terraform: |
+        resource "aws_kms_key" "docdb" {
+          description         = "DocumentDB cluster storage"
+          enable_key_rotation = true
+        }
+
+        resource "aws_docdb_cluster" "example" {
+          cluster_identifier        = "docdb-example"
+          engine                    = "docdb"
+          master_username           = "docdbadmin"
+          master_password           = var.docdb_master_password
+          backup_retention_period   = 7
+          skip_final_snapshot       = false
+          final_snapshot_identifier = "docdb-example-final"
+          storage_encrypted         = true
+          kms_key_id                = aws_kms_key.docdb.arn
+        }
+      cli: |
+        aws docdb create-db-cluster-snapshot --db-cluster-identifier docdb-example --db-cluster-snapshot-identifier docdb-example-snap
+        aws docdb copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier docdb-example-snap --target-db-cluster-snapshot-identifier docdb-example-snap-cmk --kms-key-id <key-arn>
+        aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier docdb-example-cmk --snapshot-identifier docdb-example-snap-cmk --engine docdb --kms-key-id <key-arn>
+      note: >-
+        There is no in-place fix. DocumentDB storage encryption is fixed at
+        cluster creation, so the path is snapshot, copy the snapshot under the
+        customer-managed key, restore into a new cluster, cut traffic over, then
+        delete the old cluster and the unencrypted snapshot.
+
+  CKV_AWS_252:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_sns_topic" "cloudtrail" {
+          name              = "cloudtrail-notifications"
+          kms_master_key_id = aws_kms_key.sns.id
+        }
+
+        data "aws_iam_policy_document" "cloudtrail_sns" {
+          statement {
+            sid     = "AllowCloudTrailPublish"
+            actions = ["SNS:Publish"]
+            effect  = "Allow"
+            principals {
+              type        = "Service"
+              identifiers = ["cloudtrail.amazonaws.com"]
+            }
+            resources = [aws_sns_topic.cloudtrail.arn]
+          }
+        }
+
+        resource "aws_sns_topic_policy" "cloudtrail" {
+          arn    = aws_sns_topic.cloudtrail.arn
+          policy = data.aws_iam_policy_document.cloudtrail_sns.json
+        }
+
+        resource "aws_cloudtrail" "example" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          sns_topic_name                = aws_sns_topic.cloudtrail.name
+          include_global_service_events = true
+          is_multi_region_trail         = true
+          enable_log_file_validation    = true
+          kms_key_id                    = aws_kms_key.cloudtrail.arn
+        }
+      cli: |
+        aws cloudtrail update-trail --name org-trail --sns-topic-name cloudtrail-notifications
+      note: >-
+        The topic policy must allow cloudtrail.amazonaws.com to SNS:Publish before
+        the trail is updated, or UpdateTrail fails with InsufficientSnsTopicPolicy.
+
+  CKV_AWS_280:
+    aws_neptune_cluster_snapshot:
+      terraform: |
+        resource "aws_kms_key" "neptune" {
+          description         = "Neptune cluster storage"
+          enable_key_rotation = true
+        }
+
+        resource "aws_neptune_cluster" "example" {
+          cluster_identifier        = "neptune-example"
+          engine                    = "neptune"
+          storage_encrypted         = true
+          kms_key_arn               = aws_kms_key.neptune.arn
+          skip_final_snapshot       = false
+          final_snapshot_identifier = "neptune-example-final"
+        }
+
+        resource "aws_neptune_cluster_snapshot" "example" {
+          db_cluster_identifier          = aws_neptune_cluster.example.id
+          db_cluster_snapshot_identifier = "neptune-example-snapshot"
+        }
+      cli: |
+        aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier neptune-example-snapshot --target-db-cluster-snapshot-identifier neptune-example-snapshot-cmk --kms-key-id <key-arn>
+        aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier neptune-example-snapshot
+      note: >-
+        aws_neptune_cluster_snapshot has no kms_key_id argument — a snapshot
+        inherits the key of the cluster it was taken from, so the Terraform fix is
+        on the cluster. An existing unencrypted snapshot cannot be encrypted in
+        place; copy it under the customer-managed key and delete the original.
+
+  CKV_AWS_298:
+    aws_dms_s3_endpoint:
+      terraform: |
+        resource "aws_kms_key" "dms" {
+          description         = "DMS S3 target encryption"
+          enable_key_rotation = true
+        }
+
+        resource "aws_dms_s3_endpoint" "target" {
+          endpoint_id             = "s3-target"
+          endpoint_type           = "target"
+          bucket_name             = aws_s3_bucket.dms.id
+          service_access_role_arn = aws_iam_role.dms.arn
+          encryption_mode         = "SSE_KMS"
+          kms_key_arn             = aws_kms_key.dms.arn
+        }
+      cli: |
+        aws dms modify-endpoint --endpoint-arn <endpoint-arn> --s3-settings BucketName=<bucket>,ServiceAccessRoleArn=<role-arn>,EncryptionMode=SSE_KMS,ServerSideEncryptionKmsKeyId=<key-arn>
+      note: >-
+        modify-endpoint replaces the whole S3Settings structure rather than
+        merging into it, so every setting the endpoint already has must be resent
+        in the same call or it is silently reset to its default.
+
+  CKV_AWS_329:
+    aws_efs_access_point:
+      terraform: |
+        resource "aws_efs_access_point" "example" {
+          file_system_id = aws_efs_file_system.example.id
+
+          root_directory {
+            path = "/app-data"
+
+            creation_info {
+              owner_uid   = 1000
+              owner_gid   = 1000
+              permissions = "0750"
+            }
+          }
+
+          posix_user {
+            uid = 1000
+            gid = 1000
+          }
+        }
+      cli: |
+        aws efs create-access-point --file-system-id <fs-id> --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}' --posix-user Uid=1000,Gid=1000
+        aws efs delete-access-point --access-point-id <old-access-point-id>
+      note: >-
+        There is no in-place fix. An access point's root directory is immutable,
+        so the fix is a replacement access point plus repointing every mount
+        (ECS volume configuration, EKS PV, or /etc/fstab) at the new id before the
+        old one is deleted.
+
+  CKV_AWS_330:
+    aws_efs_access_point:
+      terraform: |
+        resource "aws_efs_access_point" "example" {
+          file_system_id = aws_efs_file_system.example.id
+
+          posix_user {
+            uid            = 1000
+            gid            = 1000
+            secondary_gids = [1001]
+          }
+
+          root_directory {
+            path = "/app-data"
+
+            creation_info {
+              owner_uid   = 1000
+              owner_gid   = 1000
+              permissions = "0750"
+            }
+          }
+        }
+      cli: |
+        aws efs create-access-point --file-system-id <fs-id> --posix-user Uid=1000,Gid=1000 --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}'
+        aws efs delete-access-point --access-point-id <old-access-point-id>
+      note: >-
+        There is no in-place fix. PosixUser is fixed at creation, so enforcing an
+        identity on an existing access point means creating a replacement and
+        repointing the mounts at it.
+
+  CKV_AWS_347:
+    aws_neptune_cluster:
+      terraform: |
+        resource "aws_kms_key" "neptune" {
+          description         = "Neptune cluster storage"
+          enable_key_rotation = true
+        }
+
+        resource "aws_neptune_cluster" "example" {
+          cluster_identifier                  = "neptune-example"
+          engine                              = "neptune"
+          storage_encrypted                   = true
+          kms_key_arn                         = aws_kms_key.neptune.arn
+          iam_database_authentication_enabled = true
+          backup_retention_period             = 7
+          skip_final_snapshot                 = false
+          final_snapshot_identifier           = "neptune-example-final"
+        }
+      cli: |
+        aws neptune create-db-cluster-snapshot --db-cluster-identifier neptune-example --db-cluster-snapshot-identifier neptune-example-snap
+        aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier neptune-example-cmk --snapshot-identifier neptune-example-snap --engine neptune --kms-key-id <key-arn>
+      note: >-
+        There is no in-place fix. Neptune storage encryption is set at cluster
+        creation only, so the path is snapshot, restore into a new encrypted
+        cluster, repoint the application at the new endpoint, then delete the old
+        cluster and the unencrypted snapshot.
+
+  CKV_AWS_363:
+    aws_lambda_function:
+      terraform: |
+        resource "aws_lambda_function" "example" {
+          function_name = "example"
+          role          = aws_iam_role.lambda.arn
+          handler       = "index.handler"
+          runtime       = "python3.12"
+          filename      = "function.zip"
+          architectures = ["arm64"]
+
+          tracing_config {
+            mode = "Active"
+          }
+        }
+      cli: |
+        aws lambda update-function-configuration --function-name example --runtime python3.12
+      note: >-
+        A runtime bump is a code-compatibility change, not a config toggle: test
+        the handler and its dependencies on the target runtime before rolling it
+        out. Functions packaged as container images declare no runtime and are out
+        of scope for this rule.
+
+skipped:
+
+  # --- the gem is not in the runtime image (rule 5) -------------------------
+
+  CKV_AWS_22: "aws_sagemaker_notebook_instance — aws-sdk-sagemaker is not in the runtime image gem list. Enumeration would be Aws::SageMaker::Client#list_notebook_instances (no required args), but KmsKeyId is not on NotebookInstanceSummary; it needs DescribeNotebookInstance."
+  CKV_AWS_122: "aws_sagemaker_notebook_instance — aws-sdk-sagemaker absent. DirectInternetAccess is not on ListNotebookInstances' summary either; it needs DescribeNotebookInstance."
+  CKV_AWS_187: "aws_sagemaker_domain and aws_sagemaker_notebook_instance — aws-sdk-sagemaker absent. Both would additionally need DescribeDomain / DescribeNotebookInstance for KmsKeyId."
+  CKV_AWS_306: "aws_sagemaker_notebook_instance — aws-sdk-sagemaker absent; SubnetId needs DescribeNotebookInstance."
+  CKV_AWS_307: "aws_sagemaker_notebook_instance — aws-sdk-sagemaker absent; RootAccess needs DescribeNotebookInstance."
+  CKV_AWS_371: "aws_sagemaker_notebook_instance — aws-sdk-sagemaker absent; InstanceMetadataServiceConfiguration needs DescribeNotebookInstance."
+  CKV_AWS_98: "aws_sagemaker_endpoint_configuration — aws-sdk-sagemaker absent; KmsKeyId needs DescribeEndpointConfig, not ListEndpointConfigs."
+  CKV_AWS_367: "aws_sagemaker_data_quality_job_definition — aws-sdk-sagemaker absent; output KMS config needs DescribeDataQualityJobDefinition."
+  CKV_AWS_368: "aws_sagemaker_data_quality_job_definition — aws-sdk-sagemaker absent; VolumeKmsKeyId needs DescribeDataQualityJobDefinition."
+  CKV_AWS_369: "aws_sagemaker_data_quality_job_definition — aws-sdk-sagemaker absent; NetworkConfig needs DescribeDataQualityJobDefinition."
+  CKV_AWS_370: "aws_sagemaker_model — aws-sdk-sagemaker absent; EnableNetworkIsolation needs DescribeModel, not ListModels."
+  CKV_AWS_372: "aws_sagemaker_flow_definition — aws-sdk-sagemaker absent; OutputConfig needs DescribeFlowDefinition."
+  CKV_AWS_170: "aws_qldb_ledger — aws-sdk-qldb is not in the runtime image gem list (ListLedgers exists and takes no args, but the gem does not)."
+  CKV_AWS_172: "aws_qldb_ledger — aws-sdk-qldb absent; DeletionProtection also needs DescribeLedger rather than ListLedgers."
+  CKV_AWS_177: "aws_kinesis_video_stream — aws-sdk-kinesisvideo is not in the runtime image gem list."
+  CKV_AWS_178: "aws_fsx_ontap_file_system — aws-sdk-fsx is not in the runtime image gem list."
+  CKV_AWS_179: "aws_fsx_windows_file_system — aws-sdk-fsx absent."
+  CKV_AWS_190: "aws_fsx_lustre_file_system — aws-sdk-fsx absent."
+  CKV_AWS_203: "aws_fsx_openzfs_file_system — aws-sdk-fsx absent."
+  CKV_AWS_180: "aws_imagebuilder_component — aws-sdk-imagebuilder is not in the runtime image gem list; KmsKeyId would also need GetComponent."
+  CKV_AWS_199: "aws_imagebuilder_distribution_configuration — aws-sdk-imagebuilder absent; the AMI distribution KMS key needs GetDistributionConfiguration."
+  CKV_AWS_193: "aws_appsync_graphql_api — aws-sdk-appsync is not in the runtime image gem list."
+  CKV_AWS_194: "aws_appsync_graphql_api — aws-sdk-appsync absent."
+  CKV_AWS_214: "aws_appsync_api_cache — aws-sdk-appsync absent, and the cache is read with GetApiCache(apiId), which needs a parent id."
+  CKV_AWS_215: "aws_appsync_api_cache — aws-sdk-appsync absent; GetApiCache(apiId) needs a parent id."
+  CKV_AWS_218: "aws_cloudsearch_domain — aws-sdk-cloudsearch is not in the runtime image gem list; TLS policy also needs DescribeDomainEndpointOptions(DomainName)."
+  CKV_AWS_220: "aws_cloudsearch_domain — aws-sdk-cloudsearch absent; EnforceHTTPS needs DescribeDomainEndpointOptions(DomainName)."
+  CKV_AWS_221: "aws_codeartifact_domain — aws-sdk-codeartifact is not in the runtime image gem list; EncryptionKey is not on the ListDomains summary and needs DescribeDomain."
+  CKV_AWS_242: "aws_mwaa_environment — aws-sdk-mwaa is not in the runtime image gem list; ListEnvironments also returns names as plain strings and logging config needs GetEnvironment."
+  CKV_AWS_243: "aws_mwaa_environment — aws-sdk-mwaa absent; same string-list and GetEnvironment problems as CKV_AWS_242."
+  CKV_AWS_244: "aws_mwaa_environment — aws-sdk-mwaa absent; same as CKV_AWS_242."
+  CKV_AWS_262: "aws_kendra_index — aws-sdk-kendra is not in the runtime image gem list; ServerSideEncryptionConfiguration also needs DescribeIndex."
+  CKV_AWS_263: "aws_appflow_flow — aws-sdk-appflow is not in the runtime image gem list; KmsArn needs DescribeFlow."
+  CKV_AWS_264: "aws_appflow_connector_profile — aws-sdk-appflow absent."
+  CKV_AWS_267: "aws_comprehend_entity_recognizer — aws-sdk-comprehend is not in the runtime image gem list."
+  CKV_AWS_268: "aws_comprehend_entity_recognizer — aws-sdk-comprehend absent."
+  CKV_AWS_269: "aws_connect_instance_storage_config — aws-sdk-connect is not in the runtime image gem list, and ListInstanceStorageConfigs requires InstanceId and ResourceType."
+  CKV_AWS_270: "aws_connect_instance_storage_config — aws-sdk-connect absent; ListInstanceStorageConfigs requires InstanceId and ResourceType."
+  CKV_AWS_282: "aws_redshiftserverless_namespace — aws-sdk-redshiftserverless is not in the runtime image gem list (aws-sdk-redshift is a different service and has no ListNamespaces)."
+  CKV_AWS_295: "aws_datasync_location_object_storage — aws-sdk-datasync is not in the runtime image gem list, and DescribeLocationObjectStorage never returns SecretKey, so the deployed state cannot answer this check at all."
+  CKV_AWS_297: "aws_scheduler_schedule — aws-sdk-scheduler is not in the runtime image gem list; aws-sdk-eventbridge is the Events API and has no ListSchedules. KmsKeyArn also needs GetSchedule(Name, GroupName)."
+  CKV_AWS_311: "aws_codebuild_project — aws-sdk-codebuild is not in the runtime image gem list; ListProjects also returns names as plain strings and logsConfig needs BatchGetProjects."
+  CKV_AWS_316: "aws_codebuild_project — aws-sdk-codebuild absent; same string-list and BatchGetProjects problems as CKV_AWS_311."
+  CKV_AWS_75: "aws_globalaccelerator_accelerator — aws-sdk-globalaccelerator is not in the runtime image gem list; FlowLogsEnabled also needs DescribeAcceleratorAttributes(AcceleratorArn)."
+  CKV_AWS_365: "aws_ses_configuration_set — the delivery-options TlsPolicy exists only in SES v2 (GetConfigurationSet), and aws-sdk-sesv2 is not in the runtime image gem list. Aws::SES#list_configuration_sets returns ConfigurationSet structures carrying only Name."
+  CKV_AWS_373: "aws_bedrockagent_agent — CustomerEncryptionKeyArn is not on ListAgents' AgentSummary and needs GetAgent(agentId). Separately, aws-sdk-bedrockagent is not in the runtime image gem list even though tools/api_specs.yml already declares it."
+
+  # --- the list operation needs a parent id (rule 1) ------------------------
+
+  CKV_AWS_225: "aws_api_gateway_method_settings — method settings are read with apigateway GetStage, which requires restApiId and stageName (botocore apigateway/GetStageRequest required=['restApiId','stageName']). There is no account-wide list of method settings."
+  CKV_AWS_276: "aws_api_gateway_method_settings — same as CKV_AWS_225: GetStage requires restApiId and stageName."
+  CKV_AWS_308: "aws_api_gateway_method_settings — same as CKV_AWS_225: GetStage requires restApiId and stageName."
+  CKV_AWS_258: "aws_lambda_function_url — lambda ListFunctionUrlConfigs requires FunctionName (botocore required=['FunctionName']), so it cannot enumerate an account."
+  CKV_AWS_309: "aws_apigatewayv2_route — apigatewayv2 GetRoutes requires ApiId (botocore required=['ApiId'])."
+  CKV_AWS_76: "aws_apigatewayv2_stage — apigatewayv2 GetStages requires ApiId (botocore required=['ApiId']). The check's other type, aws_api_gateway_stage, does have a stock resource and should be mapped that way instead."
+  CKV_AWS_77: "aws_athena_database — athena ListDatabases requires CatalogName (botocore required=['CatalogName']), and the Database structure it returns carries only Name, Description and Parameters — no encryption configuration."
+  CKV_AWS_53: "aws_s3_bucket_public_access_block — s3 GetPublicAccessBlock requires Bucket (botocore required=['Bucket']). The stock route is aws_s3_bucket#prevent_public_access?, but that predicate ANDs all four settings, so it cannot answer block_public_acls on its own."
+  CKV_AWS_54: "aws_s3_bucket_public_access_block — GetPublicAccessBlock requires Bucket; aws_s3_bucket#prevent_public_access? cannot isolate block_public_policy."
+  CKV_AWS_55: "aws_s3_bucket_public_access_block — GetPublicAccessBlock requires Bucket; aws_s3_bucket#prevent_public_access? cannot isolate ignore_public_acls."
+  CKV_AWS_56: "aws_s3_bucket_public_access_block — GetPublicAccessBlock requires Bucket; aws_s3_bucket#prevent_public_access? cannot isolate restrict_public_buckets."
+  CKV_AWS_328: "aws_lb — desync_mitigation_mode is a load balancer ATTRIBUTE, read with elbv2 DescribeLoadBalancerAttributes, which requires LoadBalancerArn (botocore required=['LoadBalancerArn']). The check also covers aws_alb and aws_elb, which do have stock resources."
+  CKV_AWS_40: "aws_iam_policy_attachment, aws_iam_user_policy, aws_iam_user_policy_attachment — every call that answers this needs a parent id: ListEntitiesForPolicy requires PolicyArn, ListUserPolicies and ListAttachedUserPolicies both require UserName. IAM ListPolicies is argument-free but its Policy structure reports only AttachmentCount, not who is attached."
+
+  # --- the collection is a list of plain strings (rule 2) -------------------
+
+  CKV_AWS_271: "aws_dynamodb_table_replica — dynamodb ListTables returns TableNames as plain strings, which the reader's item.to_h would raise on. The replica KMS key also needs DescribeTable(TableName) anyway."
+
+  # --- the field is not on the list response (rule 3) -----------------------
+
+  CKV_AWS_115: "aws_lambda_function — ReservedConcurrentExecutions is not a member of FunctionConfiguration on ListFunctions (confirmed in botocore lambda/FunctionList). It needs GetFunctionConcurrency(FunctionName) or GetFunction(FunctionName).Concurrency."
+  CKV_AWS_159: "aws_athena_workgroup — ListWorkGroups returns WorkGroupSummary{Name, State, Description, CreationTime, EngineVersion, IdentityCenterApplicationArn}; the result-configuration encryption option needs GetWorkGroup(WorkGroup). (This check was already removed once from resource_map_derived.yml for a related reason.)"
+  CKV_AWS_219: "aws_codepipeline — ListPipelines returns PipelineSummary{name, version, pipelineType, executionMode, created, updated}; the artifact store's encryption key needs GetPipeline(name)."
+  CKV_AWS_234: "aws_acm_certificate — CertificateSummary on ListCertificates has no Options member (confirmed in botocore acm/CertificateSummaryList); CertificateTransparencyLoggingPreference needs DescribeCertificate(CertificateArn)."
+  CKV_AWS_294: "aws_cloudtrail_event_data_store — ListEventDataStores returns EventDataStore{EventDataStoreArn, Name, TerminationProtectionEnabled, Status, AdvancedEventSelectors, MultiRegionEnabled, OrganizationEnabled, RetentionPeriod, CreatedTimestamp, UpdatedTimestamp}. There is no KmsKeyId; it needs GetEventDataStore(EventDataStore)."
+  CKV_AWS_43: "aws_kinesis_stream — ListStreams' StreamSummary carries only StreamName, StreamARN, StreamStatus, StreamModeDetails and StreamCreationTimestamp. EncryptionType needs DescribeStreamSummary(StreamName)."
+  CKV_AWS_185: "aws_kinesis_stream — same as CKV_AWS_43: KeyId is not on StreamSummary and needs DescribeStreamSummary(StreamName)."
+  CKV_AWS_247: "aws_elasticsearch_domain and aws_opensearch_domain — es ListDomainNames returns DomainInfo{DomainName, EngineType} only; EncryptionAtRestOptions needs DescribeElasticsearchDomains, which requires DomainNames. aws-sdk-opensearchservice is also not in the runtime image gem list."
+  CKV_AWS_84: "aws_elasticsearch_domain and aws_opensearch_domain — same as CKV_AWS_247: LogPublishingOptions needs DescribeElasticsearchDomains(DomainNames), which the list-only reader cannot supply."
+
+  # --- the response is one object, not a collection -------------------------
+
+  CKV_AWS_106: "aws_ebs_encryption_by_default — ec2 GetEbsEncryptionByDefault returns a single boolean member, not a list of structures. Array(true).each would hand the reader a Boolean and item.to_h would raise. This belongs on the reader: singleton path (render_singleton), not the API reader — but inspec-aws ships no matching singular resource for it either."
+  CKV_AWS_390: "aws_emr_block_public_access_configuration — emr GetBlockPublicAccessConfiguration returns one BlockPublicAccessConfiguration structure, not a collection. Array() on an Aws::Structure yields its member VALUES, and to_h on those raises. Needs the singleton path plus a resource that does not exist in the pack."
+
+  # --- the list call enumerates far more than the check applies to ----------
+
+  CKV_AWS_235: "aws_ami_copy — ec2 DescribeImages takes no required arguments, but with no Owners filter it returns every public AMI in the region (tens of thousands). The declarative spec cannot pass owners=['self'], and nothing on an Image distinguishes a copy from an original."
+  CKV_AWS_236: "aws_ami_copy — same as CKV_AWS_235: DescribeImages without Owners is unbounded and unfilterable from the spec."
+  CKV_AWS_183: "aws_ebs_snapshot_copy — ec2 DescribeSnapshots without OwnerIds returns every snapshot the caller can see, including all public ones. The spec cannot pass owner-ids, and Snapshot carries nothing that marks it as a copy."
+  CKV_AWS_245: "aws_db_instance_automated_backups_replication — rds DescribeDBInstanceAutomatedBackups takes no required arguments and DBInstanceAutomatedBackup.KmsKeyId is on the list response, but the call returns EVERY automated backup in the region, not only cross-region replications. Distinguishing one means comparing the item's Region to the calling region, which the spec cannot express, so the control would fail every default-key automated backup in the account."
+  CKV_AWS_246: "aws_rds_cluster_activity_stream — there is no list call for activity streams; the state lives on DBCluster.ActivityStreamKmsKeyId (rds DescribeDBClusters). Enumerating that returns every Aurora cluster, and not_empty on ActivityStreamKmsKeyId would fail every cluster that has no activity stream at all. Needs a reader that can filter on ActivityStreamStatus."
+  CKV_AWS_181: "aws_s3_object_copy — a copy is an operation, not a resource. There is no AWS API that enumerates past CopyObject calls, so no deployed state answers this check."
+
+  # --- the field is always populated, so the assertion would be vacuous -----
+
+  CKV_AWS_160: "aws_timestreamwrite_database — timestream-write ListDatabases is argument-free and Database.KmsKeyId is on the list response, but Timestream always encrypts and always reports a KmsKeyId, using an AWS-managed key when none was supplied. not_empty would therefore pass on every database in every account: a green control that assesses nothing. Separating a customer-managed key needs kms:DescribeKey -> KeyMetadata.KeyManager, a second call the declarative reader cannot make."
+  CKV_AWS_281: "aws_redshift_snapshot_copy_grant — redshift DescribeSnapshotCopyGrants is argument-free and SnapshotCopyGrant.KmsKeyId is on the list response, but a grant exists only in reference to a key, so KmsKeyId is never empty (it names the destination region's default key when Terraform omitted kms_key_id). not_empty would pass unconditionally. Same KeyManager problem as CKV_AWS_160."
+
+  # --- a Terraform meta-argument with no deployed counterpart ---------------
+
+  CKV_AWS_233: "aws_acm_certificate — lifecycle.create_before_destroy is a Terraform meta-argument describing how the provider sequences a replacement. It has no representation in the AWS API and cannot be observed on a deployed certificate."
+  CKV_AWS_237: "aws_api_gateway_rest_api — lifecycle.create_before_destroy is a Terraform meta-argument with no deployed counterpart, same as CKV_AWS_233."
