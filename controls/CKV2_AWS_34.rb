@@ -2,30 +2,57 @@
 #
 # Rule:        CKV2_AWS_34 (checkov 3.3.16)
 # Applies to:  aws_ssm_parameter
-# Status:      PLANNED — no deployed-asset reader exists for aws_ssm_parameter yet.
+# Read with:   aws_ssm_parameters -> aws_ssm_parameter (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_34'] || []
 
 control 'CKV2_AWS_34' do
-  impact 0.0
   title 'AWS SSM Parameter should be Encrypted'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_ssm_parameter in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_ssm_parameter resources that actually exist, read through the
+    stock inspec-aws aws_ssm_parameter resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A String parameter is returned in plaintext to anyone holding
+    ssm:GetParameter, and its value appears in CloudTrail-visible API
+    responses and in any console listing. SecureString moves the value
+    behind a KMS key, so reading it requires a second, separately auditable
+    authorisation.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: AWS SSM Parameter should be Encrypted
+    Checkov looks for: an SSM parameter whose type is SecureString, so its
+    value is encrypted with KMS rather than stored and returned in clear
+    text
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter
+    Terraform — aws_ssm_parameter:
+
+      resource "aws_ssm_parameter" "db_password" {
+        name   = "/app/prod/db_password"
+        type   = "SecureString"
+        key_id = aws_kms_key.params.arn
+        value  = var.db_password
+      }
+
+    Out of band — aws_ssm_parameter:
+
+      aws ssm put-parameter --name <name> --type SecureString --key-id <key-arn> --value <value> --overwrite
+
+    Note (aws_ssm_parameter): A parameter's type cannot be changed in place by
+    Terraform without replacement, and the value was already exposed as
+    plaintext, so treat the existing value as compromised and rotate it rather
+    than re-storing it encrypted. Give key_id a customer-managed key: the
+    default alias/aws/ssm key cannot carry a key policy that limits who may
+    decrypt.
   FIX
 
   tag checkov_id:            'CKV2_AWS_34'
@@ -34,9 +61,56 @@ control 'CKV2_AWS_34' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_ssm_parameter]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ssm_parameter'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_34 — no deployed-asset reader for aws_ssm_parameter" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_ssm_parameters(aws_region: region).names.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_ssm_parameter', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_ssm_parameter enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_ssm_parameter in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_ssm_parameter(name: id, aws_region: region) do
+      its('type') { should eq 'SecureString' }
+    end
   end
 end

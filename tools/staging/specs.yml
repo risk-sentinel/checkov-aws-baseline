@@ -1,0 +1,647 @@
+# Slice: specs — checks needing a NEW declarative api_spec (or a mapping onto a
+# live one). Drafted 2026-08-31.
+#
+# Every API field below was read out of
+#   ~/.venvs/checkov-3.3.16/lib/python3.12/site-packages/botocore/data/<svc>/*/service-2.json.gz
+# in this session, and every Checkov assertion out of
+#   .../site-packages/checkov/terraform/checks/resource/aws/<Check>.py
+# Nothing here is from memory.
+#
+# Ruby member names are NOT transliterated from the botocore member names. Each
+# one was read back out of a stubbed client call against the gem the image ships
+# (aws-sdk-cloudtrail 1.123.0, aws-sdk-efs 1.111.0,
+# aws-sdk-databasemigrationservice 1.80.0), because the acronym rule is the part
+# that goes wrong quietly: SnsTopicARN -> sns_topic_arn is right, but nothing in
+# the model says so. The nested paths (s3_settings.encryption_mode,
+# root_directory.path, posix_user.gid) were exercised through the same
+# `dig_path` the reader uses, on a row where the parent structure is present and
+# on a row where it is absent.
+#
+# Divergence from the source proposal (tools/proposals/specs.yml):
+#
+#   * The proposal treats aws_docdb_cluster, aws_neptune_cluster and
+#     aws_neptune_cluster_snapshot as "specs already in tools/api_specs.yml,
+#     mapping only". They are NOT. The header of api_specs.yml records that they
+#     were REMOVED because aws-sdk-docdb and aws-sdk-neptune are absent from the
+#     auditor image, and image_gems.txt confirms both are still absent. Those
+#     three checks (CKV_AWS_182, CKV_AWS_280, CKV_AWS_347) are therefore skipped
+#     here rather than mapped, per the "gem must be in image_gems.txt" rule.
+#
+#     The missing gem is only the FIRST of two blockers, and it is not the one
+#     that decides the question. AWS's own model says neptune's
+#     DescribeDBClusters "can also return information for Amazon RDS clusters and
+#     Amazon DocDB clusters", and docdb's says the same and tells the caller to
+#     pass filterName=engine,Values=docdb. The api-spec schema cannot pass a
+#     filter: aws_api_assets#collect invokes the list operation with NO
+#     arguments, and `fields:` extracts values, it does not restrict rows. So
+#     adding the gem does not make these three mappable — it turns them from
+#     unrunnable into wrong, which is the same defect that made the aws-sdk-rds
+#     route unusable. See the individual skip reasons.
+#
+#   * CKV_AWS_298's proposed `equals: "SSE_KMS"` is not confirmable. botocore's
+#     dms model contradicts itself: shape EncryptionModeValue enumerates
+#     ["sse-s3", "sse-kms"] while the documentation on S3Settings.EncryptionMode
+#     and the CLI example on S3Settings.ServerSideEncryptionKmsKeyId, in the same
+#     file, both write SSE_S3 / SSE_KMS. `equals` on either spelling would fail
+#     every compliant endpoint if the other is what AWS returns, so `matches`
+#     with a pattern that accepts both is used instead. That is not a guess: it
+#     is the only assertion both readings of the model satisfy.
+#
+# Adversarial review pass, same day, changed the following on top of the above:
+#
+#   * All three skip reasons said the field was "confirmed for when the gem
+#     lands", which sets the next pass up to merge them the day
+#     container-build-sign#283 closes. Rewritten to name the engine-mixing
+#     blocker, and to correct a stale instruction: aws_neptune_cluster and
+#     aws_docdb_cluster are ALREADY parked in tools/api_specs_pending_gems.yml
+#     (what they lack is kms_key_id in `fields`), and aws_neptune_cluster_snapshot
+#     is not parked at all.
+#   * Dropped sns_topic_name from the aws_cloudtrail spec. botocore's member
+#     documentation for it reads, in full, "This field is no longer in use. Use
+#     SnsTopicARN." Declaring it invited a later pass to assert a retired field.
+#   * CKV_AWS_329's divergence relabelled PARTIAL — the greppable convention this
+#     repo already uses for the identical shape on CKV_AWS_121 — and its appeal
+#     to unquoted AWS documentation replaced with what botocore does and does not
+#     actually say.
+
+api_specs:
+
+  # CKV_AWS_252.
+  # DescribeTrails: DescribeTrailsRequest has required=None and members
+  # [trailNameList, includeShadowTrails], so it enumerates an account with no
+  # arguments. DescribeTrailsResponse has one member, trailList (shape
+  # TrailList), whose items are Trail structures.
+  # Trail members confirmed: Name, S3BucketName, S3KeyPrefix, SnsTopicName,
+  # SnsTopicARN, IncludeGlobalServiceEvents, IsMultiRegionTrail, HomeRegion,
+  # TrailARN, LogFileValidationEnabled, CloudWatchLogsLogGroupArn,
+  # CloudWatchLogsRoleArn, KmsKeyId, HasCustomEventSelectors,
+  # HasInsightSelectors, IsOrganizationTrail.
+  #
+  # Ruby member naming is confirmed twice over, not inferred. The vendored
+  # aws_cloudtrail_trail.rb reads `@trail[:trail_arn]` for TrailARN and the
+  # plural reads `cloudtrail[:name]` for Name; and a stubbed
+  # Aws::CloudTrail::Client#describe_trails against the gem the image ships
+  # returns the row keyed :sns_topic_arn, :trail_arn, :name. The acronym rule is
+  # exactly what a transliteration would get wrong, so it was executed rather
+  # than reasoned about.
+  #
+  # Trail.SnsTopicName is deliberately NOT declared as a field. Its botocore
+  # documentation reads, in full: "This field is no longer in use. Use
+  # SnsTopicARN." A declared field costs nothing to carry but is an invitation to
+  # assert, and asserting a member AWS has retired is a control that stops
+  # answering without saying so.
+  #
+  # Why this is not a stock mapping: the vendored singular aws_cloudtrail_trail
+  # exposes only cloud_watch_logs_log_group_arn, cloud_watch_logs_role_arn,
+  # home_region, trail_name, kms_key_id, s3_bucket_name, s3_key_prefix,
+  # trail_arn, is_multi_region_trail, log_file_validation_enabled and
+  # is_organization_trail. There is no sns_topic_arn reader, so the stock shape
+  # cannot answer this check at all.
+  #
+  # scope is regional, not global: a single-region trail exists only in its own
+  # region and a global enumeration would miss it. The cost is that
+  # includeShadowTrails defaults to true, so a multi-region or organization
+  # trail is returned once per region. Every row carries the same verdict and a
+  # distinct describe title (id + region), so the count is inflated and the
+  # answer is not.
+  aws_cloudtrail:
+    gem: aws-sdk-cloudtrail            # present in tools/image_gems.txt
+    client: Aws::CloudTrail::Client
+    list: describe_trails
+    collection: trail_list             # DescribeTrailsResponse.trailList
+    id: name                           # Trail.Name
+    arn: trail_arn                     # Trail.TrailARN
+    scope: regional
+    fields:
+      sns_topic_arn: sns_topic_arn                            # Trail.SnsTopicARN
+      kms_key_id: kms_key_id                                  # Trail.KmsKeyId
+      is_multi_region_trail: is_multi_region_trail            # Trail.IsMultiRegionTrail
+      log_file_validation_enabled: log_file_validation_enabled  # Trail.LogFileValidationEnabled
+
+  # CKV_AWS_298.
+  # DescribeEndpoints: DescribeEndpointsMessage has required=None and members
+  # [Filters, MaxRecords, Marker]. DescribeEndpointsResponse members are
+  # [Marker, Endpoints]; Endpoints is shape EndpointList of Endpoint structures.
+  # Endpoint members confirmed to include EndpointIdentifier, EndpointType,
+  # EngineName, EndpointArn, KmsKeyId and S3Settings.
+  # S3Settings members confirmed to include EncryptionMode (shape
+  # EncryptionModeValue) and ServerSideEncryptionKmsKeyId.
+  #
+  # The list call returns EVERY endpoint in the region regardless of engine, and
+  # the declarative spec has no way to filter on EngineName. That constrains
+  # which field the mapping may assert — see the note on the mapping.
+  aws_dms_s3_endpoint:
+    gem: aws-sdk-databasemigrationservice   # present in tools/image_gems.txt
+    client: Aws::DatabaseMigrationService::Client
+    list: describe_endpoints
+    collection: endpoints                   # DescribeEndpointsResponse.Endpoints
+    id: endpoint_identifier                 # Endpoint.EndpointIdentifier
+    arn: endpoint_arn                       # Endpoint.EndpointArn
+    scope: regional
+    fields:
+      engine_name: engine_name                                       # Endpoint.EngineName
+      endpoint_type: endpoint_type                                   # Endpoint.EndpointType
+      s3_encryption_mode: s3_settings.encryption_mode                # S3Settings.EncryptionMode
+      s3_kms_key_arn: s3_settings.server_side_encryption_kms_key_id  # S3Settings.ServerSideEncryptionKmsKeyId
+
+  # CKV_AWS_329 and CKV_AWS_330.
+  # DescribeAccessPoints: DescribeAccessPointsRequest has required=None and
+  # members [MaxResults, NextToken, AccessPointId, FileSystemId] — the two ids
+  # are optional filters, not required parents, so this enumerates an account.
+  # DescribeAccessPointsResponse members are [AccessPoints, NextToken];
+  # AccessPoints is shape AccessPointDescriptions.
+  # AccessPointDescription members confirmed: ClientToken, Name, Tags,
+  # AccessPointId, AccessPointArn, FileSystemId, PosixUser, RootDirectory,
+  # OwnerId, LifeCycleState.
+  # RootDirectory members: [Path, CreationInfo]. PosixUser members: [Uid, Gid,
+  # SecondaryGids], with required=[Uid, Gid] — so if PosixUser is present at all,
+  # Gid is present with it, and the only way Gid is nil is PosixUser being absent
+  # entirely, which is exactly the state CKV_AWS_330 is looking for.
+  aws_efs_access_point:
+    gem: aws-sdk-efs                   # present in tools/image_gems.txt
+    client: Aws::EFS::Client
+    list: describe_access_points
+    collection: access_points          # DescribeAccessPointsResponse.AccessPoints
+    id: access_point_id                # AccessPointDescription.AccessPointId
+    arn: access_point_arn              # AccessPointDescription.AccessPointArn
+    scope: regional
+    fields:
+      file_system_id: file_system_id             # AccessPointDescription.FileSystemId
+      life_cycle_state: life_cycle_state         # AccessPointDescription.LifeCycleState
+      root_directory_path: root_directory.path   # RootDirectory.Path
+      posix_user_uid: posix_user.uid             # PosixUser.Uid
+      posix_user_gid: posix_user.gid             # PosixUser.Gid
+
+mappings:
+
+  CKV_AWS_252:
+    aws_cloudtrail:
+      reader: api
+      field: sns_topic_arn
+      satisfies: not_empty
+      note: >-
+        Checkov (CloudtrailDefinesSNSTopic) inspects the Terraform argument
+        `sns_topic_name` for ANY_VALUE. TF-vs-API divergence: name -> ARN. The
+        API member asserted is Trail.SnsTopicARN, and the choice between the two
+        SNS members is settled by AWS rather than by preference — botocore's
+        documentation for Trail.SnsTopicName reads, in full, "This field is no
+        longer in use. Use SnsTopicARN." not_empty is right rather than merely
+        convenient: AWS documents the trailList response as returning the SNS
+        members "only if values for the objects exist in a trail's
+        configuration", so a trail with no SNS topic returns no SnsTopicARN
+        member at all, nil IS the failing state, and not_empty is one of the two
+        verbs render_controls does not nil-filter. The control can therefore
+        fail, and on a typical account it will: most trails carry no topic.
+        Scope caveat: describe_trails defaults to includeShadowTrails=true, so a
+        multi-region or organization trail yields one row per region; every row
+        carries the same verdict and a distinct describe title (name + region),
+        so the count is inflated and the answer is not. The spec schema cannot
+        pass includeShadowTrails=false — collect() invokes the list operation
+        with no arguments — so this is inherent, not an oversight. Not
+        expressible as a stock mapping: the vendored singular
+        aws_cloudtrail_trail has no sns_topic_arn reader and the vendored plural
+        aws_cloudtrail_trails registers only two columns, trail_arns and names.
+
+  CKV_AWS_298:
+    aws_dms_s3_endpoint:
+      reader: api
+      field: s3_encryption_mode
+      satisfies: matches
+      value: '\A(?i:SSE[_-]KMS)\z'
+      note: >-
+        PARTIAL, and deliberately not asserting the field Checkov names. Checkov
+        (DMSS3UsesCMK) inspects `kms_key_arn` for ANY_VALUE; the API member is
+        S3Settings.ServerSideEncryptionKmsKeyId, nested one level below the
+        endpoint. That field CANNOT be asserted here: describe_endpoints returns
+        every endpoint in the region whatever its engine, the declarative spec
+        has no EngineName filter, and not_empty does not nil-filter — so every
+        mysql/oracle/postgres endpoint in the account, which carries no S3Settings
+        at all, would fail a check that does not apply to it. S3Settings.
+        EncryptionMode is asserted instead: it is nil for a non-S3 endpoint, and
+        for a value verb render_controls drops nil rows, which scopes the control
+        the control to S3 endpoints correctly. botocore states the coupling that
+        makes the substitution sound: "If you are using SSE_KMS for the
+        EncryptionMode, provide the KMS key ID", so EncryptionMode=SSE_KMS
+        implies a KMS key is in use. `matches` rather than `equals` because
+        botocore's own dms model contradicts itself on the spelling — shape
+        EncryptionModeValue enumerates ["sse-s3", "sse-kms"] while the member
+        documentation and the CLI example in the same file write SSE_S3 /
+        SSE_KMS — and the pattern is satisfied under either reading, verified in
+        ruby against SSE_KMS, sse-kms, SSE-KMS and sse_kms and rejected for
+        SSE_S3 and sse-s3. POPULATION BREADTH: describe_endpoints does not know
+        which Terraform resource declared an endpoint, so an S3-engine endpoint
+        created through the older aws_dms_endpoint resource is enumerated here
+        too, where Checkov inspects only aws_dms_s3_endpoint. Broader, and in the
+        safe direction — it is still a DMS S3 endpoint and the rule still applies
+        to it. RESIDUAL RISK, stated rather than hidden and NOT resolved: whether
+        DescribeEndpoints returns S3Settings.EncryptionMode for an S3 endpoint
+        left on the SSE_S3 default. If it omits it, that row is dropped as out of
+        scope instead of failing, and the dropped rows are exactly the failing
+        ones. botocore does not answer this. What it does say is suggestive and
+        not decisive: the member documentation calls SSE_S3 "the default", and
+        the ModifyEndpoint note speaks of changing "the existing value of the
+        EncryptionMode parameter" — both read as a setting that always carries a
+        value rather than one that can be absent. Re-check at the first exec that
+        finds an S3 endpoint. The alternative is not a safer fallback but a
+        strictly worse one: asserting the field Checkov names with not_empty,
+        which does not nil-filter, would fail every mysql, oracle and postgres
+        endpoint in the account against a rule that does not apply to them.
+
+  CKV_AWS_329:
+    aws_efs_access_point:
+      reader: api
+      field: root_directory_path
+      satisfies: not_equals
+      value: "/"
+      note: >-
+        PARTIAL, same shape as the disclosed partial on CKV_AWS_121: a nil field
+        leaves scope rather than failing. Checkov (EFSAccessPointRoot) is a
+        negative check whose get_forbidden_values returns the single string "/",
+        with missing_attribute_result=FAILED. not_equals is a literal
+        transcription of the value half; inverting it into equals/in_list would
+        mean enumerating every acceptable path. Field confirmed as
+        AccessPointDescription.RootDirectory.Path (botocore efs), and the nested
+        read confirmed through the reader's own dig_path against a stubbed
+        DescribeAccessPoints response with and without RootDirectory.
+        DIVERGENCE from Checkov, and it is the missing half of the check:
+        Checkov FAILS a missing attribute, whereas not_equals is a value verb and
+        render_controls drops a nil row as out of scope. NOT CONFIRMED, and this
+        is the thing to confirm first at exec: whether DescribeAccessPoints
+        returns RootDirectory.Path for an access point created without a root
+        directory. botocore documents no default — CreateAccessPointRequest.
+        RootDirectory only says that when you DO specify a RootDirectory you must
+        supply both Path and CreationInfo, and AccessPointDescription.RootDirectory
+        says nothing at all. If EFS omits it, the dropped rows are exactly the
+        failing ones and this control under-reports silently. There is no shape
+        in the vocabulary that covers both halves: only not_empty and empty skip
+        the nil filter, and neither can compare against "/". So the choice is
+        this partial with the gap stated, or no coverage; if a live exec shows an
+        access point with a nil RootDirectory.Path, this must move to a
+        presence-plus-value shape rather than stay as it is.
+
+  CKV_AWS_330:
+    aws_efs_access_point:
+      reader: api
+      field: posix_user_gid
+      satisfies: not_empty
+      note: >-
+        Checkov (EFSAccessUserIdentity) inspects posix_user/[0]/gid for ANY_VALUE.
+        Field confirmed as AccessPointDescription.PosixUser.Gid (botocore efs);
+        PosixUser declares required=[Uid, Gid], so Gid is nil only when PosixUser
+        is absent altogether — which is precisely the unenforced-identity state
+        the check is looking for. not_empty is therefore the correct verb twice
+        over: nil is the failure, and not_empty is one of the two verbs that does
+        not nil-filter. Gid is a Long, and the not_empty matcher guards with
+        respond_to?(:empty?), so an Integer — including 0 — reads as "set" rather
+        than raising.
+
+  CKV_AWS_363:
+    aws_lambda_function:
+      reader: api
+      field: runtime
+      satisfies: not_in_list
+      value:
+        - dotnetcore3.1
+        - nodejs12.x
+        - python3.6
+        - python2.7
+        - dotnet5.0
+        - dotnetcore2.1
+        - ruby2.5
+        - nodejs10.x
+        - nodejs8.10
+        - nodejs4.3
+        - nodejs6.10
+        - dotnetcore1.0
+        - dotnetcore2.0
+        - nodejs4.3-edge
+        - nodejs
+        - java8
+        - python3.7
+        - go1.x
+        - provided
+        - ruby2.7
+        - nodejs14.x
+        - nodejs16.x
+        - python3.9
+        - dotnet7
+        - dotnet6
+      note: >-
+        No new api spec: aws_lambda_function is already live in
+        tools/api_specs.yml and already declares `runtime`. Confirmed that the
+        value is on the LIST response rather than needing a per-function
+        GetFunction — botocore lambda ListFunctions returns Functions (shape
+        FunctionList) of FunctionConfiguration, and FunctionConfiguration declares
+        Runtime. The forbidden list is copied verbatim from the catalogue entry,
+        which is checkov 3.3.16's DeprecatedLambdaRuntime.get_forbidden_values();
+        nodejs18.x and provided.al2 are commented out in that source and are
+        correctly absent. Container-image functions declare no Runtime, so they
+        nil-out and render_controls drops them as out of scope, which matches
+        Checkov — it only inspects a declared `runtime`.
+
+metadata:
+
+  CKV_AWS_252:
+    severity: low
+    impact: 0.3
+    nist: [AU-12, SI-4]
+    nist_r4: [AU-12, SI-4]
+    cci: [CCI-000172, CCI-002664]
+    ksi: [KSI-MLA-LOG]
+    nist_source: agent-drafted
+    rationale: >-
+      Without an SNS topic on the trail nothing announces that a new log file has
+      been delivered, so anything built on CloudTrail has to poll the bucket and
+      learns about activity late. The deployed trail is what settles this: the
+      topic association can be dropped by a single UpdateTrail call that leaves
+      the Terraform completely unchanged.
+
+  CKV_AWS_298:
+    severity: medium
+    impact: 0.5
+    nist: [SC-28, "SC-28 (1)", SC-12]
+    nist_r4: [SC-28, "SC-28 (1)", SC-12]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      A DMS S3 endpoint writes whole tables of migrated source data into a bucket.
+      Under SSE-S3 those objects are readable by anyone who can read the bucket;
+      under SSE-KMS reading them additionally requires a decrypt grant on the key,
+      so bucket access alone no longer discloses the migrated records, and key
+      usage is auditable and revocable.
+
+  CKV_AWS_329:
+    severity: medium
+    impact: 0.5
+    nist: [AC-3, AC-6]
+    nist_r4: [AC-3, AC-6]
+    cci: [CCI-000213, CCI-002233]
+    ksi: [KSI-IAM-CTL]
+    nist_source: agent-drafted
+    rationale: >-
+      An access point whose root directory is "/" exposes the whole file system to
+      every client that mounts through it, which defeats the reason access points
+      exist. The root directory is fixed when the access point is created, so a
+      deployed access point pointing at "/" is a standing grant that no later
+      Terraform edit narrows.
+
+  CKV_AWS_330:
+    severity: medium
+    impact: 0.5
+    nist: [AC-3, AC-6]
+    nist_r4: [AC-3, AC-6]
+    cci: [CCI-000213, CCI-002233]
+    ksi: [KSI-IAM-CTL]
+    nist_source: agent-drafted
+    rationale: >-
+      With no POSIX user enforced the access point uses whatever uid and gid the
+      NFS client presents, so ownership on a shared file system is decided by the
+      caller rather than by the account. Enforcing a uid and gid is what makes
+      per-workload separation on one EFS file system actually hold.
+
+  CKV_AWS_363:
+    severity: medium
+    impact: 0.5
+    nist: [SI-2, "SI-2 (5)"]
+    nist_r4: [SI-2, "SI-2 (5)"]
+    cci: [CCI-001227, CCI-002605]
+    ksi: [KSI-CMT-VTD]
+    nist_source: agent-drafted
+    rationale: >-
+      A deprecated Lambda runtime stops receiving security patches for the
+      language runtime and the OS packages beneath it, and AWS eventually blocks
+      first updates and then invocations. The deployed runtime is the one that
+      matters: a function created before its runtime was deprecated keeps running
+      on it until someone changes it, with no Terraform change to notice.
+
+fixes:
+
+  CKV_AWS_252:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_sns_topic" "cloudtrail" {
+          name              = "cloudtrail-notifications"
+          kms_master_key_id = aws_kms_key.sns.id
+        }
+
+        data "aws_iam_policy_document" "cloudtrail_sns" {
+          statement {
+            sid       = "AllowCloudTrailPublish"
+            effect    = "Allow"
+            actions   = ["SNS:Publish"]
+            resources = [aws_sns_topic.cloudtrail.arn]
+
+            principals {
+              type        = "Service"
+              identifiers = ["cloudtrail.amazonaws.com"]
+            }
+          }
+        }
+
+        resource "aws_sns_topic_policy" "cloudtrail" {
+          arn    = aws_sns_topic.cloudtrail.arn
+          policy = data.aws_iam_policy_document.cloudtrail_sns.json
+        }
+
+        resource "aws_cloudtrail" "example" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          sns_topic_name                = aws_sns_topic.cloudtrail.name
+          include_global_service_events = true
+          is_multi_region_trail         = true
+          enable_log_file_validation    = true
+          kms_key_id                    = aws_kms_key.cloudtrail.arn
+        }
+      cli: |
+        aws cloudtrail update-trail --name org-trail --sns-topic-name cloudtrail-notifications
+      note: >-
+        The topic policy must already allow cloudtrail.amazonaws.com to
+        SNS:Publish before the trail is updated, or UpdateTrail rejects the call
+        with InsufficientSnsTopicPolicyException. Subscribe SQS rather than email
+        or SMS: an active account generates a very large number of notifications.
+
+  CKV_AWS_298:
+    aws_dms_s3_endpoint:
+      terraform: |
+        resource "aws_kms_key" "dms" {
+          description         = "DMS S3 target encryption"
+          enable_key_rotation = true
+        }
+
+        resource "aws_dms_s3_endpoint" "target" {
+          endpoint_id             = "s3-target"
+          endpoint_type           = "target"
+          bucket_name             = aws_s3_bucket.dms.id
+          service_access_role_arn = aws_iam_role.dms.arn
+          encryption_mode         = "SSE_KMS"
+          kms_key_arn             = aws_kms_key.dms.arn
+        }
+      cli: |
+        aws dms modify-endpoint --endpoint-arn <endpoint-arn> --s3-settings BucketName=<bucket>,ServiceAccessRoleArn=<role-arn>,EncryptionMode=SSE_KMS,ServerSideEncryptionKmsKeyId=<key-arn>
+      note: >-
+        modify-endpoint REPLACES the whole S3Settings structure rather than
+        merging into it, so every setting the endpoint already has must be resent
+        in the same call or it is silently reset to its default. Note also that
+        AWS allows changing EncryptionMode from SSE_KMS back to SSE_S3 but not
+        from SSE_S3 to SSE_KMS on an existing endpoint, so an endpoint that is
+        already on SSE_S3 has to be replaced.
+
+  CKV_AWS_329:
+    aws_efs_access_point:
+      terraform: |
+        resource "aws_efs_access_point" "example" {
+          file_system_id = aws_efs_file_system.example.id
+
+          root_directory {
+            path = "/app-data"
+
+            creation_info {
+              owner_uid   = 1000
+              owner_gid   = 1000
+              permissions = "0750"
+            }
+          }
+
+          posix_user {
+            uid = 1000
+            gid = 1000
+          }
+        }
+      cli: |
+        aws efs create-access-point --file-system-id <fs-id> --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}' --posix-user Uid=1000,Gid=1000
+        aws efs delete-access-point --access-point-id <old-access-point-id>
+      note: >-
+        There is no in-place fix: an access point's root directory is fixed at
+        creation. The path is a replacement access point plus repointing every
+        mount — ECS volume configuration, EKS persistent volume, or /etc/fstab —
+        at the new id before the old one is deleted. CreationInfo must be supplied
+        or EFS will not create the directory, and mounts then fail.
+
+  CKV_AWS_330:
+    aws_efs_access_point:
+      terraform: |
+        resource "aws_efs_access_point" "example" {
+          file_system_id = aws_efs_file_system.example.id
+
+          posix_user {
+            uid            = 1000
+            gid            = 1000
+            secondary_gids = [1001]
+          }
+
+          root_directory {
+            path = "/app-data"
+
+            creation_info {
+              owner_uid   = 1000
+              owner_gid   = 1000
+              permissions = "0750"
+            }
+          }
+        }
+      cli: |
+        aws efs create-access-point --file-system-id <fs-id> --posix-user Uid=1000,Gid=1000 --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}'
+        aws efs delete-access-point --access-point-id <old-access-point-id>
+      note: >-
+        There is no in-place fix. PosixUser is fixed at creation, so enforcing an
+        identity on an existing access point means creating a replacement and
+        repointing the mounts at it.
+
+  CKV_AWS_363:
+    aws_lambda_function:
+      terraform: |
+        resource "aws_lambda_function" "example" {
+          function_name = "example"
+          role          = aws_iam_role.lambda.arn
+          handler       = "index.handler"
+          runtime       = "python3.12"
+          filename      = "function.zip"
+
+          tracing_config {
+            mode = "Active"
+          }
+        }
+      cli: |
+        aws lambda list-functions --query 'Functions[?Runtime!=`null`].[FunctionName,Runtime]' --output table
+        aws lambda update-function-configuration --function-name example --runtime python3.12
+      note: >-
+        Changing the runtime is a configuration change, not a redeploy, but the
+        deployment package has to be compatible with the new runtime first —
+        update the code, then the runtime, or the function starts erroring on the
+        next invocation. Container-image functions have no runtime setting and are
+        out of scope for this check; their base image is what has to be rebuilt.
+
+skipped:
+
+  CKV_AWS_182: >-
+    TWO blockers, and the second one outlives the first. (1) Needs the gem
+    aws-sdk-docdb, which is NOT in tools/image_gems.txt. Per
+    tools/lint_api_specs.py an aws_docdb_cluster spec previously shipped in
+    exactly that state: the LoadError was rescued and the control rendered Not
+    Applicable while nothing had been read, which is why it was removed from
+    api_specs.yml. The source proposal is stale on this point — it treats the
+    spec as still live. (2) The gem does NOT make this mappable. botocore's docdb
+    model says DescribeDBClusters shares operational technology with RDS and
+    Neptune and tells the caller to "use the filterName=engine,Values=docdb
+    filter parameter to return only Amazon DocumentDB clusters"; neptune's says
+    the same in reverse. The api-spec schema cannot pass that filter —
+    aws_api_assets#collect invokes the list operation with no arguments — and
+    `fields:` extracts values without restricting rows, so the control would
+    assert a DocumentDB rule against every Aurora and Neptune cluster in the
+    account. That is the identical defect that rules out the aws-sdk-rds route,
+    so swapping SDKs solves nothing. Unblocking this needs BOTH the gem
+    (container-build-sign#283) AND a row-filter capability in the api-spec
+    schema, e.g. `where: {engine: docdb}` applied in row_for. Correction to the
+    obvious next step: aws_docdb_cluster is ALREADY parked in
+    tools/api_specs_pending_gems.yml, so there is nothing to park — what that
+    entry lacks is `kms_key_id: kms_key_id` in `fields`. Field itself confirmed
+    for that day: botocore docdb DescribeDBClusters (required=None) -> DBClusters
+    -> DBCluster.KmsKeyId. Note when it is written that not_empty on KmsKeyId
+    cannot separate a customer-managed key from the AWS-managed aws/docdb key —
+    neither can Checkov, whose assertion is only that kms_key_id is set, so that
+    part is faithful; it is the population, not the verb, that is wrong today.
+
+  CKV_AWS_280: >-
+    TWO blockers, and the second one outlives the first. (1) Needs the gem
+    aws-sdk-neptune, which is NOT in tools/image_gems.txt — same state and same
+    history as CKV_AWS_182, and the source proposal is stale in the same way.
+    (2) There is no way to scope the result to Neptune. Stated exactly, because
+    the models differ per operation: botocore's neptune DescribeDBClusterSnapshots
+    carries no engine-mixing note of its own, but its Filters member is
+    documented as "This parameter is not currently supported", so the neptune SDK
+    offers no server-side narrowing at all — and the sibling DescribeDBClusters
+    on the same client IS documented as returning RDS and DocDB clusters too, so
+    a Neptune-only result cannot be assumed. aws-sdk-rds is not a substitute
+    either: its DescribeDBClusterSnapshots does support an `engine` filter, which
+    is itself the evidence that the call returns several engines, and the
+    api-spec schema cannot send a filter — aws_api_assets#collect invokes the
+    list operation with no arguments. Either way the narrowing has to happen
+    row-side on DBClusterSnapshot.Engine, which the schema also cannot express:
+    `fields:` extracts values, it does not restrict rows. Unblocking needs BOTH
+    container-build-sign#283 AND a row-filter capability in the api-spec schema,
+    e.g. `where: {engine: neptune}` applied in row_for. Correction to the obvious
+    next step: unlike the two cluster specs, there is NO aws_neptune_cluster_snapshot
+    entry in tools/api_specs_pending_gems.yml, so this one has to be written from
+    scratch rather than amended. Field confirmed for that day: botocore neptune
+    DescribeDBClusterSnapshots (required=None) -> DBClusterSnapshots ->
+    DBClusterSnapshot.KmsKeyId, with DBClusterSnapshotIdentifier as id,
+    DBClusterSnapshotArn as arn and Engine available for the row filter.
+
+  CKV_AWS_347: >-
+    TWO blockers, same as CKV_AWS_280. (1) Needs the gem aws-sdk-neptune, which
+    is NOT in tools/image_gems.txt. (2) botocore's neptune DescribeDBClusters
+    documentation says in terms that the operation "can also return information
+    for Amazon RDS clusters and Amazon DocDB clusters", and directs the caller to
+    the `engine` filter to narrow it — a filter the api-spec schema has no way to
+    send. Adding the gem would therefore produce a control that reads a real
+    population and asserts the wrong rule over most of it, which is worse than
+    the current unrunnable state, not better. Unblocking needs BOTH
+    container-build-sign#283 AND a row-filter capability in the schema.
+    Correction to the obvious next step: aws_neptune_cluster is ALREADY parked in
+    tools/api_specs_pending_gems.yml (with `engine` already among its fields,
+    which is half the filter and none of the mechanism); what it lacks is
+    `kms_key_id: kms_key_id`. Field confirmed for that day: Checkov inspects the
+    Terraform argument `kms_key_arn`, the API member is DBCluster.KmsKeyId
+    (botocore neptune DescribeDBClusters, required=None) — a TF-vs-API name
+    divergence to carry into the note when it is written.

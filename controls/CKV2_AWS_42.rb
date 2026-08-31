@@ -2,30 +2,60 @@
 #
 # Rule:        CKV2_AWS_42 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudfront_distribution yet.
+# Read with:   aws_cloudfront_distributions -> aws_cloudfront_distribution (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_42'] || []
 
 control 'CKV2_AWS_42' do
-  impact 0.0
   title 'Ensure AWS CloudFront distribution uses custom SSL certificate'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudfront_distribution in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudfront_distribution resources that actually exist, read
+    through the stock inspec-aws aws_cloudfront_distribution resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    The default CloudFront certificate is only valid for the cloudfront.net
+    name, so a distribution relying on it cannot serve the organisation's
+    own domain over TLS that a client will accept. In practice that means
+    users reach the service under a name the organisation does not control,
+    or reach it over a connection whose certificate warning they have been
+    trained to click through.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS CloudFront distribution uses custom SSL certificate
+    Checkov looks for: a CloudFront distribution whose viewer certificate
+    comes from ACM or IAM rather than the default CloudFront certificate
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution
+    Terraform — aws_cloudfront_distribution:
+
+      resource "aws_cloudfront_distribution" "site" {
+        aliases = ["www.example.com"]
+
+        viewer_certificate {
+          acm_certificate_arn      = aws_acm_certificate.site.arn
+          ssl_support_method       = "sni-only"
+          minimum_protocol_version = "TLSv1.2_2021"
+        }
+      }
+
+    Out of band — aws_cloudfront_distribution:
+
+      aws cloudfront get-distribution-config --id <dist-id> > dist.json
+
+    Note (aws_cloudfront_distribution): There is no single update call:
+    CloudFront requires the full distribution config plus its ETag, so edit the
+    ViewerCertificate block of the fetched JSON and send it back with `aws
+    cloudfront update-distribution --if-match <etag>`. The ACM certificate must
+    be issued in us-east-1 whatever region the rest of the stack lives in, and
+    the distribution needs an `aliases` entry matching the certificate.
   FIX
 
   tag checkov_id:            'CKV2_AWS_42'
@@ -34,9 +64,56 @@ control 'CKV2_AWS_42' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_cloudfront_distribution]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_42 — no deployed-asset reader for aws_cloudfront_distribution" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  # Global service: the same objects come back from any region, so this is
+  # enumerated once rather than once per region.
+  found = aws_cloudfront_distributions.distribution_ids.to_a.map { |id| [id, nil] }
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_cloudfront_distribution', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_cloudfront_distribution enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudfront_distribution in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_cloudfront_distribution(distribution_id: id) do
+      its('ssl_certificate') { should_not eq 'cloudfront' }
+    end
   end
 end

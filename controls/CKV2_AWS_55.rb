@@ -2,30 +2,66 @@
 #
 # Rule:        CKV2_AWS_55 (checkov 3.3.16)
 # Applies to:  aws_emr_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_emr_cluster yet.
+# Read with:   aws_emr_clusters -> aws_emr_cluster (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_55'] || []
 
 control 'CKV2_AWS_55' do
-  impact 0.0
   title 'Ensure AWS EMR cluster is configured with security configuration'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_emr_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_emr_cluster resources that actually exist, read through the
+    stock inspec-aws aws_emr_cluster resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    The EMR security configuration is where at-rest encryption for EBS and
+    S3, in-transit encryption between nodes, and Kerberos authentication are
+    declared. A cluster without one has none of them, and an EMR cluster is
+    by definition processing a bulk copy of data that lives somewhere more
+    protected.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS EMR cluster is configured with security configuration
+    Checkov looks for: Ensure AWS EMR cluster is configured with security
+    configuration
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_cluster
+    Terraform — aws_emr_cluster:
+
+      resource "aws_emr_security_configuration" "example" {
+        name          = "example"
+        configuration = jsonencode({
+          EncryptionConfiguration = {
+            EnableInTransitEncryption = true
+            EnableAtRestEncryption    = true
+            AtRestEncryptionConfiguration = {
+              S3EncryptionConfiguration  = { EncryptionMode = "SSE-KMS", AwsKmsKey = aws_kms_key.emr.arn }
+              LocalDiskEncryptionConfiguration = { EncryptionKeyProviderType = "AwsKms", AwsKmsKey = aws_kms_key.emr.arn }
+            }
+            InTransitEncryptionConfiguration = {
+              TLSCertificateConfiguration = { CertificateProviderType = "PEM", S3Object = "s3://example/certs.zip" }
+            }
+          }
+        })
+      }
+
+      resource "aws_emr_cluster" "example" {
+        name                   = "example"
+        release_label          = "emr-7.1.0"
+        security_configuration = aws_emr_security_configuration.example.name
+      }
+
+    Note (aws_emr_cluster): No in-place fix: a cluster's security configuration
+    is fixed at launch and cannot be attached afterwards. The running cluster
+    must be replaced. Terminated clusters still appear in ListClusters for
+    roughly two months and should be exempted rather than remediated.
   FIX
 
   tag checkov_id:            'CKV2_AWS_55'
@@ -34,9 +70,56 @@ control 'CKV2_AWS_55' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_emr_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_cluster'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_55 — no deployed-asset reader for aws_emr_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_emr_clusters(aws_region: region).cluster_ids.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_emr_cluster', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_emr_cluster enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_emr_cluster in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_emr_cluster(cluster_id: id, aws_region: region) do
+      its('security_configuration_name') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

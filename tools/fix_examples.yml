@@ -1,3 +1,206 @@
+CKV2_AWS_10:
+  aws_cloudtrail:
+    cli: 'aws cloudtrail update-trail --name <trail> --cloud-watch-logs-log-group-arn <log-group-arn>:*
+      --cloud-watch-logs-role-arn <role-arn>
+
+      '
+    note: Two things bite here. The log group ARN must carry the trailing ":*" or CloudTrail rejects it,
+      and the role in cloud_watch_logs_role_arn must trust cloudtrail.amazonaws.com and hold logs:CreateLogStream
+      and logs:PutLogEvents on that group. Without the role the trail still reports the group and delivers
+      nothing, which this control cannot see.
+    terraform: "resource \"aws_cloudwatch_log_group\" \"trail\" {\n  name              = \"/aws/cloudtrail/org\"\
+      \n  retention_in_days = 365\n}\n\nresource \"aws_cloudtrail\" \"org\" {\n  name                \
+      \          = \"org-trail\"\n  s3_bucket_name                = aws_s3_bucket.trail.id\n  is_multi_region_trail\
+      \         = true\n  enable_log_file_validation    = true\n  cloud_watch_logs_group_arn    = \"${aws_cloudwatch_log_group.trail.arn}:*\"\
+      \n  cloud_watch_logs_role_arn     = aws_iam_role.trail_to_cwl.arn\n}\n"
+CKV2_AWS_11:
+  aws_vpc:
+    cli: 'aws ec2 create-flow-logs --resource-type VPC --resource-ids <vpc-id> --traffic-type ALL --log-destination-type
+      cloud-watch-logs --log-group-name <group> --deliver-logs-permission-arn <role-arn>
+
+      '
+    note: 'Use traffic_type = "ALL": REJECT alone hides successful lateral movement and ACCEPT alone hides
+      the scanning that preceded it. An S3 or Data Firehose destination satisfies this control equally
+      — it asserts that a flow log exists for the VPC, not where it lands.'
+    terraform: "resource \"aws_flow_log\" \"main\" {\n  vpc_id                   = aws_vpc.main.id\n \
+      \ traffic_type             = \"ALL\"\n  log_destination_type     = \"cloud-watch-logs\"\n  log_destination\
+      \          = aws_cloudwatch_log_group.flow.arn\n  iam_role_arn             = aws_iam_role.flow_logs.arn\n\
+      \  max_aggregation_interval = 60\n}\n"
+CKV2_AWS_14:
+  aws_iam_group_membership:
+    cli: 'aws iam add-user-to-group --group-name <group> --user-name <user>
+
+      '
+    note: Deleting the group is the other valid remediation and usually the right one. Note that aws_iam_group_membership
+      is authoritative — it removes any user it does not list — whereas aws_iam_user_group_membership
+      is not; mixing the two silently drops members on the next apply.
+    terraform: "resource \"aws_iam_group_membership\" \"engineers\" {\n  name  = \"engineers-membership\"\
+      \n  group = aws_iam_group.engineers.name\n  users = [aws_iam_user.alice.name]\n}\n"
+CKV2_AWS_19:
+  aws_eip_association:
+    cli: 'aws ec2 release-address --allocation-id <alloc-id>
+
+      '
+    note: The CLI shown is the release, not the association, because a dangling Elastic IP is far more
+      often garbage than a missing wiring. Releasing is irreversible — the address returns to the pool
+      and cannot be reclaimed — so confirm no DNS record or partner allow-list still names it. To keep
+      it, associate it with `aws ec2 associate-address` instead.
+    terraform: "resource \"aws_eip_association\" \"app\" {\n  allocation_id        = aws_eip.app.id\n\
+      \  network_interface_id = aws_network_interface.app.id\n}\n"
+CKV2_AWS_22:
+  aws_iam_user:
+    cli: 'aws iam delete-login-profile --user-name <user>
+
+      '
+    note: Deleting the login profile removes console access only; the user's access keys still work, so
+      audit those separately. If the user is a person rather than a service identity, the real remediation
+      is to delete the IAM user and grant them a federated role.
+    terraform: "# The fix is the ABSENCE of a login profile. Remove any\n# aws_iam_user_login_profile\
+      \ for this user and let humans reach the\n# console through federation instead.\nresource \"aws_iam_user\"\
+      \ \"svc\" {\n  name = \"svc-deploy\"\n  tags = { console_access = \"none\" }\n}\n"
+CKV2_AWS_34:
+  aws_ssm_parameter:
+    cli: 'aws ssm put-parameter --name <name> --type SecureString --key-id <key-arn> --value <value> --overwrite
+
+      '
+    note: 'A parameter''s type cannot be changed in place by Terraform without replacement, and the value
+      was already exposed as plaintext, so treat the existing value as compromised and rotate it rather
+      than re-storing it encrypted. Give key_id a customer-managed key: the default alias/aws/ssm key
+      cannot carry a key policy that limits who may decrypt.'
+    terraform: "resource \"aws_ssm_parameter\" \"db_password\" {\n  name   = \"/app/prod/db_password\"\
+      \n  type   = \"SecureString\"\n  key_id = aws_kms_key.params.arn\n  value  = var.db_password\n}\n"
+CKV2_AWS_42:
+  aws_cloudfront_distribution:
+    cli: 'aws cloudfront get-distribution-config --id <dist-id> > dist.json
+
+      '
+    note: 'There is no single update call: CloudFront requires the full distribution config plus its ETag,
+      so edit the ViewerCertificate block of the fetched JSON and send it back with `aws cloudfront update-distribution
+      --if-match <etag>`. The ACM certificate must be issued in us-east-1 whatever region the rest of
+      the stack lives in, and the distribution needs an `aliases` entry matching the certificate.'
+    terraform: "resource \"aws_cloudfront_distribution\" \"site\" {\n  aliases = [\"www.example.com\"\
+      ]\n\n  viewer_certificate {\n    acm_certificate_arn      = aws_acm_certificate.site.arn\n    ssl_support_method\
+      \       = \"sni-only\"\n    minimum_protocol_version = \"TLSv1.2_2021\"\n  }\n}\n"
+CKV2_AWS_49:
+  aws_dms_endpoint:
+    cli: aws dms modify-endpoint --endpoint-arn <arn> --ssl-mode verify-full --certificate-arn <cert-arn>
+    note: verify-ca and verify-full need a certificate imported into DMS first (aws_dms_certificate /
+      `aws dms import-certificate`); `require` encrypts without validating the server certificate and
+      is the weakest setting that still satisfies the rule. Endpoints whose engine has no SSL concept
+      (s3, dynamodb, kinesis, kafka, elasticsearch, neptune, redshift) cannot be fixed and belong in exempt_assets.
+    terraform: "resource \"aws_dms_endpoint\" \"example\" {\n  endpoint_id   = \"source-postgres\"\n \
+      \ endpoint_type = \"source\"\n  engine_name   = \"postgres\"\n\n  # none | require | verify-ca |\
+      \ verify-full\n  ssl_mode        = \"verify-full\"\n  certificate_arn = aws_dms_certificate.example.certificate_arn\n\
+      }\n"
+CKV2_AWS_50:
+  aws_elasticache_replication_group:
+    cli: aws elasticache modify-replication-group --replication-group-id <id> --automatic-failover-enabled
+      --multi-az-enabled --apply-immediately
+    note: Automatic failover requires at least two nodes in the group and is not available on cache.t1.*
+      node types. Applying immediately triggers a failover test; without --apply-immediately the change
+      lands in the next maintenance window.
+    terraform: "resource \"aws_elasticache_replication_group\" \"example\" {\n  replication_group_id =\
+      \ \"example\"\n  description          = \"example\"\n  node_type            = \"cache.t4g.medium\"\
+      \n\n  automatic_failover_enabled = true\n  multi_az_enabled           = true\n  num_cache_clusters\
+      \         = 2\n}\n"
+CKV2_AWS_52:
+  aws_elasticsearch_domain:
+    terraform: "resource \"aws_elasticsearch_domain\" \"example\" {\n  domain_name = \"example\"\n\n \
+      \ advanced_security_options {\n    enabled                        = true\n    internal_user_database_enabled\
+      \ = false\n  }\n\n  encrypt_at_rest { enabled = true }\n  node_to_node_encryption { enabled = true\
+      \ }\n  domain_endpoint_options { enforce_https = true }\n}\n"
+  aws_opensearch_domain:
+    cli: aws opensearch update-domain-config --domain-name <name> --advanced-security-options Enabled=true
+    note: Fine-grained access control cannot be enabled on an existing domain in place on older engine
+      versions — check the engine version first; where it cannot, the domain must be recreated from a
+      snapshot.
+    terraform: "resource \"aws_opensearch_domain\" \"example\" {\n  domain_name = \"example\"\n\n  advanced_security_options\
+      \ {\n    enabled                        = true\n    internal_user_database_enabled = false\n  }\n\
+      \n  # FGAC requires all three of these\n  encrypt_at_rest { enabled = true }\n  node_to_node_encryption\
+      \ { enabled = true }\n  domain_endpoint_options { enforce_https = true }\n}\n"
+CKV2_AWS_54:
+  aws_cloudfront_distribution:
+    cli: aws cloudfront get-distribution-config --id <id> > dist.json, edit OriginSslProtocols to remove
+      SSLv3, then aws cloudfront update-distribution --id <id> --distribution-config file://config.json
+      --if-match <etag>
+    note: CloudFront has no single-field update API — the whole distribution config must be read, edited
+      and written back with the current ETag. Confirm the origin actually negotiates TLS 1.2 before removing
+      the older protocols, or the origin becomes unreachable.
+    terraform: "resource \"aws_cloudfront_distribution\" \"example\" {\n  origin {\n    domain_name =\
+      \ \"origin.example.com\"\n    origin_id   = \"custom-origin\"\n\n    custom_origin_config {\n  \
+      \    http_port              = 80\n      https_port             = 443\n      origin_protocol_policy\
+      \ = \"https-only\"\n\n      # SSLv3 removed; TLSv1.2 only\n      origin_ssl_protocols = [\"TLSv1.2\"\
+      ]\n    }\n  }\n}\n"
+CKV2_AWS_55:
+  aws_emr_cluster:
+    note: 'No in-place fix: a cluster''s security configuration is fixed at launch and cannot be attached
+      afterwards. The running cluster must be replaced. Terminated clusters still appear in ListClusters
+      for roughly two months and should be exempted rather than remediated.'
+    terraform: "resource \"aws_emr_security_configuration\" \"example\" {\n  name          = \"example\"\
+      \n  configuration = jsonencode({\n    EncryptionConfiguration = {\n      EnableInTransitEncryption\
+      \ = true\n      EnableAtRestEncryption    = true\n      AtRestEncryptionConfiguration = {\n    \
+      \    S3EncryptionConfiguration  = { EncryptionMode = \"SSE-KMS\", AwsKmsKey = aws_kms_key.emr.arn\
+      \ }\n        LocalDiskEncryptionConfiguration = { EncryptionKeyProviderType = \"AwsKms\", AwsKmsKey\
+      \ = aws_kms_key.emr.arn }\n      }\n      InTransitEncryptionConfiguration = {\n        TLSCertificateConfiguration\
+      \ = { CertificateProviderType = \"PEM\", S3Object = \"s3://example/certs.zip\" }\n      }\n    }\n\
+      \  })\n}\n\nresource \"aws_emr_cluster\" \"example\" {\n  name                   = \"example\"\n\
+      \  release_label          = \"emr-7.1.0\"\n  security_configuration = aws_emr_security_configuration.example.name\n\
+      }\n"
+CKV2_AWS_56:
+  aws_iam_policy_attachment:
+    cli: '# Find every principal holding it, then detach each one.
+
+      aws iam list-entities-for-policy --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+      aws iam detach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+      aws iam detach-user-policy --user-name <user> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+      aws iam detach-group-policy --group-name <group> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+      '
+    note: 'Detach last, not first: a principal that administers IAM through this policy may be the only
+      principal able to create its replacement. Also check permission sets — an attachment made through
+      IAM Identity Center is re-provisioned onto the AWSReservedSSO_* role after any manual detach, so
+      it must be removed at the permission set (aws_ssoadmin_managed_policy_attachment) or it comes straight
+      back.'
+    terraform: "# Replace the AWS-managed IAMFullAccess attachment with a customer-managed\n# policy scoped\
+      \ to the paths and actions the principal actually needs.\nresource \"aws_iam_policy\" \"iam_admin_scoped\"\
+      \ {\n  name        = \"iam-admin-scoped\"\n  description = \"IAM administration limited to the service-role\
+      \ path\"\n\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect\
+      \   = \"Allow\"\n      Action   = [\"iam:CreateRole\", \"iam:DeleteRole\", \"iam:AttachRolePolicy\"\
+      ,\n                  \"iam:DetachRolePolicy\", \"iam:TagRole\"]\n      Resource = \"arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/service-role/*\"\
+      \n      Condition = {\n        ArnLike = {\n          \"iam:PolicyARN\" = \"arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:policy/*\"\
+      \n        }\n      }\n    }]\n  })\n}\n\nresource \"aws_iam_role_policy_attachment\" \"platform_iam_admin\"\
+      \ {\n  role       = aws_iam_role.platform.name\n  policy_arn = aws_iam_policy.iam_admin_scoped.arn\n\
+      }\n"
+CKV2_AWS_57:
+  aws_secretsmanager_secret:
+    cli: aws secretsmanager rotate-secret --secret-id <name> --rotation-lambda-arn <arn> --rotation-rules
+      AutomaticallyAfterDays=30
+    note: Rotation needs a rotation Lambda that can reach both Secrets Manager and the credential's own
+      service; AWS publishes templates per engine. Secrets owned by another service (OwningService set,
+      e.g. RDS-managed master passwords) rotate under that service's control and should be exempted rather
+      than given a second rotator.
+    terraform: "resource \"aws_secretsmanager_secret\" \"example\" {\n  name = \"example\"\n}\n\nresource\
+      \ \"aws_secretsmanager_secret_rotation\" \"example\" {\n  secret_id           = aws_secretsmanager_secret.example.id\n\
+      \  rotation_lambda_arn = aws_lambda_function.rotator.arn\n\n  rotation_rules {\n    automatically_after_days\
+      \ = 30\n  }\n}\n"
+CKV2_AWS_59:
+  aws_elasticsearch_domain:
+    terraform: "resource \"aws_elasticsearch_domain\" \"example\" {\n  domain_name = \"example\"\n\n \
+      \ cluster_config {\n    instance_count           = 3\n    dedicated_master_enabled = true\n    dedicated_master_type\
+      \    = \"m5.large.elasticsearch\"\n    dedicated_master_count   = 3\n    zone_awareness_enabled\
+      \   = true\n  }\n}\n"
+  aws_opensearch_domain:
+    cli: aws opensearch update-domain-config --domain-name <name> --cluster-config DedicatedMasterEnabled=true,DedicatedMasterType=m6g.large.search,DedicatedMasterCount=3
+    note: Use three dedicated masters, not two — two cannot form a quorum, so a single master loss takes
+      the cluster down anyway. The change is a blue/green deployment and the domain stays available but
+      is briefly degraded.
+    terraform: "resource \"aws_opensearch_domain\" \"example\" {\n  domain_name = \"example\"\n\n  cluster_config\
+      \ {\n    instance_type            = \"r6g.large.search\"\n    instance_count           = 3\n   \
+      \ dedicated_master_enabled = true\n    dedicated_master_type    = \"m6g.large.search\"\n    dedicated_master_count\
+      \   = 3\n    zone_awareness_enabled   = true\n  }\n}\n"
 CKV2_AWS_6:
   aws_s3_bucket:
     cli: "aws s3api put-public-access-block --bucket <name> \\\n  --public-access-block-configuration\
@@ -13,6 +216,49 @@ CKV2_AWS_61:
       \n  rule {\n    id     = \"expire-noncurrent\"\n    status = \"Enabled\"\n\n    noncurrent_version_expiration\
       \ {\n      noncurrent_days = 90\n    }\n\n    abort_incomplete_multipart_upload {\n      days_after_initiation\
       \ = 7\n    }\n  }\n}\n"
+CKV2_AWS_63:
+  aws_networkfirewall_firewall:
+    cli: aws network-firewall update-logging-configuration --firewall-name <name> --logging-configuration
+      file://logging.json
+    note: 'Configure both log types: ALERT records what the rule groups acted on, FLOW records the traffic
+      they saw. Only one destination change is accepted per call, so adding both types out of band takes
+      two calls.'
+    terraform: "resource \"aws_networkfirewall_logging_configuration\" \"example\" {\n  firewall_arn =\
+      \ aws_networkfirewall_firewall.example.arn\n\n  logging_configuration {\n    log_destination_config\
+      \ {\n      log_destination_type = \"CloudWatchLogs\"\n      log_type             = \"FLOW\"\n  \
+      \    log_destination = {\n        logGroup = aws_cloudwatch_log_group.firewall_flow.name\n     \
+      \ }\n    }\n\n    log_destination_config {\n      log_destination_type = \"CloudWatchLogs\"\n  \
+      \    log_type             = \"ALERT\"\n      log_destination = {\n        logGroup = aws_cloudwatch_log_group.firewall_alert.name\n\
+      \      }\n    }\n  }\n}\n"
+CKV2_AWS_71:
+  aws_acm_certificate:
+    note: 'No in-place fix: a certificate''s domain names are set at issuance. Issue a replacement naming
+      the hosts explicitly, repoint every listener and distribution at it, then delete the wildcard. Certificates
+      ACM issued for another service''s use (ManagedBy CLOUDFRONT) cannot be replaced this way.'
+    terraform: "resource \"aws_acm_certificate\" \"example\" {\n  # Name each host explicitly rather than\
+      \ \"*.example.com\"\n  domain_name = \"api.example.com\"\n\n  subject_alternative_names = [\n  \
+      \  \"app.example.com\",\n    \"admin.example.com\",\n  ]\n\n  validation_method = \"DNS\"\n\n  lifecycle\
+      \ {\n    create_before_destroy = true\n  }\n}\n"
+CKV2_AWS_73:
+  aws_sqs_queue:
+    cli: aws sqs set-queue-attributes --queue-url <url> --attributes KmsMasterKeyId=<key-arn>
+    note: Every producer and consumer principal needs kms:GenerateDataKey and kms:Decrypt on the new key,
+      and cross-account senders need it in the key policy — switching the key before that grant exists
+      silently breaks the queue. Messages already in flight stay under the old key.
+    terraform: "resource \"aws_kms_key\" \"sqs\" {\n  description             = \"CMK for SQS payload\
+      \ encryption\"\n  enable_key_rotation     = true\n  deletion_window_in_days = 30\n}\n\nresource\
+      \ \"aws_sqs_queue\" \"example\" {\n  name                              = \"example\"\n  kms_master_key_id\
+      \                 = aws_kms_key.sqs.arn\n  kms_data_key_reuse_period_seconds = 300\n}\n"
+CKV_AWS_10:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_102:
   aws_neptune_cluster_instance:
     cli: 'aws neptune modify-db-instance --db-instance-identifier graph-1 --no-publicly-accessible --apply-immediately
@@ -21,6 +267,16 @@ CKV_AWS_102:
     terraform: "resource \"aws_neptune_cluster_instance\" \"graph\" {\n  identifier          = \"graph-1\"\
       \n  cluster_identifier  = aws_neptune_cluster.graph.id\n  instance_class      = \"db.r5.large\"\n\
       \  publicly_accessible = false\n}\n"
+CKV_AWS_11:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_116:
   aws_lambda_function:
     cli: 'aws lambda update-function-configuration --function-name <name> --dead-letter-config TargetArn=<queue-or-topic-arn>
@@ -60,6 +316,16 @@ CKV_AWS_119:
       \ = \"PAY_PER_REQUEST\"\n  hash_key     = \"order_id\"\n\n  attribute {\n    name = \"order_id\"\
       \n    type = \"S\"\n  }\n\n  server_side_encryption {\n    enabled     = true\n    kms_key_arn =\
       \ aws_kms_key.dynamodb.arn\n  }\n\n  point_in_time_recovery {\n    enabled = true\n  }\n}\n"
+CKV_AWS_12:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_121:
   aws_config_configuration_aggregator:
     cli: 'aws configservice put-configuration-aggregator --configuration-aggregator-name org-aggregator
@@ -84,6 +350,16 @@ CKV_AWS_129:
       \ EnableLogTypes=audit,error --apply-immediately\n"
     terraform: "resource \"aws_db_instance\" \"example\" {\n  enabled_cloudwatch_logs_exports = [\"audit\"\
       , \"error\", \"general\", \"slowquery\"]\n}\n"
+CKV_AWS_13:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_133:
   aws_db_instance:
     cli: 'aws rds modify-db-instance --db-instance-identifier app-db --backup-retention-period 30 --apply-immediately
@@ -153,6 +429,16 @@ CKV_AWS_139:
 
       '
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  deletion_protection = true\n}\n"
+CKV_AWS_14:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_140:
   aws_rds_global_cluster:
     note: 'There is no in-place fix and no CLI equivalent. StorageEncrypted is set when the global cluster
@@ -208,6 +494,16 @@ CKV_AWS_149:
       '
     terraform: "resource \"aws_secretsmanager_secret\" \"example\" {\n  kms_key_id = aws_kms_key.secrets.arn\n\
       }\n"
+CKV_AWS_15:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_153:
   aws_autoscaling_group:
     cli: 'aws autoscaling create-or-update-tags --tags ResourceId=app,ResourceType=auto-scaling-group,Key=Owner,Value=platform,PropagateAtLaunch=true
@@ -326,6 +622,20 @@ CKV_AWS_173:
       '
     terraform: "resource \"aws_lambda_function\" \"example\" {\n  kms_key_arn = aws_kms_key.lambda.arn\n\
       }\n"
+CKV_AWS_175:
+  aws_waf_web_acl:
+    cli: 'aws waf update-web-acl --web-acl-id <id> --change-token "$(aws waf get-change-token --query
+      ChangeToken --output text)" --updates ''Action=INSERT,ActivatedRule={Priority=1,RuleId=<rule-id>,Action={Type=BLOCK},Type=REGULAR}''
+
+      '
+    note: 'This is the WAF Classic form, because WAF Classic is the only WAF type this control can enumerate
+      — wafv2''s list call requires a Scope argument the enumerator cannot supply. WAF Classic is deprecated:
+      a new ACL should be an aws_wafv2_web_acl with at least one rule block (an AWS managed rule group
+      is the usual starting point), and this control will NOT assess it.'
+    terraform: "resource \"aws_waf_web_acl\" \"app\" {\n  name        = \"app\"\n  metric_name = \"app\"\
+      \n\n  default_action {\n    type = \"ALLOW\"\n  }\n\n  rules {\n    priority = 1\n    rule_id  =\
+      \ aws_waf_rule.sql_injection.id\n    type     = \"REGULAR\"\n\n    action {\n      type = \"BLOCK\"\
+      \n    }\n  }\n}\n"
 CKV_AWS_18:
   aws_s3_bucket:
     cli: "aws s3api put-bucket-logging --bucket <name> \\\n  --bucket-logging-status file://logging.json\n"
@@ -377,6 +687,22 @@ CKV_AWS_21:
     cli: "aws s3api put-bucket-versioning --bucket <name> \\\n  --versioning-configuration Status=Enabled\n"
     terraform: "resource \"aws_s3_bucket_versioning\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n\
       \n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}\n"
+CKV_AWS_210:
+  aws_batch_job_definition:
+    cli: 'aws batch register-job-definition --job-definition-name etl --type container --container-properties
+      file://container.json
+
+      '
+    note: 'Job definitions are immutable: there is no in-place fix. register-job-definition creates a
+      new REVISION, and every job queue and submission that names the old revision must be re-pointed
+      before the old one is deregistered. Because this control reads only the first revision the API returns
+      for a name, expect the finding to clear once that revision is the one returned — not the moment
+      the fix is written.'
+    terraform: "resource \"aws_batch_job_definition\" \"etl\" {\n  name = \"etl\"\n  type = \"container\"\
+      \n\n  container_properties = jsonencode({\n    image      = \"${var.ecr_registry}/etl:1.4.2\"\n\
+      \    jobRoleArn = aws_iam_role.etl_task.arn\n    privileged = false\n    resourceRequirements =\
+      \ [\n      { type = \"VCPU\", value = \"2\" },\n      { type = \"MEMORY\", value = \"4096\" },\n\
+      \    ]\n  })\n}\n"
 CKV_AWS_211:
   aws_db_instance:
     cli: "aws rds modify-db-instance --db-instance-identifier <id> \\\n  --ca-certificate-identifier rds-ca-rsa2048-g1\
@@ -413,6 +739,31 @@ CKV_AWS_228:
     terraform: "resource \"aws_opensearch_domain\" \"search\" {\n  domain_name    = \"search\"\n  engine_version\
       \ = \"OpenSearch_2.11\"\n\n  domain_endpoint_options {\n    enforce_https       = true\n    tls_security_policy\
       \ = \"Policy-Min-TLS-1-2-PFS-2023-10\"\n  }\n}\n"
+CKV_AWS_23:
+  aws_security_group_rule:
+    cli: 'aws ec2 modify-security-group-rules --group-id <sg-id> --security-group-rules ''SecurityGroupRuleId=<sgr-id>,SecurityGroupRule={Description="HTTPS
+      from the public ALB only",IpProtocol=tcp,FromPort=443,ToPort=443,ReferencedGroupId=<sg-id>}''
+
+      '
+    note: modify-security-group-rules REPLACES the whole rule, so every field must be resupplied or it
+      is reset. Read the rule with describe-security-group-rules first and echo its current values back
+      with the description added. The inline ingress/egress blocks on aws_security_group also accept a
+      description, so a group written that way is fixable in place too — but the inline blocks and the
+      standalone rule resources cannot be mixed on one group.
+    terraform: "resource \"aws_security_group_rule\" \"app_https\" {\n  security_group_id        = aws_security_group.app.id\n\
+      \  description              = \"HTTPS from the public ALB only\"\n  type                     = \"\
+      ingress\"\n  protocol                 = \"tcp\"\n  from_port                = 443\n  to_port   \
+      \               = 443\n  source_security_group_id = aws_security_group.alb.id\n}\n"
+  aws_vpc_security_group_ingress_rule:
+    note: The aws_vpc_security_group_ingress_rule / _egress_rule pair is the current form and is what
+      a new rule should use; aws_security_group_rule is retained by the provider but is no longer the
+      recommended path. Both carry a per-rule description, and both land on the same SecurityGroupRule
+      object this control reads, so either satisfies it.
+    terraform: "resource \"aws_vpc_security_group_ingress_rule\" \"app_https\" {\n  security_group_id\
+      \            = aws_security_group.app.id\n  description                  = \"HTTPS from the public\
+      \ ALB only\"\n  ip_protocol                  = \"tcp\"\n  from_port                    = 443\n \
+      \ to_port                      = 443\n  referenced_security_group_id = aws_security_group.alb.id\n\
+      }\n"
 CKV_AWS_238:
   aws_guardduty_detector:
     cli: 'aws guardduty update-detector --detector-id <id> --enable
@@ -461,6 +812,25 @@ CKV_AWS_251:
       \n  s3_bucket_name                = aws_s3_bucket.trail.id\n  enable_logging                = true\n\
       \  is_multi_region_trail         = true\n  enable_log_file_validation    = true\n  include_global_service_events\
       \ = true\n  kms_key_id                    = aws_kms_key.trail.arn\n}\n"
+CKV_AWS_252:
+  aws_cloudtrail:
+    cli: 'aws cloudtrail update-trail --name org-trail --sns-topic-name cloudtrail-notifications
+
+      '
+    note: 'The topic policy must already allow cloudtrail.amazonaws.com to SNS:Publish before the trail
+      is updated, or UpdateTrail rejects the call with InsufficientSnsTopicPolicyException. Subscribe
+      SQS rather than email or SMS: an active account generates a very large number of notifications.'
+    terraform: "resource \"aws_sns_topic\" \"cloudtrail\" {\n  name              = \"cloudtrail-notifications\"\
+      \n  kms_master_key_id = aws_kms_key.sns.id\n}\n\ndata \"aws_iam_policy_document\" \"cloudtrail_sns\"\
+      \ {\n  statement {\n    sid       = \"AllowCloudTrailPublish\"\n    effect    = \"Allow\"\n    actions\
+      \   = [\"SNS:Publish\"]\n    resources = [aws_sns_topic.cloudtrail.arn]\n\n    principals {\n  \
+      \    type        = \"Service\"\n      identifiers = [\"cloudtrail.amazonaws.com\"]\n    }\n  }\n\
+      }\n\nresource \"aws_sns_topic_policy\" \"cloudtrail\" {\n  arn    = aws_sns_topic.cloudtrail.arn\n\
+      \  policy = data.aws_iam_policy_document.cloudtrail_sns.json\n}\n\nresource \"aws_cloudtrail\" \"\
+      example\" {\n  name                          = \"org-trail\"\n  s3_bucket_name                =\
+      \ aws_s3_bucket.trail.id\n  sns_topic_name                = aws_sns_topic.cloudtrail.name\n  include_global_service_events\
+      \ = true\n  is_multi_region_trail         = true\n  enable_log_file_validation    = true\n  kms_key_id\
+      \                    = aws_kms_key.cloudtrail.arn\n}\n"
 CKV_AWS_26:
   aws_sns_topic:
     cli: 'aws sns set-topic-attributes --topic-arn <arn> --attribute-name KmsMasterKeyId --attribute-value
@@ -536,9 +906,8 @@ CKV_AWS_285:
     cli: 'aws stepfunctions update-state-machine --state-machine-arn <arn> --logging-configuration level=ALL,includeExecutionData=true,destinations=[{cloudWatchLogsLogGroup={logGroupArn=<log-group-arn>:*}}]
 
       '
-    note: "Execution data includes state input and output, so the log group inherits whatever sensitivity\
-      \ the workflow carries \u2014 set its retention and KMS key accordingly rather than leaving it at\
-      \ the defaults."
+    note: Execution data includes state input and output, so the log group inherits whatever sensitivity
+      the workflow carries — set its retention and KMS key accordingly rather than leaving it at the defaults.
     terraform: "resource \"aws_cloudwatch_log_group\" \"sfn\" {\n  name              = \"/aws/vendedlogs/states/orders\"\
       \n  retention_in_days = 365\n}\n\nresource \"aws_sfn_state_machine\" \"orders\" {\n  name      \
       \ = \"orders\"\n  role_arn   = aws_iam_role.sfn.arn\n  definition = file(\"${path.module}/orders.asl.json\"\
@@ -584,6 +953,20 @@ CKV_AWS_293:
 
       '
     terraform: "resource \"aws_db_instance\" \"example\" {\n  deletion_protection = true\n}\n"
+CKV_AWS_298:
+  aws_dms_s3_endpoint:
+    cli: 'aws dms modify-endpoint --endpoint-arn <endpoint-arn> --s3-settings BucketName=<bucket>,ServiceAccessRoleArn=<role-arn>,EncryptionMode=SSE_KMS,ServerSideEncryptionKmsKeyId=<key-arn>
+
+      '
+    note: modify-endpoint REPLACES the whole S3Settings structure rather than merging into it, so every
+      setting the endpoint already has must be resent in the same call or it is silently reset to its
+      default. Note also that AWS allows changing EncryptionMode from SSE_KMS back to SSE_S3 but not from
+      SSE_S3 to SSE_KMS on an existing endpoint, so an endpoint that is already on SSE_S3 has to be replaced.
+    terraform: "resource \"aws_kms_key\" \"dms\" {\n  description         = \"DMS S3 target encryption\"\
+      \n  enable_key_rotation = true\n}\n\nresource \"aws_dms_s3_endpoint\" \"target\" {\n  endpoint_id\
+      \             = \"s3-target\"\n  endpoint_type           = \"target\"\n  bucket_name           \
+      \  = aws_s3_bucket.dms.id\n  service_access_role_arn = aws_iam_role.dms.arn\n  encryption_mode \
+      \        = \"SSE_KMS\"\n  kms_key_arn             = aws_kms_key.dms.arn\n}\n"
 CKV_AWS_30:
   aws_elasticache_replication_group:
     cli: "aws elasticache modify-replication-group --replication-group-id <id> \\\n  --transit-encryption-enabled\
@@ -596,6 +979,21 @@ CKV_AWS_313:
 
       '
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  copy_tags_to_snapshot = true\n}\n"
+CKV_AWS_315:
+  aws_autoscaling_group:
+    cli: 'aws autoscaling update-auto-scaling-group --auto-scaling-group-name app --launch-template LaunchTemplateId=<lt-id>,Version=''$Latest''
+
+      '
+    note: The switch takes effect for instances launched after it. Existing instances keep the launch
+      configuration's settings until they are replaced, so pair this with an instance refresh if changing
+      the baseline is the point rather than clearing the finding. Keep vpc_zone_identifier set rather
+      than relying on availability_zones alone — the vendored reader splits that field without a nil guard.
+    terraform: "resource \"aws_launch_template\" \"app\" {\n  name_prefix   = \"app-\"\n  image_id   \
+      \   = var.ami_id\n  instance_type = \"m6i.large\"\n\n  metadata_options {\n    http_tokens = \"\
+      required\"\n  }\n}\n\nresource \"aws_autoscaling_group\" \"app\" {\n  name                = \"app\"\
+      \n  min_size            = 2\n  max_size            = 6\n  desired_capacity    = 2\n  vpc_zone_identifier\
+      \ = var.private_subnet_ids\n\n  launch_template {\n    id      = aws_launch_template.app.id\n  \
+      \  version = \"$Latest\"\n  }\n}\n"
 CKV_AWS_319:
   aws_cloudwatch_metric_alarm:
     cli: 'aws cloudwatch enable-alarm-actions --alarm-names app-high-5xx
@@ -640,6 +1038,36 @@ CKV_AWS_327:
       '
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  storage_encrypted = true\n  kms_key_id \
       \       = aws_kms_key.rds.arn\n}\n"
+CKV_AWS_329:
+  aws_efs_access_point:
+    cli: 'aws efs create-access-point --file-system-id <fs-id> --root-directory ''Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}''
+      --posix-user Uid=1000,Gid=1000
+
+      aws efs delete-access-point --access-point-id <old-access-point-id>
+
+      '
+    note: 'There is no in-place fix: an access point''s root directory is fixed at creation. The path
+      is a replacement access point plus repointing every mount — ECS volume configuration, EKS persistent
+      volume, or /etc/fstab — at the new id before the old one is deleted. CreationInfo must be supplied
+      or EFS will not create the directory, and mounts then fail.'
+    terraform: "resource \"aws_efs_access_point\" \"example\" {\n  file_system_id = aws_efs_file_system.example.id\n\
+      \n  root_directory {\n    path = \"/app-data\"\n\n    creation_info {\n      owner_uid   = 1000\n\
+      \      owner_gid   = 1000\n      permissions = \"0750\"\n    }\n  }\n\n  posix_user {\n    uid =\
+      \ 1000\n    gid = 1000\n  }\n}\n"
+CKV_AWS_330:
+  aws_efs_access_point:
+    cli: 'aws efs create-access-point --file-system-id <fs-id> --posix-user Uid=1000,Gid=1000 --root-directory
+      ''Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}''
+
+      aws efs delete-access-point --access-point-id <old-access-point-id>
+
+      '
+    note: There is no in-place fix. PosixUser is fixed at creation, so enforcing an identity on an existing
+      access point means creating a replacement and repointing the mounts at it.
+    terraform: "resource \"aws_efs_access_point\" \"example\" {\n  file_system_id = aws_efs_file_system.example.id\n\
+      \n  posix_user {\n    uid            = 1000\n    gid            = 1000\n    secondary_gids = [1001]\n\
+      \  }\n\n  root_directory {\n    path = \"/app-data\"\n\n    creation_info {\n      owner_uid   =\
+      \ 1000\n      owner_gid   = 1000\n      permissions = \"0750\"\n    }\n  }\n}\n"
 CKV_AWS_331:
   aws_ec2_transit_gateway:
     cli: 'aws ec2 modify-transit-gateway --transit-gateway-id <tgw-id> --options AutoAcceptSharedAttachments=disable
@@ -844,6 +1272,22 @@ CKV_AWS_362:
     terraform: "resource \"aws_neptune_cluster\" \"graph\" {\n  cluster_identifier    = \"graph\"\n  engine\
       \                = \"neptune\"\n  copy_tags_to_snapshot = true\n\n  tags = {\n    Owner       =\
       \ \"platform\"\n    Environment = \"prod\"\n  }\n}\n"
+CKV_AWS_363:
+  aws_lambda_function:
+    cli: 'aws lambda list-functions --query ''Functions[?Runtime!=`null`].[FunctionName,Runtime]'' --output
+      table
+
+      aws lambda update-function-configuration --function-name example --runtime python3.12
+
+      '
+    note: Changing the runtime is a configuration change, not a redeploy, but the deployment package has
+      to be compatible with the new runtime first — update the code, then the runtime, or the function
+      starts erroring on the next invocation. Container-image functions have no runtime setting and are
+      out of scope for this check; their base image is what has to be rebuilt.
+    terraform: "resource \"aws_lambda_function\" \"example\" {\n  function_name = \"example\"\n  role\
+      \          = aws_iam_role.lambda.arn\n  handler       = \"index.handler\"\n  runtime       = \"\
+      python3.12\"\n  filename      = \"function.zip\"\n\n  tracing_config {\n    mode = \"Active\"\n\
+      \  }\n}\n"
 CKV_AWS_37:
   aws_eks_cluster:
     cli: 'aws eks update-cluster-config --name <cluster> --logging ''{"clusterLogging":[{"types":["api","audit","authenticator","controllerManager","scheduler"],"enabled":true}]}''
@@ -862,6 +1306,20 @@ CKV_AWS_377:
       in; the API rejects it until the domain leaves that window.
     terraform: "resource \"aws_route53domains_registered_domain\" \"example\" {\n  domain_name   = \"\
       example.com\"\n  transfer_lock = true\n  auto_renew    = true\n}\n"
+CKV_AWS_378:
+  aws_alb_target_group:
+    note: aws_alb_target_group is an alias of aws_lb_target_group; the same fix applies.
+    terraform: "resource \"aws_alb_target_group\" \"example\" {\n  name     = \"example\"\n  port    \
+      \ = 443\n  protocol = \"HTTPS\"\n  vpc_id   = aws_vpc.example.id\n}\n"
+  aws_lb_target_group:
+    cli: No in-place fix — a target group's protocol is immutable. Create a new HTTPS target group, register
+      the targets, then update the listener's default action to forward to it.
+    note: The targets must actually terminate TLS before the switch, which usually means a certificate
+      on the instance or task. Where the target cannot serve TLS and the segment is accepted risk, exempt
+      the target group rather than leaving the finding unexplained.
+    terraform: "resource \"aws_lb_target_group\" \"example\" {\n  name     = \"example\"\n  port     =\
+      \ 443\n  protocol = \"HTTPS\"\n  vpc_id   = aws_vpc.example.id\n\n  health_check {\n    protocol\
+      \ = \"HTTPS\"\n    path     = \"/healthz\"\n  }\n}\n"
 CKV_AWS_379:
   aws_s3_bucket:
     cli: 'aws s3api put-bucket-policy --bucket <name> --policy file://tls-only.json
@@ -974,8 +1432,8 @@ CKV_AWS_58:
     cli: 'aws eks associate-encryption-config --cluster-name <cluster> --encryption-config ''[{"resources":["secrets"],"provider":{"keyArn":"<key-arn>"}}]''
 
       '
-    note: "Association is one-way and cannot be undone or repointed at another key, and existing Secrets\
-      \ are only re-encrypted when they are next written \u2014 run a rewrite of every Secret after associating."
+    note: Association is one-way and cannot be undone or repointed at another key, and existing Secrets
+      are only re-encrypted when they are next written — run a rewrite of every Secret after associating.
     terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
       \  version  = \"1.31\"\n\n  encryption_config {\n    resources = [\"secrets\"]\n\n    provider {\n\
       \      key_arn = aws_kms_key.eks.arn\n    }\n  }\n\n  vpc_config {\n    subnet_ids = var.private_subnet_ids\n\
@@ -1145,6 +1603,16 @@ CKV_AWS_89:
       '
     terraform: "resource \"aws_dms_replication_instance\" \"example\" {\n  publicly_accessible = false\n\
       }\n"
+CKV_AWS_9:
+  aws_iam_account_password_policy:
+    cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
+      \ --require-numbers \\\n  --require-uppercase-characters --require-lowercase-characters \\\n  --max-password-age\
+      \ 90 --password-reuse-prevention 24\n"
+    terraform: "resource \"aws_iam_account_password_policy\" \"strict\" {\n  minimum_password_length \
+      \       = 14\n  require_lowercase_characters   = true\n  require_uppercase_characters   = true\n\
+      \  require_numbers                = true\n  require_symbols                = true\n  max_password_age\
+      \               = 90\n  password_reuse_prevention      = 24\n  allow_users_to_change_password =\
+      \ true\n}\n"
 CKV_AWS_92:
   aws_elb:
     cli: 'aws elb modify-load-balancer-attributes --load-balancer-name app-elb --load-balancer-attributes
@@ -1166,136 +1634,3 @@ CKV_AWS_96:
       '
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  storage_encrypted = true\n  kms_key_id \
       \       = aws_kms_key.rds.arn\n}\n"
-
-CKV_AWS_9:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_11:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_12:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_13:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_10:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_14:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24
-
-CKV_AWS_15:
-  aws_iam_account_password_policy:
-    terraform: |
-      resource "aws_iam_account_password_policy" "strict" {
-        minimum_password_length        = 14
-        require_lowercase_characters   = true
-        require_uppercase_characters   = true
-        require_numbers                = true
-        require_symbols                = true
-        max_password_age               = 90
-        password_reuse_prevention      = 24
-        allow_users_to_change_password = true
-      }
-    cli: |
-      aws iam update-account-password-policy \
-        --minimum-password-length 14 --require-symbols --require-numbers \
-        --require-uppercase-characters --require-lowercase-characters \
-        --max-password-age 90 --password-reuse-prevention 24

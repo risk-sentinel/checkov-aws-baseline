@@ -2,30 +2,65 @@
 #
 # Rule:        CKV_AWS_330 (checkov 3.3.16)
 # Applies to:  aws_efs_access_point
-# Status:      PLANNED — no deployed-asset reader exists for aws_efs_access_point yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_330'] || []
 
 control 'CKV_AWS_330' do
-  impact 0.0
   title 'EFS access points should enforce a user identity'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_efs_access_point in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_efs_access_point resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    With no POSIX user enforced the access point uses whatever uid and gid
+    the NFS client presents, so ownership on a shared file system is decided
+    by the caller rather than by the account. Enforcing a uid and gid is
+    what makes per-workload separation on one EFS file system actually hold.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_efs_access_point: posix_user/[0]/gid is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/efs_access_point#posix-user
+    Terraform — aws_efs_access_point:
+
+      resource "aws_efs_access_point" "example" {
+        file_system_id = aws_efs_file_system.example.id
+
+        posix_user {
+          uid            = 1000
+          gid            = 1000
+          secondary_gids = [1001]
+        }
+
+        root_directory {
+          path = "/app-data"
+
+          creation_info {
+            owner_uid   = 1000
+            owner_gid   = 1000
+            permissions = "0750"
+          }
+        }
+      }
+
+    Out of band — aws_efs_access_point:
+
+      aws efs create-access-point --file-system-id <fs-id> --posix-user Uid=1000,Gid=1000 --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}'
+      aws efs delete-access-point --access-point-id <old-access-point-id>
+
+    Note (aws_efs_access_point): There is no in-place fix. PosixUser is fixed at
+    creation, so enforcing an identity on an existing access point means
+    creating a replacement and repointing the mounts at it.
   FIX
 
   tag checkov_id:            'CKV_AWS_330'
@@ -34,9 +69,44 @@ control 'CKV_AWS_330' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_efs_access_point]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/efs_access_point#posix-user'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AC-3', 'AC-6']
+  tag nist_r4:               ['AC-3', 'AC-6']
+  tag cci:                   ['CCI-000213', 'CCI-002233']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_330 — no deployed-asset reader for aws_efs_access_point" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_efs_access_point', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_efs_access_point enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = assets.assets(exempt: exempt)
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_efs_access_point in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_efs_access_point #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:posix_user_gid] }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

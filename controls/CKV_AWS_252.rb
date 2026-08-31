@@ -2,30 +2,81 @@
 #
 # Rule:        CKV_AWS_252 (checkov 3.3.16)
 # Applies to:  aws_cloudtrail
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudtrail yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_252'] || []
 
 control 'CKV_AWS_252' do
-  impact 0.0
   title 'Ensure CloudTrail defines an SNS Topic'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudtrail in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudtrail resources that actually exist, enumerated through the
+    declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Without an SNS topic on the trail nothing announces that a new log file
+    has been delivered, so anything built on CloudTrail has to poll the
+    bucket and learns about activity late. The deployed trail is what
+    settles this: the topic association can be dropped by a single
+    UpdateTrail call that leaves the Terraform completely unchanged.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_cloudtrail: sns_topic_name is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail#sns-topic-name
+    Terraform — aws_cloudtrail:
+
+      resource "aws_sns_topic" "cloudtrail" {
+        name              = "cloudtrail-notifications"
+        kms_master_key_id = aws_kms_key.sns.id
+      }
+
+      data "aws_iam_policy_document" "cloudtrail_sns" {
+        statement {
+          sid       = "AllowCloudTrailPublish"
+          effect    = "Allow"
+          actions   = ["SNS:Publish"]
+          resources = [aws_sns_topic.cloudtrail.arn]
+
+          principals {
+            type        = "Service"
+            identifiers = ["cloudtrail.amazonaws.com"]
+          }
+        }
+      }
+
+      resource "aws_sns_topic_policy" "cloudtrail" {
+        arn    = aws_sns_topic.cloudtrail.arn
+        policy = data.aws_iam_policy_document.cloudtrail_sns.json
+      }
+
+      resource "aws_cloudtrail" "example" {
+        name                          = "org-trail"
+        s3_bucket_name                = aws_s3_bucket.trail.id
+        sns_topic_name                = aws_sns_topic.cloudtrail.name
+        include_global_service_events = true
+        is_multi_region_trail         = true
+        enable_log_file_validation    = true
+        kms_key_id                    = aws_kms_key.cloudtrail.arn
+      }
+
+    Out of band — aws_cloudtrail:
+
+      aws cloudtrail update-trail --name org-trail --sns-topic-name cloudtrail-notifications
+
+    Note (aws_cloudtrail): The topic policy must already allow
+    cloudtrail.amazonaws.com to SNS:Publish before the trail is updated, or
+    UpdateTrail rejects the call with InsufficientSnsTopicPolicyException.
+    Subscribe SQS rather than email or SMS: an active account generates a very
+    large number of notifications.
   FIX
 
   tag checkov_id:            'CKV_AWS_252'
@@ -34,9 +85,44 @@ control 'CKV_AWS_252' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cloudtrail]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail#sns-topic-name'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-12', 'SI-4']
+  tag nist_r4:               ['AU-12', 'SI-4']
+  tag cci:                   ['CCI-000172', 'CCI-002664']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_252 — no deployed-asset reader for aws_cloudtrail" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_cloudtrail', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_cloudtrail enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = assets.assets(exempt: exempt)
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_cloudtrail in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_cloudtrail #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:sns_topic_arn] }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

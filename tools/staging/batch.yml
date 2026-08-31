@@ -1,0 +1,247 @@
+# Slice: batch (CKV_AWS_102, 239, 279, 292, 359, 360, 361, 362, 383, 44, 47, 74)
+#
+# Outcome: 0 mapped, 12 skipped.
+#
+# Every check in this slice reads a service inspec-aws ships no resource for, so
+# all twelve need the `api` reader -- and all four SDK gems they need are absent
+# from the auditor image:
+#
+#     aws-sdk-neptune       CKV_AWS_44, 102, 279, 359, 361, 362
+#     aws-sdk-docdb         CKV_AWS_74, 292, 360
+#     aws-sdk-dax           CKV_AWS_47, 239
+#     aws-sdk-bedrockagent  CKV_AWS_383
+#
+# tools/lint_api_specs.py names all four in its own docstring, and
+# tools/api_specs_pending_gems.yml already parks aws_neptune_cluster and
+# aws_docdb_cluster for exactly this reason. merge_proposals refuses an api spec
+# naming any of them (validate(): `gem '...' is not in the auditor image`).
+#
+# The absence is real and not an artefact of how it was searched for: no
+# vendor/**/libraries/ file is named for any of the four, and grepping the
+# vendored pack's CONTENTS for the four service names returns exactly one hit --
+# aws_dms_endpoints.rb's `neptune_settings` column, which is a DMS endpoint
+# setting and not a Neptune reader.
+#
+# There is also no third route. render_controls dispatches on reader in the
+# order singleton / api / stock, and anything else falls through to render(),
+# which is the aws_compute_assets EC2 reader -- not a general escape hatch. So
+# `reader: custom` is not a way around a missing gem for these types.
+#
+# All four services are regional; none is an S3/IAM/CloudFront/Route53-style
+# global service, so `scope: regional` is right on every sketched spec below and
+# `scope: global` is correctly absent.
+#
+# So this file carries no api_specs and no mappings.
+#
+# It also deliberately carries NO metadata and NO fixes. All twelve checks
+# ALREADY have entries in tools/control_metadata_derived.yml and
+# tools/fix_examples.yml, each complete against META_REQUIRED and each carrying
+# `nist_source: agent-drafted`. Restaging them would not error: merge_proposals
+# only refuses a redefinition of an AUTHORED entry, and folds a derived one in
+# with `doc.update(...)`, silently overwriting. That is the failure class the
+# tool exists to prevent, so the three improvements this pass found are reported
+# for a direct, reviewable edit to the live files instead of being smuggled in
+# through a merge:
+#
+#   * CKV_AWS_360 has no `what`, and the catalogue mis-derives it as kind
+#     `value` / expected `True`. render_planned calls check_prose, so this is
+#     visible in the SHIPPED control today: controls/CKV_AWS_360.rb reads
+#     "Checkov looks for: aws_docdb_cluster: backup_retention_period is True".
+#     The check body is `conf.get("backup_retention_period", [1])[0] >= 7`.
+#     Suggested: `what: backup_retention_period is at least 7 days` -- which is
+#     exactly what CKV_AWS_361 already carries.
+#   * CKV_AWS_383 has no `what`, and its `expected` is the CKV_ANY sentinel, so
+#     controls/CKV_AWS_383.rb currently reads "Checkov looks for:
+#     aws_bedrockagent_agent: guardrail_configuration/[0]/guardrail_identifier is
+#     CKV_ANY". Suggested: `what: a guardrail_configuration block naming a
+#     guardrail_identifier is present on the agent`.
+#   * CKV_AWS_362 anchors to CM-8 + AU-12. AU-12 is audit-record generation and
+#     does not bear on copying tags to snapshots; CM-6 is the closer second
+#     anchor. Inert either way while the control is planned (render_planned emits
+#     no nist/cci/ksi tags), so this is not urgent.
+#
+# Field spellings in the sketched specs below were verified member-by-member
+# against botocore 1.43.24 output shapes, not against the Terraform argument
+# names, and they are recorded here so the next pass does not have to redo it.
+# The one place the two diverge sharply is CKV_AWS_47: Terraform's
+# `server_side_encryption/[0]/enabled` is a BOOLEAN, while the API field is the
+# enum string SSEDescription.Status -- `sse_description.status` in Ruby.
+
+skipped:
+
+  # ---- Neptune: gem absent, and the RDS fallback would not answer the rule ----
+
+  CKV_AWS_44: >-
+    aws-sdk-neptune is not in the auditor image (tools/image_gems.txt), so
+    merge_proposals refuses the api spec. aws_neptune_cluster is already parked in
+    tools/api_specs_pending_gems.yml for this reason, with storage_encrypted declared.
+    The RDS-family fallback was considered and rejected: neither the stock shape
+    (enumeration_for emits a bare `aws_rds_clusters(aws_region: region).cluster_identifier`
+    with no where-clause) nor the api shape (aws_api_assets#collect extracts fields and
+    filters nothing) can restrict the population to engine == neptune, so enumerating
+    aws_rds_clusters would assess every RDS cluster in the account under a Neptune title,
+    and the assertion would be identical to the already-reviewed CKV_AWS_96
+    (aws_rds_cluster.storage_encrypted == true). Unblocks when aws-sdk-neptune is added
+    to the image; metadata and fixes for it are already live. Confirmed against botocore:
+    Neptune DescribeDBClusters -> DBClusters carries StorageEncrypted,
+    DBClusterIdentifier and DBClusterArn, so the parked spec's field names are right.
+
+  CKV_AWS_102: >-
+    aws-sdk-neptune is not in the auditor image, so merge_proposals refuses the
+    aws_neptune_cluster_instance api spec. The RDS fallback (aws_rds_instances ->
+    aws_rds_instance.publicly_accessible) cannot be restricted to engine == neptune in
+    either shape and would be identical to the already-reviewed CKV_AWS_17, so it would
+    look like Neptune coverage while providing none. Unblocks with the gem; the spec
+    needed is Aws::Neptune::Client#describe_db_instances -> db_instances, scope regional,
+    id db_instance_identifier, arn db_instance_arn, field publicly_accessible, equals
+    false. Confirmed against botocore: Neptune's DBInstance shape carries
+    PubliclyAccessible, DBInstanceIdentifier and DBInstanceArn. Not vacuous --
+    publicly_accessible is a boolean AWS always populates, so `true` is a reachable
+    failing state.
+
+  CKV_AWS_279: >-
+    aws-sdk-neptune is not in the auditor image, so merge_proposals refuses the
+    aws_neptune_cluster_snapshot api spec. The RDS fallback
+    (aws_rds_db_cluster_snapshots -> storage_encrypted) has no engine filter and is
+    already occupied by the reviewed CKV_AWS_146 over the same population. Unblocks with
+    the gem; the spec needed is Aws::Neptune::Client#describe_db_cluster_snapshots ->
+    db_cluster_snapshots, scope regional, id db_cluster_snapshot_identifier, arn
+    db_cluster_snapshot_arn, field storage_encrypted, equals true. Confirmed against
+    botocore: that shape carries StorageEncrypted, DBClusterSnapshotIdentifier and
+    DBClusterSnapshotArn.
+
+  CKV_AWS_359: >-
+    aws-sdk-neptune is not in the auditor image, so merge_proposals refuses the
+    aws_neptune_cluster api spec. The RDS fallback would duplicate the reviewed
+    CKV_AWS_162 (aws_rds_cluster.iam_database_authentication_enabled == true) over an
+    engine-unfiltered population. Unblocks with the gem; the field
+    iam_database_authentication_enabled is already declared on the parked
+    aws_neptune_cluster spec in api_specs_pending_gems.yml, and botocore confirms
+    Neptune's DBCluster shape really does carry IAMDatabaseAuthenticationEnabled (the
+    Ruby SDK underscores it to iam_database_authentication_enabled, matching the
+    vendored aws_rds_cluster spelling).
+
+  CKV_AWS_361: >-
+    aws-sdk-neptune is not in the auditor image, so merge_proposals refuses the
+    aws_neptune_cluster api spec. The RDS fallback is worse here than a duplicate: the
+    reviewed CKV_AWS_133 asserts backup_retention_period > 0 over aws_rds_clusters, and
+    asserting Neptune's >= 7 over that same unfiltered population would fail Aurora
+    clusters with one-day retention and report them as a Neptune finding -- a wrong
+    result, not just a mis-titled one. Note also that the catalogue records this check
+    as kind `custom` with an EMPTY inspected_key; the threshold lives in the check body
+    and is captured by the live metadata `what`. Unblocks with the gem, and the encoding
+    must be `satisfies: at_least, value: 7` -- NOT the `greater_than, value: 6` the
+    batch2 proposal carried. matcher_for's own docstring records greater_than-used-as-
+    at-least as a bug that was fixed by adding at_least ("a policy demanding 'at least
+    14' failed on exactly 14"), and rendering `should be > 6` under a `what` that says
+    "at least 7 days" reintroduces exactly the mismatch that comment exists to prevent.
+
+  CKV_AWS_362: >-
+    aws-sdk-neptune is not in the auditor image, so merge_proposals refuses the
+    aws_neptune_cluster api spec. The RDS fallback would duplicate the reviewed
+    CKV_AWS_313 (aws_rds_cluster.copy_tags_to_snapshot == true) over an
+    engine-unfiltered population. Unblocks with the gem; copy_tags_to_snapshot is
+    already declared on the parked aws_neptune_cluster spec, and botocore confirms
+    CopyTagsToSnapshot is a real member of Neptune's DBCluster shape rather than an
+    RDS-only field assumed to carry over.
+
+  # ---- DocumentDB: gem absent ------------------------------------------------
+
+  CKV_AWS_74: >-
+    aws-sdk-docdb is not in the auditor image, so merge_proposals refuses the api spec;
+    aws_docdb_cluster is already parked in tools/api_specs_pending_gems.yml with
+    storage_encrypted declared, and botocore confirms DocDB's DescribeDBClusters ->
+    DBClusters carries StorageEncrypted, DBClusterIdentifier and DBClusterArn. The RDS
+    fallback would duplicate the reviewed CKV_AWS_96 over an engine-unfiltered
+    population and claim DocumentDB scope it does not have. Unblocks with the gem.
+
+  CKV_AWS_360: >-
+    aws-sdk-docdb is not in the auditor image, so merge_proposals refuses the api spec.
+    The RDS fallback would assert >= 7 days over every RDS cluster, producing Aurora
+    failures reported as DocumentDB findings, where the reviewed CKV_AWS_133 asserts only
+    > 0 on that population. Separately: the catalogue mis-derives this check as kind
+    `value` with expected `True`, and because render_planned calls check_prose the
+    shipped controls/CKV_AWS_360.rb already tells a reader "backup_retention_period is
+    True"; the check body is `conf.get("backup_retention_period", [1])[0] >= 7`, so the
+    live metadata should gain `what: backup_retention_period is at least 7 days`.
+    Unblocks with the gem, as `satisfies: at_least, value: 7` on the parked
+    aws_docdb_cluster spec's backup_retention_period field -- not the batch2 proposal's
+    `greater_than, value: 6`, for the reason recorded under CKV_AWS_361.
+
+  CKV_AWS_292: >-
+    aws-sdk-docdb is not in the auditor image, so merge_proposals refuses the
+    aws_docdb_global_cluster api spec. The vendored aws_rds_global_clusters /
+    aws_rds_global_cluster pair is not a substitute, on two grounds that hold
+    independently of the one question left open. First, the plural carries a defect:
+    `register_column(:storage_encrypted, field: :role_arn)` while fetch_data populates
+    `storage_encrypted:` and never populates `role_arn`, so that column is permanently
+    nil and any mapping through it would read Not Applicable forever. (The same file has
+    a second instance -- `vpc_security_group_ids` is registered with no matching key in
+    fetch_data -- so this is a pattern in that resource, not a one-off typo.) Second,
+    neither shape can filter by engine, so even a working column would assess every RDS
+    global cluster under a DocumentDB title. The open question -- whether
+    Aws::RDS::Client#describe_global_clusters surfaces DocumentDB global clusters at all
+    -- is therefore moot rather than load-bearing, and botocore cannot settle it either
+    way (it describes shapes, not cross-service visibility). What botocore DOES settle is
+    that DocDB ships its own DescribeGlobalClusters operation whose GlobalCluster shape
+    carries StorageEncrypted, GlobalClusterIdentifier and GlobalClusterArn, so the gem
+    route is the correct one and not merely the convenient one. Unblocks as
+    Aws::DocDB::Client#describe_global_clusters -> global_clusters, scope regional, id
+    global_cluster_identifier, arn global_cluster_arn, field storage_encrypted, equals
+    true.
+
+  # ---- DAX and Bedrock: gem absent, and no vendored resource at all ----------
+
+  CKV_AWS_47: >-
+    aws-sdk-dax is not in the auditor image, so merge_proposals refuses the
+    aws_dax_cluster api spec -- and it is named in the lint_api_specs.py docstring.
+    inspec-aws ships no DAX resource either (no vendor/**/libraries/ file is named for
+    it and no vendored file mentions the service), so there is no stock fallback and no
+    api_specs_pending_gems.yml entry yet. Unblocks with the gem; the spec needed is
+    Aws::DAX::Client#describe_clusters -> clusters, scope regional, id cluster_name, arn
+    cluster_arn, field sse_status = sse_description.status, `satisfies: in_list, value:
+    [ENABLED]`. Confirmed against botocore: Cluster carries ClusterName, ClusterArn and
+    SSEDescription, SSEDescription's only member is Status, and its enum is
+    ENABLING/ENABLED/DISABLING/DISABLED -- so ENABLED is the right literal, and note that
+    the API field is an enum STRING while Checkov's inspected_key
+    (server_side_encryption/[0]/enabled) is a Terraform boolean. ONE THING THE NEXT PASS
+    MUST CONFIRM BEFORE SHIPPING THIS: SSEDescription is an optional structure, and
+    `in_list` is a value comparison, so nil_filter_for REJECTS nil rows. If DAX omits
+    SSEDescription entirely on a cluster with SSE off, the failing population is filtered
+    out of scope and the control becomes structurally unfailable -- the exact defect
+    nil_filter_for's docstring records. The presence of a DISABLED enum member is
+    evidence that the struct is returned when SSE is off, but that is inference from the
+    model, not an observation; confirm against a real unencrypted DAX cluster.
+
+  CKV_AWS_239: >-
+    aws-sdk-dax is not in the auditor image and inspec-aws ships no DAX resource, so
+    there is neither an api nor a stock path. Unblocks with the gem; same
+    describe_clusters spec as CKV_AWS_47, field cluster_endpoint_encryption_type,
+    `satisfies: in_list, value: [TLS]`. Confirmed against botocore: that member exists on
+    Cluster and its enum is NONE/TLS, so unlike CKV_AWS_47 there is no nil-filter risk
+    here -- the failing state is the real value NONE rather than an absent field, and the
+    control can genuinely fail. (`equals` would also work now: ruby_literal quotes
+    strings, so the batch4 note claiming equals would emit a bare Ruby identifier is
+    stale. in_list is still preferable as it leaves room for a second accepted value.)
+
+  CKV_AWS_383: >-
+    aws-sdk-bedrockagent is not in the auditor image, so merge_proposals refuses the
+    aws_bedrockagent_agent api spec -- named in the lint_api_specs.py docstring
+    alongside neptune, docdb and dax. inspec-aws ships no Bedrock resource, so there is
+    no stock fallback. THE GEM IS THE ONLY BLOCKER: the question the batch1 note left
+    open is now settled in the mapping's favour. botocore 1.43.24's bedrock-agent model
+    puts guardrailConfiguration on the ListAgents AgentSummary itself, not only on
+    GetAgent, with members guardrailIdentifier and guardrailVersion -- so aws_api_assets,
+    which makes no per-item call, can express this check exactly as drafted. Note also
+    that AgentSummary has NO agentArn (GetAgent's Agent shape does), which is why the
+    batch1 spec correctly omits `arn:`; per-check exemptions for this type must therefore
+    be written as ids, not arns. Correcting the other half of that note as well: it
+    claimed a nil field would empty the population and render Not Applicable. That is
+    backwards for this mapping. The proposed verb is `not_empty`, and nil_filter_for
+    deliberately does NOT filter nils for not_empty/empty precisely because filtering
+    them made presence checks structurally unfailable -- so a nil guardrail_identifier is
+    the FAILING state, which is the correct behaviour here since guardrailConfiguration
+    is genuinely optional and absent exactly when no guardrail is attached. Unblocks with
+    the gem, as Aws::BedrockAgent::Client#list_agents -> agent_summaries, scope regional,
+    id agent_id, no arn, field guardrail_identifier =
+    guardrail_configuration.guardrail_identifier, `satisfies: not_empty`.

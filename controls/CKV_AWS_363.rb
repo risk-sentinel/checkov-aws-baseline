@@ -2,30 +2,67 @@
 #
 # Rule:        CKV_AWS_363 (checkov 3.3.16)
 # Applies to:  aws_lambda_function
-# Status:      PLANNED — no deployed-asset reader exists for aws_lambda_function yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_363'] || []
 
 control 'CKV_AWS_363' do
-  impact 0.0
   title 'Ensure Lambda Runtime is not deprecated'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_lambda_function in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_lambda_function resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A deprecated Lambda runtime stops receiving security patches for the
+    language runtime and the OS packages beneath it, and AWS eventually
+    blocks first updates and then invocations. The deployed runtime is the
+    one that matters: a function created before its runtime was deprecated
+    keeps running on it until someone changes it, with no Terraform change
+    to notice.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_lambda_function: runtime is not dotnetcore3.1 or nodejs12.x or python3.6 or python2.7 or dotnet5.0 or dotnetcore2.1 or ruby2.5 or nodejs10.x or nodejs8.10 or nodejs4.3 or nodejs6.10 or dotnetcore1.0 or dotnetcore2.0 or nodejs4.3-edge or nodejs or java8 or python3.7 or go1.x or provided or ruby2.7 or nodejs14.x or nodejs16.x or python3.9 or dotnet7 or dotnet6
+    Checkov looks for: aws_lambda_function: runtime is not dotnetcore3.1 or
+    nodejs12.x or python3.6 or python2.7 or dotnet5.0 or dotnetcore2.1 or
+    ruby2.5 or nodejs10.x or nodejs8.10 or nodejs4.3 or nodejs6.10 or
+    dotnetcore1.0 or dotnetcore2.0 or nodejs4.3-edge or nodejs or java8 or
+    python3.7 or go1.x or provided or ruby2.7 or nodejs14.x or nodejs16.x or
+    python3.9 or dotnet7 or dotnet6
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function#runtime
+    Terraform — aws_lambda_function:
+
+      resource "aws_lambda_function" "example" {
+        function_name = "example"
+        role          = aws_iam_role.lambda.arn
+        handler       = "index.handler"
+        runtime       = "python3.12"
+        filename      = "function.zip"
+
+        tracing_config {
+          mode = "Active"
+        }
+      }
+
+    Out of band — aws_lambda_function:
+
+      aws lambda list-functions --query 'Functions[?Runtime!=`null`].[FunctionName,Runtime]' --output table
+      aws lambda update-function-configuration --function-name example --runtime python3.12
+
+    Note (aws_lambda_function): Changing the runtime is a configuration change,
+    not a redeploy, but the deployment package has to be compatible with the new
+    runtime first — update the code, then the runtime, or the function starts
+    erroring on the next invocation. Container-image functions have no runtime
+    setting and are out of scope for this check; their base image is what has to
+    be rebuilt.
   FIX
 
   tag checkov_id:            'CKV_AWS_363'
@@ -34,9 +71,46 @@ control 'CKV_AWS_363' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_lambda_function]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function#runtime'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SI-2', 'SI-2 (5)']
+  tag nist_r4:               ['SI-2', 'SI-2 (5)']
+  tag cci:                   ['CCI-001227', 'CCI-002605']
+  tag ksi:                   ['KSI-CMT-VTD']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_363 — no deployed-asset reader for aws_lambda_function" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_lambda_function', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_lambda_function enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:runtime].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_lambda_function in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_lambda_function #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:runtime] }
+      it { should_not be_in ['dotnetcore3.1', 'nodejs12.x', 'python3.6', 'python2.7', 'dotnet5.0', 'dotnetcore2.1', 'ruby2.5', 'nodejs10.x', 'nodejs8.10', 'nodejs4.3', 'nodejs6.10', 'dotnetcore1.0', 'dotnetcore2.0', 'nodejs4.3-edge', 'nodejs', 'java8', 'python3.7', 'go1.x', 'provided', 'ruby2.7', 'nodejs14.x', 'nodejs16.x', 'python3.9', 'dotnet7', 'dotnet6'] }
+    end
   end
 end

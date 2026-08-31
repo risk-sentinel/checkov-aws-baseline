@@ -2,30 +2,61 @@
 #
 # Rule:        CKV2_AWS_57 (checkov 3.3.16)
 # Applies to:  aws_secretsmanager_secret
-# Status:      PLANNED — no deployed-asset reader exists for aws_secretsmanager_secret yet.
+# Read with:   aws_secretsmanager_secrets -> aws_secretsmanager_secret (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_57'] || []
 
 control 'CKV2_AWS_57' do
-  impact 0.0
   title 'Ensure Secrets Manager secrets should have automatic rotation enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_secretsmanager_secret in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_secretsmanager_secret resources that actually exist, read
+    through the stock inspec-aws aws_secretsmanager_secret resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A secret that is never rotated stays valid for as long as it exists, so
+    the window between a leak and its expiry is unbounded. Automatic
+    rotation caps that window without depending on anyone noticing the leak,
+    which is the only form of credential hygiene that survives contact with
+    a real estate.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure Secrets Manager secrets should have automatic rotation enabled
+    Checkov looks for: Ensure Secrets Manager secrets should have automatic
+    rotation enabled
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret
+    Terraform — aws_secretsmanager_secret:
+
+      resource "aws_secretsmanager_secret" "example" {
+        name = "example"
+      }
+
+      resource "aws_secretsmanager_secret_rotation" "example" {
+        secret_id           = aws_secretsmanager_secret.example.id
+        rotation_lambda_arn = aws_lambda_function.rotator.arn
+
+        rotation_rules {
+          automatically_after_days = 30
+        }
+      }
+
+    Out of band — aws_secretsmanager_secret:
+
+      aws secretsmanager rotate-secret --secret-id <name> --rotation-lambda-arn <arn> --rotation-rules AutomaticallyAfterDays=30
+
+    Note (aws_secretsmanager_secret): Rotation needs a rotation Lambda that can
+    reach both Secrets Manager and the credential's own service; AWS publishes
+    templates per engine. Secrets owned by another service (OwningService set,
+    e.g. RDS-managed master passwords) rotate under that service's control and
+    should be exempted rather than given a second rotator.
   FIX
 
   tag checkov_id:            'CKV2_AWS_57'
@@ -34,9 +65,56 @@ control 'CKV2_AWS_57' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_secretsmanager_secret]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-5', 'SC-12']
+  tag nist_r4:               ['IA-5', 'SC-12']
+  tag cci:                   ['CCI-000196', 'CCI-002450']
+  tag ksi:                   ['KSI-IAM-CTL', 'KSI-SVC-KMG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_57 — no deployed-asset reader for aws_secretsmanager_secret" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_secretsmanager_secrets(aws_region: region).arns.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_secretsmanager_secret', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_secretsmanager_secret enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_secretsmanager_secret in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_secretsmanager_secret(secret_id: id, aws_region: region) do
+      its('rotation_enabled') { should eq true }
+    end
   end
 end

@@ -11,6 +11,419 @@
 #   CKV_AWS_339: same as CKV_AWS_37
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
 checks:
+  CKV2_AWS_10:
+    aws_cloudtrail:
+      assert:
+        arg: trail_name
+        property: cloud_watch_logs_log_group_arn
+        resource: aws_cloudtrail_trail
+        satisfies: not_empty
+      enumerate:
+        ids: trail_arns
+        resource: aws_cloudtrail_trails
+      note: 'Enumerates trail_arns rather than names on purpose, and the adversarial pass CONFIRMED this
+        against botocore rather than accepting it: the cloudtrail service model documents trailNameList
+        as "If one or more trail names are specified, information is returned only if the names match
+        the names of trails belonging only to the current Region and current account. To return information
+        about a trail in another Region, you must specify its trail ARN." A shadow trail therefore returns
+        an empty trail_list for a bare name, resp.trail_list[0] is nil, nil.to_h is {}, and the ARN reads
+        nil — a FAILED control for a correctly integrated trail, in every region but the trail''s home.
+        trail_arns is a registered column (aws_cloudtrail_trails.rb:23) and trailNameList accepts an ARN.
+        The member spelling is confirmed too: Trail.CloudWatchLogsLogGroupArn -> cloud_watch_logs_log_group_arn,
+        which the singular exposes as an attr_reader (NOT via create_resource_methods, so nil stays nil
+        rather than becoming a NullResponse — not_empty handles both). Known cost, accepted: DescribeTrails
+        includes shadow trails by default, so a multi-region or organization trail is assessed once per
+        scanned region and produces N identical results with the same verdict; `found` is not deduplicated
+        by the template. THE FOUR LIVE MAPPINGS ON THIS PLURAL (CKV_AWS_35, 36, 67, 251) ENUMERATE `names`
+        AND CARRY THE BUG THIS ENTRY AVOIDS — out of scope for this slice, but it wants its own issue.'
+      reader: stock
+  CKV2_AWS_11:
+    aws_vpc:
+      assert:
+        arg: vpc_id
+        property: exists?
+        resource: aws_flow_log
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: vpc_ids
+        resource: aws_vpcs
+      note: 'enumerate.resource and assert.resource are independent, so this is a one-hop join already
+        expressible today. aws_vpcs registers :vpc_ids (libraries/aws_vpcs.rb:17). Asserted through exists?
+        rather than log_group_name because a flow log delivered to S3 or to Data Firehose has no log group
+        and is still a flow log — Checkov only requires the connection to exist. The `resource-id` filter
+        is confirmed in the botocore ec2 model as "The ID of the VPC, subnet, or network interface", so
+        passing a vpc-id is the documented reverse lookup, and exists? is `!@flow_log_id.nil?` over FlowLog.FlowLogId.
+        TOOLING TRAP, recorded so it is not mistaken for a real finding later: lint_resource_map.py''s
+        required_params() keeps only the FIRST alternative of a require_any_of, so it reports aws_flow_log
+        as requiring flow_log_id and will flag arg: vpc_id as wrong. The Ruby is `validate_parameters(require_any_of:
+        %i(flow_log_id subnet_id vpc_id))` and validate_parameters adds every alternative to `allow`,
+        so vpc_id is valid. The lint reads resource_map.yml only, and this entry lands in resource_map_derived.yml,
+        so nothing fails today — but do not "fix" this by switching the arg if the entry is ever promoted
+        to the authored map. Known limitation, matching Checkov: a flow log whose DeliverLogsStatus is
+        FAILED still satisfies this, because both check for the connection rather than for delivery.'
+      reader: stock
+  CKV2_AWS_14:
+    aws_iam_group:
+      assert:
+        arg: group_name
+        property: users
+        resource: aws_iam_group
+        satisfies: not_empty
+      enumerate:
+        ids: group_names
+        resource: aws_iam_groups
+      note: 'Global service, so enumerated once rather than once per region. Asserted on the GROUP rather
+        than on a membership object, because deployed there is no membership object — GetGroup answers
+        it directly, and GetGroupResponse.Users is confirmed in the botocore iam model. The singular sets
+        @users through an attr_reader from @resp[:users].map(&:user_name), so the empty case is [] and
+        not_empty reads it as the failure without a nil path. Slightly broader than Checkov, which only
+        evaluates groups that have an aws_iam_group_membership in the plan at all; here a group created
+        by hand and never populated is assessed too. Efficiency note, not a defect: aws_iam_groups#fetch_data
+        already calls GetGroup per group to populate its own :users column, so this pair makes the call
+        twice. Collapsing it would need a plural-only shape the schema does not have.'
+      reader: stock
+      scope: global
+  CKV2_AWS_19:
+    aws_eip:
+      assert:
+        arg: public_ip
+        property: association_id
+        resource: aws_ec2_eip
+        satisfies: not_empty
+      enumerate:
+        ids: public_ips
+        resource: aws_ec2_eips
+      note: 'aws_ec2_eips registers :public_ips (libraries/aws_ec2_eips.rb:16). The singular runs create_resource_methods
+        over Address.to_h; an unassociated address has no AssociationId member at all, so the method is
+        undefined and AwsResourceBase#method_missing returns a NullResponse whose nil? is true — which
+        the not_empty matcher reads as the failing state rather than raising. The adversarial pass verified
+        the load-bearing half of that rather than assuming it: Aws::Structure#to_h in the installed aws-sdk-core
+        is documented and implemented as "Structure members that are nil are omitted from the resultant
+        hash", so the member really is absent rather than present-and-nil. Address.AssociationId and Address.PublicIp
+        are both confirmed in the botocore ec2 model. A NAT gateway''s or a network load balancer''s address
+        carries an AssociationId just as an instance''s does, so the three Checkov pass branches that
+        survive deployment all land on the same field. Does not implement Checkov''s `instance contains
+        "module."` branches: those assert something about the Terraform text, not the asset.'
+      reader: stock
+  CKV2_AWS_22:
+    aws_iam_user:
+      assert:
+        arg: user_name
+        property: has_console_password
+        resource: aws_iam_user
+        satisfies: equals
+        value: false
+      enumerate:
+        ids: usernames
+        resource: aws_iam_users
+      note: 'Strictly better than the IaC check: it sees a console password added by hand after apply.
+        The singular''s arg is user_name while the plural''s column is usernames — those are not the same
+        word, and both were read off the vendored pack rather than transliterated. For a user with no
+        login profile, IAM raises NoSuchEntityException (confirmed as a declared error of GetLoginProfile
+        in the botocore iam model); it is a 404, so catch_aws_errors'' is_permissions_error test is false,
+        it takes the non-permissions branch, logs a warning, sets @failed_resource and returns nil — `nil.present?`
+        is false, which is the passing verdict. Expect one warning line per password-less user; nothing
+        reads @failed_resource on this path, so the assertion is unaffected. The drafting pass flagged
+        `.present?` as an unconfirmed ActiveSupport dependency; it is not unconfirmed — aws_backend.rb''s
+        first three lines are `require "active_support"` and two core_ext requires, so ActiveSupport is
+        a hard load-time dependency of the ENTIRE vendored pack. If it were missing, no resource in this
+        profile would load at all. Also confirmed: the plural derives its id as user.arn.split("/").last,
+        which is the bare user NAME even for a user under a path, and GetUser takes the bare name.'
+      reader: stock
+      scope: global
+  CKV2_AWS_34:
+    aws_ssm_parameter:
+      assert:
+        arg: name
+        property: type
+        resource: aws_ssm_parameter
+        satisfies: equals
+        value: SecureString
+      enumerate:
+        ids: names
+        resource: aws_ssm_parameters
+      note: 'aws_ssm_parameters registers :names (libraries/aws_ssm_parameters.rb:16) from DescribeParameters,
+        which takes no required arguments. The singular calls GetParameter without with_decryption, which
+        is permitted on a SecureString and returns Type without returning the plaintext — so this never
+        pulls a secret value into the run. Spelling and literal both confirmed in the botocore ssm model:
+        Parameter.Type, with the ParameterType enum exactly ["String", "StringList", "SecureString"],
+        so the asserted value is byte-correct and cannot silently never match. LANDMINE IN THIS RESOURCE,
+        recorded so no later pass steps on it: the singular defines `def name; name if exists?; end` (aws_ssm_parameter.rb),
+        which is unbounded self-recursion whenever create_resource_methods has NOT run — i.e. whenever
+        GetParameter returned no parameter. This mapping asserts `type` and never touches it, but NEVER
+        map `name` as the property on aws_ssm_parameter: it is a SystemStackError, not a nil.'
+      reader: stock
+  CKV2_AWS_42:
+    aws_cloudfront_distribution:
+      assert:
+        arg: distribution_id
+        property: ssl_certificate
+        resource: aws_cloudfront_distribution
+        satisfies: not_equals
+        value: cloudfront
+      enumerate:
+        ids: distribution_ids
+        resource: aws_cloudfront_distributions
+      note: '"IAMCertificateId or ACMCertificateArn exists" is exactly "CertificateSource != cloudfront",
+        and the botocore cloudfront model confirms both the member (ViewerCertificate.CertificateSource)
+        and the closed enum ["cloudfront", "iam", "acm"], so the asserted literal is exact and the three-way
+        value really is a two-way question. Global service, enumerated once. RESIDUAL HOLE, disclosed
+        rather than papered over: the verb is not_equals, so nil PASSES. CloudFront always populates ViewerCertificate
+        on a real distribution, but if get_distribution returns a non-403 service error, catch_aws_errors
+        swallows it to nil, the singular''s `return if @resp.nil?` leaves @ssl_certificate unset, and
+        the control reports a PASS it did not earn. A 403 still raises ResourceFailed, so the permissions
+        case is loud; only a transient service-side error is silent. Closing it properly needs an in_list
+        verb over ["iam", "acm"], which matcher_for implements — worth revisiting, but it changes the
+        semantics from "not the default cert" to "one of two known sources" and would newly fail on any
+        source AWS adds later.'
+      reader: stock
+      scope: global
+  CKV2_AWS_49:
+    aws_dms_endpoint:
+      assert:
+        arg: endpoint_arn
+        property: ssl_mode
+        resource: aws_dms_endpoint
+        satisfies: not_equals
+        value: none
+      enumerate:
+        ids: endpoint_arns
+        resource: aws_dms_endpoints
+      note: 'Confirmed: aws_dms_endpoints registers endpoint_arns (field :endpoint_arn) and takes no required
+        parameters; aws_dms_endpoint requires endpoint_arn and runs create_resource_methods over the endpoint
+        hash, so ssl_mode is a real method. botocore dms DescribeEndpoints returns SslMode on every endpoint.
+        STRICTER THAN CHECKOV, deliberately: the rule definition exempts source endpoints on s3/azuredb
+        and target endpoints on dynamodb/kinesis/neptune/redshift/s3/elasticsearch/kafka, and the mapping
+        schema has no `where` clause to express that. Those engines report SslMode="none" and will fail
+        here. Use exempt_assets for them, or add a `where` guard when the schema grows one.'
+      reader: stock
+  CKV2_AWS_50:
+    aws_elasticache_replication_group:
+      assert:
+        arg: replication_group_id
+        property: auto_failover?
+        resource: aws_elasticache_replication_group
+        satisfies: equals
+        value: enabled
+      enumerate:
+        ids: ids
+        resource: aws_elasticache_replication_groups
+      note: DIVERGES FROM THE PROPOSAL, which asked for `equals true`. That would have rendered `its('auto_failover?')
+        { should eq true }` and failed on EVERY group in the account. The stock `auto_failover?` returns
+        @replication_group[:automatic_failover] unchanged, and botocore elasticache types AutomaticFailover
+        as a STRING enum — enabled | disabled | enabling | disabling — not a boolean. 'enabled' is the
+        compliant value; a group stuck in 'enabling'/'disabling' fails, which is the right answer for
+        a Multi-AZ-failover assertion. Enumeration column is `ids` (field :id), NOT replication_group_ids
+        — the singular name is misleading here and the vendored FilterTable is the authority.
+      reader: stock
+  CKV2_AWS_52:
+    aws_opensearch_domain:
+      assert:
+        arg: domain_name
+        property: advanced_security_options.enabled
+        resource: aws_elasticsearchservice_domain
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: domain_names
+        resource: aws_elasticsearchservice_domains
+      note: botocore es ElasticsearchDomainStatus.AdvancedSecurityOptions.Enabled is a Boolean; the singular
+        runs create_resource_methods over the whole DomainStatus hash and a nested Hash becomes an AwsResourceProbe,
+        so the dotted property resolves the same way the live CKV_AWS_116 mapping's dead_letter_config.target_arn
+        does. Checkov accepts EITHER advanced_security_options.internal_user_database_enabled OR advanced_security_options.enabled;
+        `enabled` is the gate for both, so the single field is faithful. DescribeElasticsearchDomains
+        (plural) requires DomainNames, so the per-domain singular is the only route — which is the shape
+        used. inspec-aws ships only the elasticsearchservice client, which still answers for OpenSearch-generation
+        domains.
+      reader: stock
+  CKV2_AWS_54:
+    aws_cloudfront_distribution:
+      assert:
+        arg: distribution_id
+        property: custom_origin_ssl_protocols
+        resource: aws_cloudfront_distribution
+        satisfies: excludes
+        value: SSLv3
+      enumerate:
+        ids: distribution_ids
+        resource: aws_cloudfront_distributions
+      note: 'The check definition is exactly origin.*.custom_origin_config.origin_ssl_protocols not_contains
+        "SSLv3", and the singular''s attr_reader :custom_origin_ssl_protocols is built by collecting origin_ssl_protocols[:items]
+        across every custom origin — a one-for-one match. Do NOT use the resource''s own has_disallowed_custom_origin_ssl_protocols?:
+        its default disallow list is SSLv3 + TLSv1 + TLSv1_2016, a different and stricter rule than the
+        one this id names. `scope: global` because CloudFront returns the same distributions from every
+        region.'
+      reader: stock
+      scope: global
+  CKV2_AWS_55:
+    aws_emr_cluster:
+      assert:
+        arg: cluster_id
+        property: security_configuration_name
+        resource: aws_emr_cluster
+        satisfies: not_empty
+      enumerate:
+        ids: cluster_ids
+        resource: aws_emr_clusters
+      note: 'emr Cluster.SecurityConfiguration confirmed in botocore; the singular assigns it to attr_reader
+        :security_configuration_name, and the plural registers cluster_ids (field :cluster_id). nil is
+        the failing state and not_empty is a presence check, so a cluster with no security configuration
+        fails rather than being filtered out. CAVEAT: emr ListClusters returns recently TERMINATED clusters
+        as well as live ones, and the schema has no `where` on status_state, so terminated history will
+        be assessed too. That is noise, not a false pass — exempt_assets is the escape until a `where`
+        exists. SECOND CAVEAT, found in review and inherent to the vendored pack: aws_emr_clusters#fetch_data
+        calls list_clusters ONCE and never follows the Marker, while botocore documents ListClusters as
+        returning "a maximum of 50 clusters in unsorted order per call". An account with more than 50
+        clusters in the ~2-month window therefore has an arbitrary subset assessed and nothing said about
+        the rest — including, since the order is unspecified, possibly the live ones. No cluster that
+        IS assessed can pass wrongly, so this is under-enumeration rather than a false pass, but a reviewer
+        reading a clean result must know the population was capped. Fixing it is a change to the upstream
+        resource, not to this mapping.'
+      reader: stock
+  CKV2_AWS_56:
+    aws_iam_policy_attachment:
+      note: 'Confirmed in vendor/.../libraries/aws_iam_policy.rb: the resource takes require_any_of(policy_arn,
+        policy_name), calls iam_client.get_policy for an arn, and exposes `attachment_count` as an attr_reader
+        assigned from @resp.attachment_count. The botocore member is iam.Policy.AttachmentCount and AWS
+        populates it on every GetPolicy response, so nil is not a state to guard against. AttachmentCount
+        is the count of IAM users, groups and roles the policy is attached to, which is exactly the relationship
+        Checkov asserts does not exist — so 0 is the compliant value.
+
+        WHY THIS IS NOT A JOIN. ListEntitiesForPolicy requires a PolicyArn, but that arn is a CONSTANT
+        (the AWS-managed IAMFullAccess policy), not a discovered parent id. One call, one number, no enumeration
+        — which is the singleton shape, not the stock shape.
+
+        PARTITION. The arn prefix differs by partition, so it is built from the declared `aws_partition`
+        input rather than hardcoded to `arn:aws:`; the input is declared in inspec.yml with a default
+        of `aws`, so it can never render empty. `resource:` is substituted into SINGLETON_TEMPLATE by
+        str.format, which does not re-scan the substituted value, so the Ruby interpolation survives rendering
+        intact.
+
+        STRONGER THAN CHECKOV, in the way this profile is meant to be: Checkov sees only attachments written
+        in the HCL it is given. AttachmentCount counts every attachment that exists, including one made
+        by hand in the console and one made from a module Checkov never scanned. It also picks up SSO
+        permission sets, because an AWS-managed policy attached to a permission set materialises as an
+        attachment to the provisioned AWSReservedSSO_* role in the account.
+
+        KNOWN WART IN THE RENDERED EVIDENCE, flagged rather than hidden: SINGLETON_TEMPLATE opens with
+        a fixed `describe ''<tf_type>'' … it ''is configured for this account''` assertion whose failure
+        message is ''no account-level policy is set, so nothing constrains this''. That prose was written
+        for the IAM password policy. Here `exists?` is false only when GetPolicy could not be read at
+        all, so the assertion is still the right posture (nothing was assessed => loud failure, never
+        a silent pass) but the sentence describes the wrong condition. Worth a template fix; not a reason
+        to leave the check unassessed.
+
+        SCOPE OF AttachmentCount, read off botocore rather than assumed: iam.Policy carries AttachmentCount
+        and PermissionsBoundaryUsageCount as SEPARATE members, and only the first is read here. A policy
+        named as a permissions BOUNDARY constrains a principal rather than granting to it, so excluding
+        that usage is correct for this rule — but it is a deliberate exclusion, not an oversight, and
+        a boundary that names IAMFullAccess will not show up in this control.
+
+        ANCHOR NARROWED ON REVIEW: an earlier draft tagged AC-6(1) alongside AC-3 and AC-6. It was dropped
+        rather than kept on weak evidence. Neither declared CCI anchors the enhancement, and the spelling
+        ''AC-6(1)'' does not match the ''XX-N (M)'' form every other enhancement in control_metadata.yml
+        uses (''SC-28 (1)'', ''SC-7 (5)'', ''IA-5 (1)''), so it would not have joined a rollup keyed on
+        the estate''s format. What remains is exactly the reviewed IAM convention already in control_metadata.yml
+        (CKV_AWS_79) and its derived siblings.'
+      property: attachment_count
+      reader: singleton
+      resource: 'aws_iam_policy(policy_arn: "arn:#{input(''aws_partition'')}:iam::aws:policy/IAMFullAccess")'
+      satisfies: equals
+      value: 0
+  CKV2_AWS_57:
+    aws_secretsmanager_secret:
+      assert:
+        arg: secret_id
+        property: rotation_enabled
+        resource: aws_secretsmanager_secret
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: arns
+        resource: aws_secretsmanager_secrets
+      note: 'DIVERGES FROM THE PROPOSAL, which asked for the `api` reader against the live aws_secretsmanager_secret
+        spec''s rotation_enabled field. That shape CANNOT FAIL. AwsApiAssets#dig_path resolves a field
+        as `node[key.to_sym] || node[key]`, so a member whose value is `false` evaluates to `false ||
+        nil` => nil; render_api then emits `.reject { |a| a[:rotation_enabled].nil? }` for a value comparison,
+        which drops exactly the secrets that should fail. Every non-rotating secret would vanish and the
+        control would render Not Applicable or 100% pass. The stock pair has no such problem: aws_secretsmanager_secrets
+        registers arns (field :arn) off ListSecrets (no required args), aws_secretsmanager_secret requires
+        secret_id (an ARN is a valid SecretId) and runs create_resource_methods over DescribeSecret, whose
+        RotationEnabled member is confirmed in botocore. A secret that never had rotation configured is
+        dropped from the to_h, so the method is undefined and method_missing returns NullResponse, whose
+        `== true` is false — it fails, which is correct. Checkov''s connection to aws_secretsmanager_secret_rotation
+        is this boolean deployed.'
+      reader: stock
+  CKV2_AWS_59:
+    aws_opensearch_domain:
+      assert:
+        arg: domain_name
+        property: elasticsearch_cluster_config.dedicated_master_enabled
+        resource: aws_elasticsearchservice_domain
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: domain_names
+        resource: aws_elasticsearchservice_domains
+      note: 'NAME DIVERGENCE, confirmed against botocore rather than transliterated: Terraform calls the
+        block `cluster_config` and Checkov inspects cluster_config.dedicated_master_enabled, but the DescribeElasticsearchDomain
+        response member is ElasticsearchClusterConfig.DedicatedMasterEnabled. A mapping that copied Checkov''s
+        prefix would resolve to a NullResponse on every domain and fail all of them for the wrong reason.
+        Same enumeration and same create_resource_methods singular as CKV2_AWS_52.'
+      reader: stock
+  CKV2_AWS_63:
+    aws_networkfirewall_firewall:
+      assert:
+        arg: firewall_name
+        property: logging_configuration.log_destination_configs
+        resource: aws_network_firewall_logging_configuration
+        satisfies: not_empty
+      enumerate:
+        ids: firewall_names
+        resource: aws_network_firewall_firewalls
+      note: 'DIVERGES FROM THE PROPOSAL, which asked for `exists? equals true`. That control CAN NEVER
+        FAIL. botocore network-firewall DescribeLoggingConfigurationResponse always returns FirewallArn,
+        and the stock resource''s exists? is `!@res.nil? && !@res.empty?` over `resp.to_h` — so it is
+        true for any firewall that exists at all, logging or not. LoggingConfiguration is the member that
+        is absent when no logging is configured, and Aws::Structure#to_h drops nil members, so the dynamic
+        method is never defined and method_missing returns NullResponse, whose nil? is true — which is
+        precisely what the not_empty matcher fails on. ListFirewalls takes no required args (confirmed)
+        and the plural registers firewall_names. REVIEW CORRECTION — the assertion was on `logging_configuration`
+        alone, which leaves one false-pass path open: an AwsResourceProbe answers neither `nil?` nor `respond_to?(:empty?)`,
+        so a LoggingConfiguration carrying an EMPTY LogDestinationConfigs would have PASSED — logging
+        structurally present, nothing actually being written anywhere. The chain now descends one level.
+        LogDestinationConfigs is `required` on the LoggingConfiguration shape in botocore, so it is present
+        whenever the parent is; an empty Array makes create_method define the reader as `[]`, which responds
+        to empty? and FAILS, and an absent parent still yields NullResponse (method_missing returns self
+        down the chain), which also fails. Dotted properties on a create_resource_methods singular are
+        the established shape here — six live mappings on aws_elasticsearchservice_domain and two more
+        on aws_network_firewall_firewall use them.'
+      reader: stock
+  CKV2_AWS_73:
+    aws_sqs_queue:
+      assert:
+        arg: queue_url
+        property: kms_master_key_id
+        resource: aws_sqs_queue
+        satisfies: not_equals
+        value: alias/aws/sqs
+      enumerate:
+        ids: queue_urls
+        resource: aws_sqs_queues
+      note: 'aws_sqs_queues registers queue_urls (field :queue_url, populated from ListQueues — note that
+        several of that resource''s OTHER registered columns name fields its fetch_data never writes,
+        so only queue_urls and arns are usable). The singular requires queue_url and sets attr_reader
+        :kms_master_key_id from GetQueueAttributes["KmsMasterKeyId"]. API DIVERGENCE, read it before trusting
+        the result: Checkov''s first `or` branch is `kms_master_key_id not_exists`, so Checkov PASSES
+        a queue with no key at all. Deployed, an unencrypted queue and an SSE-SQS queue both return no
+        KmsMasterKeyId, and not_equals passes them too — faithful to the rule as written, weaker than
+        its title. The one case the title names, a queue on the AWS-managed key, returns the literal ''alias/aws/sqs''
+        and fails. CAVEAT, found in review and inherent to the vendored pack: aws_sqs_queues#fetch_data
+        calls list_queues ONCE and never follows the NextToken, and botocore documents ListQueues as returning
+        "a maximum of 1,000 results". Past a thousand queues in a region the population is capped silently.
+        Under-enumeration, not a false pass, and an upstream fix.'
+      reader: stock
   CKV_AWS_116:
     aws_lambda_function:
       assert:
@@ -35,9 +448,9 @@ checks:
       enumerate:
         ids: names
         resource: aws_lambdas
-      note: "Checkov asserts the presence of the vpc_config BLOCK. The deployed equivalent is VpcConfig.VpcId,\
-        \ which AWS populates only when the function is actually attached to a VPC \u2014 a function with\
-        \ an empty vpc_config block satisfies Checkov and fails here, correctly."
+      note: Checkov asserts the presence of the vpc_config BLOCK. The deployed equivalent is VpcConfig.VpcId,
+        which AWS populates only when the function is actually attached to a VPC — a function with an
+        empty vpc_config block satisfies Checkov and fails here, correctly.
       reader: stock
   CKV_AWS_119:
     aws_dynamodb_table:
@@ -296,6 +709,36 @@ checks:
         ids: distribution_ids
         resource: aws_cloudfront_distributions
       reader: stock
+  CKV_AWS_175:
+    aws_waf_web_acl:
+      assert:
+        arg: web_acl_id
+        property: rules_rule_ids
+        resource: aws_waf_web_acl
+        satisfies: not_empty
+      enumerate:
+        ids: web_acl_ids
+        resource: aws_waf_web_acls
+      note: 'READ THIS BEFORE TRUSTING A PASS OR AN N/A. Only aws_waf_web_acl (WAF Classic) is assessed.
+        aws_wafv2_web_acl and aws_wafregional_web_acl are NOT, so "no aws_waf_web_acl in scope" means
+        "this account has no CLASSIC web ACLs", never "the account''s WAF is fine". Most accounts will
+        render Not Applicable, and an N/A here is NOT evidence that a wafv2 ACL has rules. What is confirmed:
+        aws_waf_web_acls registers :web_acl_ids with style: :simple and stores the column as an ARRAY
+        per row — the resource''s own unit test asserts web_acl_ids == [''web_acl_id''] from exactly that
+        shape, which is what proves :simple flattens, and which also disposes of the doubly nested `.map`
+        over list_web_acls that reads statically as though it must raise (ListWebACLs is paginated, so
+        both `.map` levels iterate pages, not struct members). rules_rule_ids is a real method on the
+        singular, and botocore waf marks WebACL.Rules REQUIRED, so it is always an Array: an ACL with
+        no rules yields [] and fails, which is precisely Checkov''s FAILED case. scope: global is evidence-backed,
+        not an optimisation — botocore endpoints.json marks waf isRegionalized:false with partitionEndpoint
+        aws-global, and waf/endpoint-rule-set-1.json resolves EVERY region in the aws partition to https://waf.amazonaws.com
+        signing as us-east-1. It is the same endpoint shape as IAM, CloudFront and Route 53. NOTE FOR
+        THE FIRST EXEC: this is the first scope: global entry in resource_map — the live sibling CKV_AWS_176
+        reads the same aws_waf_web_acls REGIONALLY — so the global branch of enumeration_for() (`found
+        = aws_waf_web_acls.web_acl_ids...`, no aws_region anywhere) has never run. It needs an ambient
+        AWS_REGION in the runner like every other client here does.'
+      reader: stock
+      scope: global
   CKV_AWS_176:
     aws_waf_web_acl:
       assert:
@@ -364,6 +807,33 @@ checks:
         ids: broker_ids
         resource: aws_mq_brokers
       reader: stock
+  CKV_AWS_210:
+    aws_batch_job_definition:
+      assert:
+        arg: job_definition_name
+        property: container_properties.privileged
+        resource: aws_batch_job_definition
+        satisfies: not_equals
+        value: true
+      enumerate:
+        ids: job_definition_names
+        resource: aws_batch_job_definitions
+      note: 'botocore batch confirms ContainerProperties.privileged (optional) and JobDefinition.containerProperties;
+        the Ruby SDK snake-cases the member and create_resource_methods turns the nested hash into an
+        AwsResourceProbe, so the dotted chain resolves — the same shape CKV_AWS_116/117/5/83 use live.
+        not_equals rather than `equals false` on purpose: AWS omits the member when it was never set,
+        the probe answers a missing member with NullResponse, and NullResponse#== returns other.nil?.
+        `should eq false` would therefore FAIL every non-privileged definition; `should_not eq true` passes
+        those and still fails a genuinely privileged one. Three imprecisions, all conservative rather
+        than silent. (1) REVISIONS: the plural emits one row PER REVISION but every row carries the same
+        job_definition_name, and the singular takes job_definitions[0] — so a name with N revisions produces
+        N identical describes of ONE revision and the other N-1 revisions are NEVER ASSESSED. This is
+        a coverage gap, not merely duplicated API calls; treat a pass as covering one revision per name.
+        (2) A definition using ecsProperties/eksProperties/nodeProperties instead of containerProperties
+        has no privileged member and passes — Checkov reads container_properties only, so it shares the
+        blind spot. (3) Both calls omit the `status` filter, so whether deregistered (INACTIVE) revisions
+        are enumerated is a live-run question.'
+      reader: stock
   CKV_AWS_216:
     aws_cloudfront_distribution:
       assert:
@@ -408,6 +878,22 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
+  CKV_AWS_23:
+    aws_security_group_rule:
+      field: description
+      note: 'Checkov wants a description on the security group AND on every ingress/egress rule. This
+        assesses the RULE half only. The group half is not assessed here and is not claimed to be: EC2
+        requires GroupDescription at create time so it is never absent, but Checkov also treats the provider''s
+        default "Managed by Terraform" as a failure and no deployed read can distinguish that from a deliberate
+        description — do not read a pass here as covering the group. SecurityGroupRule.Description is
+        confirmed in botocore ec2 and is OPTIONAL, so a rule created without one comes back absent and
+        the row''s field is nil. not_empty is a presence check, so nil_filter_for deliberately leaves
+        nils in scope and nil is the failing state — the control is failable, not vacuous. Stronger than
+        Checkov in one direction: it sees rules added in the console, by another tool, or by a module
+        Checkov never scanned. Expect a lot of findings on a first run — default-VPC and AWS-created rules
+        carry no description.'
+      reader: api
+      satisfies: not_empty
   CKV_AWS_248:
     aws_elasticsearch_domain: &id003
       assert:
@@ -438,6 +924,26 @@ checks:
         IaC check: enable_logging in HCL is the requested state, is_logging is whether the trail is delivering
         right now.'
       reader: stock
+  CKV_AWS_252:
+    aws_cloudtrail:
+      field: sns_topic_arn
+      note: 'Checkov (CloudtrailDefinesSNSTopic) inspects the Terraform argument `sns_topic_name` for
+        ANY_VALUE. TF-vs-API divergence: name -> ARN. The API member asserted is Trail.SnsTopicARN, and
+        the choice between the two SNS members is settled by AWS rather than by preference — botocore''s
+        documentation for Trail.SnsTopicName reads, in full, "This field is no longer in use. Use SnsTopicARN."
+        not_empty is right rather than merely convenient: AWS documents the trailList response as returning
+        the SNS members "only if values for the objects exist in a trail''s configuration", so a trail
+        with no SNS topic returns no SnsTopicARN member at all, nil IS the failing state, and not_empty
+        is one of the two verbs render_controls does not nil-filter. The control can therefore fail, and
+        on a typical account it will: most trails carry no topic. Scope caveat: describe_trails defaults
+        to includeShadowTrails=true, so a multi-region or organization trail yields one row per region;
+        every row carries the same verdict and a distinct describe title (name + region), so the count
+        is inflated and the answer is not. The spec schema cannot pass includeShadowTrails=false — collect()
+        invokes the list operation with no arguments — so this is inherent, not an oversight. Not expressible
+        as a stock mapping: the vendored singular aws_cloudtrail_trail has no sns_topic_arn reader and
+        the vendored plural aws_cloudtrail_trails registers only two columns, trail_arns and names.'
+      reader: api
+      satisfies: not_empty
   CKV_AWS_26:
     aws_sns_topic:
       assert:
@@ -476,11 +982,11 @@ checks:
   CKV_AWS_278:
     aws_memorydb_snapshot:
       field: kms_key_arn
-      note: "DIVERGENCE. Terraform's argument is kms_key_arn; the API member is KmsKeyId (botocore memorydb/DescribeSnapshots).\
-        \ The field name here is kept as kms_key_arn to match the check's vocabulary, and the api spec\
-        \ maps it onto the real member. MemoryDB returns KmsKeyId only when a customer-managed key was\
-        \ used \u2014 the default is an AWS-owned key that is not reported \u2014 so not_empty does discriminate,\
-        \ which is the same basis as the repo's existing CKV_AWS_191 ElastiCache mapping."
+      note: DIVERGENCE. Terraform's argument is kms_key_arn; the API member is KmsKeyId (botocore memorydb/DescribeSnapshots).
+        The field name here is kept as kms_key_arn to match the check's vocabulary, and the api spec maps
+        it onto the real member. MemoryDB returns KmsKeyId only when a customer-managed key was used —
+        the default is an AWS-owned key that is not reported — so not_empty does discriminate, which is
+        the same basis as the repo's existing CKV_AWS_191 ElastiCache mapping.
       reader: api
       satisfies: not_empty
   CKV_AWS_28:
@@ -529,6 +1035,39 @@ checks:
       reader: api
       satisfies: equals
       value: DISABLED
+  CKV_AWS_298:
+    aws_dms_s3_endpoint:
+      field: s3_encryption_mode
+      note: 'PARTIAL, and deliberately not asserting the field Checkov names. Checkov (DMSS3UsesCMK) inspects
+        `kms_key_arn` for ANY_VALUE; the API member is S3Settings.ServerSideEncryptionKmsKeyId, nested
+        one level below the endpoint. That field CANNOT be asserted here: describe_endpoints returns every
+        endpoint in the region whatever its engine, the declarative spec has no EngineName filter, and
+        not_empty does not nil-filter — so every mysql/oracle/postgres endpoint in the account, which
+        carries no S3Settings at all, would fail a check that does not apply to it. S3Settings. EncryptionMode
+        is asserted instead: it is nil for a non-S3 endpoint, and for a value verb render_controls drops
+        nil rows, which scopes the control the control to S3 endpoints correctly. botocore states the
+        coupling that makes the substitution sound: "If you are using SSE_KMS for the EncryptionMode,
+        provide the KMS key ID", so EncryptionMode=SSE_KMS implies a KMS key is in use. `matches` rather
+        than `equals` because botocore''s own dms model contradicts itself on the spelling — shape EncryptionModeValue
+        enumerates ["sse-s3", "sse-kms"] while the member documentation and the CLI example in the same
+        file write SSE_S3 / SSE_KMS — and the pattern is satisfied under either reading, verified in ruby
+        against SSE_KMS, sse-kms, SSE-KMS and sse_kms and rejected for SSE_S3 and sse-s3. POPULATION BREADTH:
+        describe_endpoints does not know which Terraform resource declared an endpoint, so an S3-engine
+        endpoint created through the older aws_dms_endpoint resource is enumerated here too, where Checkov
+        inspects only aws_dms_s3_endpoint. Broader, and in the safe direction — it is still a DMS S3 endpoint
+        and the rule still applies to it. RESIDUAL RISK, stated rather than hidden and NOT resolved: whether
+        DescribeEndpoints returns S3Settings.EncryptionMode for an S3 endpoint left on the SSE_S3 default.
+        If it omits it, that row is dropped as out of scope instead of failing, and the dropped rows are
+        exactly the failing ones. botocore does not answer this. What it does say is suggestive and not
+        decisive: the member documentation calls SSE_S3 "the default", and the ModifyEndpoint note speaks
+        of changing "the existing value of the EncryptionMode parameter" — both read as a setting that
+        always carries a value rather than one that can be absent. Re-check at the first exec that finds
+        an S3 endpoint. The alternative is not a safer fallback but a strictly worse one: asserting the
+        field Checkov names with not_empty, which does not nil-filter, would fail every mysql, oracle
+        and postgres endpoint in the account against a rule that does not apply to them.'
+      reader: api
+      satisfies: matches
+      value: \A(?i:SSE[_-]KMS)\z
   CKV_AWS_3:
     aws_ebs_volume:
       assert:
@@ -551,6 +1090,32 @@ checks:
       enumerate:
         ids: distribution_ids
         resource: aws_cloudfront_distributions
+      reader: stock
+  CKV_AWS_315:
+    aws_autoscaling_group:
+      assert:
+        arg: auto_scaling_group_name
+        property: launch_configuration_name
+        resource: aws_auto_scaling_group
+        satisfies: empty
+      enumerate:
+        ids: names
+        resource: aws_auto_scaling_groups
+      note: 'Checkov passes when launch_template OR mixed_instances_policy.launch_template is present
+        — a disjunction the schema cannot express. The deployed equivalent is single-field and exact rather
+        than approximate: botocore autoscaling lists LaunchConfigurationName, LaunchTemplate and MixedInstancesPolicy
+        as separate members, LaunchConfigurationName is absent from the shape''s `required` list, and
+        the three are mutually exclusive on a real group — so "launch_configuration_name is unset" is
+        the complement of Checkov''s disjunction. launch_configuration_name is a real attr_reader on aws_auto_scaling_group,
+        not a dynamic method, and `empty` leaves nils in scope so absence is the PASSING state and a set
+        name is the failure. HAZARD, and it is worse than the enumeration-only framing suggests: BOTH
+        resources call `group[:vpc_zone_identifier].split('','')` with no nil guard, and catch_aws_errors
+        rescues only Aws::Errors, so a nil raises NoMethodError. In the PLURAL that call sits at CONTROL
+        scope, so one such group errors the WHOLE control and nothing is assessed. This is not EC2-Classic-only:
+        an ASG declared with `availability_zones` and no `vpc_zone_identifier` is a currently supported
+        Terraform pattern, and whether the API answers "" (safe) or omits the member (raises) for one
+        is a live-run question. The same vendored resource is already live under CKV_AWS_153, so the hazard
+        is pre-existing rather than introduced here.'
       reader: stock
   CKV_AWS_319:
     aws_cloudwatch_metric_alarm:
@@ -581,6 +1146,41 @@ checks:
         ids: ids
         resource: aws_elasticache_clusters
       reader: stock
+  CKV_AWS_329:
+    aws_efs_access_point:
+      field: root_directory_path
+      note: 'PARTIAL, same shape as the disclosed partial on CKV_AWS_121: a nil field leaves scope rather
+        than failing. Checkov (EFSAccessPointRoot) is a negative check whose get_forbidden_values returns
+        the single string "/", with missing_attribute_result=FAILED. not_equals is a literal transcription
+        of the value half; inverting it into equals/in_list would mean enumerating every acceptable path.
+        Field confirmed as AccessPointDescription.RootDirectory.Path (botocore efs), and the nested read
+        confirmed through the reader''s own dig_path against a stubbed DescribeAccessPoints response with
+        and without RootDirectory. DIVERGENCE from Checkov, and it is the missing half of the check: Checkov
+        FAILS a missing attribute, whereas not_equals is a value verb and render_controls drops a nil
+        row as out of scope. NOT CONFIRMED, and this is the thing to confirm first at exec: whether DescribeAccessPoints
+        returns RootDirectory.Path for an access point created without a root directory. botocore documents
+        no default — CreateAccessPointRequest. RootDirectory only says that when you DO specify a RootDirectory
+        you must supply both Path and CreationInfo, and AccessPointDescription.RootDirectory says nothing
+        at all. If EFS omits it, the dropped rows are exactly the failing ones and this control under-reports
+        silently. There is no shape in the vocabulary that covers both halves: only not_empty and empty
+        skip the nil filter, and neither can compare against "/". So the choice is this partial with the
+        gap stated, or no coverage; if a live exec shows an access point with a nil RootDirectory.Path,
+        this must move to a presence-plus-value shape rather than stay as it is.'
+      reader: api
+      satisfies: not_equals
+      value: /
+  CKV_AWS_330:
+    aws_efs_access_point:
+      field: posix_user_gid
+      note: 'Checkov (EFSAccessUserIdentity) inspects posix_user/[0]/gid for ANY_VALUE. Field confirmed
+        as AccessPointDescription.PosixUser.Gid (botocore efs); PosixUser declares required=[Uid, Gid],
+        so Gid is nil only when PosixUser is absent altogether — which is precisely the unenforced-identity
+        state the check is looking for. not_empty is therefore the correct verb twice over: nil is the
+        failure, and not_empty is one of the two verbs that does not nil-filter. Gid is a Long, and the
+        not_empty matcher guards with respond_to?(:empty?), so an Integer — including 0 — reads as "set"
+        rather than raising.'
+      reader: api
+      satisfies: not_empty
   CKV_AWS_331:
     aws_ec2_transit_gateway:
       field: auto_accept_shared_attachments
@@ -680,11 +1280,11 @@ checks:
       enumerate:
         ids: firewall_names
         resource: aws_network_firewall_firewalls
-      note: "A firewall on the AWS-owned key returns EncryptionConfiguration with Type=AWS_OWNED_KMS_KEY\
-        \ and no KeyId, so the missing key is the finding. A missing level answers with NullResponse,\
-        \ whose empty? is true, so the assertion fails rather than erroring. The check also names aws_networkfirewall_rule_group;\
-        \ render_stock renders only the first mapped type, so the rule-group half is NOT covered here\
-        \ \u2014 it needs its own check id or a renderer that iterates types."
+      note: A firewall on the AWS-owned key returns EncryptionConfiguration with Type=AWS_OWNED_KMS_KEY
+        and no KeyId, so the missing key is the finding. A missing level answers with NullResponse, whose
+        empty? is true, so the assertion fails rather than erroring. The check also names aws_networkfirewall_rule_group;
+        render_stock renders only the first mapped type, so the rule-group half is NOT covered here —
+        it needs its own check id or a renderer that iterates types.
       reader: stock
   CKV_AWS_346:
     aws_networkfirewall_firewall_policy:
@@ -758,6 +1358,45 @@ checks:
         ids: names
         resource: aws_cloudtrail_trails
       reader: stock
+  CKV_AWS_363:
+    aws_lambda_function:
+      field: runtime
+      note: 'No new api spec: aws_lambda_function is already live in tools/api_specs.yml and already declares
+        `runtime`. Confirmed that the value is on the LIST response rather than needing a per-function
+        GetFunction — botocore lambda ListFunctions returns Functions (shape FunctionList) of FunctionConfiguration,
+        and FunctionConfiguration declares Runtime. The forbidden list is copied verbatim from the catalogue
+        entry, which is checkov 3.3.16''s DeprecatedLambdaRuntime.get_forbidden_values(); nodejs18.x and
+        provided.al2 are commented out in that source and are correctly absent. Container-image functions
+        declare no Runtime, so they nil-out and render_controls drops them as out of scope, which matches
+        Checkov — it only inspects a declared `runtime`.'
+      reader: api
+      satisfies: not_in_list
+      value:
+      - dotnetcore3.1
+      - nodejs12.x
+      - python3.6
+      - python2.7
+      - dotnet5.0
+      - dotnetcore2.1
+      - ruby2.5
+      - nodejs10.x
+      - nodejs8.10
+      - nodejs4.3
+      - nodejs6.10
+      - dotnetcore1.0
+      - dotnetcore2.0
+      - nodejs4.3-edge
+      - nodejs
+      - java8
+      - python3.7
+      - go1.x
+      - provided
+      - ruby2.7
+      - nodejs14.x
+      - nodejs16.x
+      - python3.9
+      - dotnet7
+      - dotnet6
   CKV_AWS_366:
     aws_cognito_identity_pool:
       assert:
@@ -776,6 +1415,26 @@ checks:
       reader: api
       satisfies: equals
       value: true
+  CKV_AWS_378:
+    aws_lb_target_group:
+      assert:
+        arg: target_group_arn
+        property: protocol
+        resource: aws_elasticloadbalancingv2_target_group
+        satisfies: not_equals
+        value: HTTP
+      enumerate:
+        ids: target_group_arns
+        resource: aws_elasticloadbalancingv2_target_groups
+      note: 'elbv2 DescribeTargetGroups takes no required args and the stock plural passes none; target_group_arns
+        is registered (field :target_group_arn) and the singular requires target_group_arn, running create_resource_methods
+        over the target group hash, so `protocol` is real. A Lambda target group has no Protocol at all;
+        the method is then undefined, method_missing returns NullResponse, and `should_not eq ''HTTP''`
+        passes it — correct. STRICTER THAN CHECKOV, deliberately: the rule''s second branch forgives an
+        HTTP target group whose listener protocol is not HTTP, and listeners cannot be enumerated without
+        a parent load-balancer ARN (rule 2). Cleartext from the load balancer to the target is the finding
+        either way; use exempt_assets where a boundary has accepted that risk.'
+      reader: stock
   CKV_AWS_389:
     aws_launch_configuration:
       assert:
@@ -933,8 +1592,7 @@ checks:
       enumerate:
         ids: domain_names
         resource: aws_elasticsearchservice_domains
-      note: "API member is EnforceHTTPS (all caps), which aws-sdk-ruby renders as enforce_https \u2014\
-        \ not enforce_h_t_t_p_s."
+      note: API member is EnforceHTTPS (all caps), which aws-sdk-ruby renders as enforce_https — not enforce_h_t_t_p_s.
       reader: stock
     aws_opensearch_domain: *id006
   CKV_AWS_86:

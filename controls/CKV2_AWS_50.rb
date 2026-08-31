@@ -2,30 +2,58 @@
 #
 # Rule:        CKV2_AWS_50 (checkov 3.3.16)
 # Applies to:  aws_elasticache_replication_group
-# Status:      PLANNED — no deployed-asset reader exists for aws_elasticache_replication_group yet.
+# Read with:   aws_elasticache_replication_groups -> aws_elasticache_replication_group (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_50'] || []
 
 control 'CKV2_AWS_50' do
-  impact 0.0
   title 'Ensure AWS ElastiCache Redis cluster with Multi-AZ Automatic Failover feature set to enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_elasticache_replication_group in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_elasticache_replication_group resources that actually exist,
+    read through the stock inspec-aws aws_elasticache_replication_group
+    resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without automatic failover a replication group's primary node is a
+    single point of failure: recovery waits for a human to promote a
+    replica, and until then every write fails. AutomaticFailover is also the
+    setting that makes the Multi-AZ topology an availability control rather
+    than just extra cost.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS ElastiCache Redis cluster with Multi-AZ Automatic Failover feature set to enabled
+    Checkov looks for: Ensure AWS ElastiCache Redis cluster with Multi-AZ
+    Automatic Failover feature set to enabled
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group
+    Terraform — aws_elasticache_replication_group:
+
+      resource "aws_elasticache_replication_group" "example" {
+        replication_group_id = "example"
+        description          = "example"
+        node_type            = "cache.t4g.medium"
+
+        automatic_failover_enabled = true
+        multi_az_enabled           = true
+        num_cache_clusters         = 2
+      }
+
+    Out of band — aws_elasticache_replication_group:
+
+      aws elasticache modify-replication-group --replication-group-id <id> --automatic-failover-enabled --multi-az-enabled --apply-immediately
+
+    Note (aws_elasticache_replication_group): Automatic failover requires at
+    least two nodes in the group and is not available on cache.t1.* node types.
+    Applying immediately triggers a failover test; without --apply-immediately
+    the change lands in the next maintenance window.
   FIX
 
   tag checkov_id:            'CKV2_AWS_50'
@@ -34,9 +62,56 @@ control 'CKV2_AWS_50' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_elasticache_replication_group]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elasticache_replication_group'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CP-10', 'SC-5']
+  tag nist_r4:               ['CP-10', 'SC-5']
+  tag cci:                   ['CCI-000553', 'CCI-002385']
+  tag ksi:                   ['KSI-RPL-RCY']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_50 — no deployed-asset reader for aws_elasticache_replication_group" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_elasticache_replication_groups(aws_region: region).ids.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_elasticache_replication_group', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_elasticache_replication_group enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_elasticache_replication_group in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_elasticache_replication_group(replication_group_id: id, aws_region: region) do
+      its('auto_failover?') { should eq 'enabled' }
+    end
   end
 end

@@ -1,0 +1,455 @@
+# Slice: custom-ready — the custom-logic checks from tools/proposals/custom.yml
+# that survived an adversarial re-verification against the vendored pack in
+# vendor/*/libraries and against botocore.
+#
+# Four map. Two were REMOVED on this pass and are recorded under `skipped:`
+# with the evidence, because in both cases the only expression the schema
+# allows produces a wrong answer rather than a narrower one:
+#
+#   * CKV_AWS_317 — the vendored singular hands back a bare Ruby `{}` for a
+#     zero-entry map, and `{}.AUDIT_LOGS` raises. Whether the ES API returns
+#     LogPublishingOptions as an empty map or omits it decides whether this
+#     control errors on every un-audited domain — i.e. on exactly the
+#     population it exists to catch — and that cannot be settled from the
+#     schema. Neither alternative expression is safe (see the skip reason).
+#   * CKV_AWS_350 — the only field the vendored reader exposes is the one
+#     CKV_AWS_349 is ALREADY LIVE against. Mapping it here renders a second
+#     control with a byte-identical assertion, and it PASSES the
+#     EnableEbsEncryption:false configuration its own title names.
+#
+# What was re-confirmed for the four that remain, from source rather than from
+# the previous pass's summary:
+#
+#   * every plural's `ids` column read off its register_column line, every
+#     singular's argument read off its validate_parameters(required:) call;
+#   * every API member read out of botocore's service-2.json (ec2, batch,
+#     autoscaling, waf) — none transliterated from the Terraform argument;
+#   * every CCI resolved in DISA's U_CCI_List.xml, so each one belongs to a
+#     family the entry actually lists, with its Rev 4 and Rev 5 indices checked
+#     rather than assumed;
+#   * aws_waf_web_acls' doubly nested `.map` — which reads statically as though
+#     it must raise — confirmed against the resource's own unit test, which
+#     asserts web_acl_ids == ['web_acl_id'] from that exact response shape.
+#
+# Two verbs used here — not_equals and empty — are implemented but unexercised
+# by any committed mapping. Both should be eyeballed on the first live exec.
+
+mappings:
+
+  # DescribeSecurityGroupRules has NO required members (botocore ec2
+  # DescribeSecurityGroupRulesRequest: Filters, SecurityGroupRuleIds, DryRun,
+  # NextToken, MaxResults — none required), so each RULE is its own asset and
+  # one region-wide call answers ingress and egress together. That is why this
+  # is an api spec rather than a parent/child walk off aws_security_groups.
+  CKV_AWS_23:
+    aws_security_group_rule:
+      reader: api
+      field: description
+      satisfies: not_empty
+      note: >-
+        Checkov wants a description on the security group AND on every
+        ingress/egress rule. This assesses the RULE half only. The group half is
+        not assessed here and is not claimed to be: EC2 requires GroupDescription
+        at create time so it is never absent, but Checkov also treats the
+        provider's default "Managed by Terraform" as a failure and no deployed
+        read can distinguish that from a deliberate description — do not read a
+        pass here as covering the group. SecurityGroupRule.Description is
+        confirmed in botocore ec2 and is OPTIONAL, so a rule created without one
+        comes back absent and the row's field is nil. not_empty is a presence
+        check, so nil_filter_for deliberately leaves nils in scope and nil is the
+        failing state — the control is failable, not vacuous. Stronger than
+        Checkov in one direction: it sees rules added in the console, by another
+        tool, or by a module Checkov never scanned. Expect a lot of findings on a
+        first run — default-VPC and AWS-created rules carry no description.
+
+  # Classic WAF only. wafv2:ListWebACLs REQUIRES a Scope argument (REGIONAL or
+  # CLOUDFRONT) that the enumeration contract cannot supply, and inspec-aws
+  # ships no wafregional resource at all — grep vendor/*/libraries: aws_waf_*
+  # is the whole WAF surface. So this control assesses ONE of the check's THREE
+  # Terraform types.
+  CKV_AWS_175:
+    aws_waf_web_acl:
+      reader: stock
+      scope: global
+      enumerate:
+        resource: aws_waf_web_acls
+        ids: web_acl_ids
+      assert:
+        resource: aws_waf_web_acl
+        arg: web_acl_id
+        property: rules_rule_ids
+        satisfies: not_empty
+      note: >-
+        READ THIS BEFORE TRUSTING A PASS OR AN N/A. Only aws_waf_web_acl (WAF
+        Classic) is assessed. aws_wafv2_web_acl and aws_wafregional_web_acl are
+        NOT, so "no aws_waf_web_acl in scope" means "this account has no CLASSIC
+        web ACLs", never "the account's WAF is fine". Most accounts will render
+        Not Applicable, and an N/A here is NOT evidence that a wafv2 ACL has
+        rules. What is confirmed: aws_waf_web_acls registers :web_acl_ids with
+        style: :simple and stores the column as an ARRAY per row — the resource's
+        own unit test asserts web_acl_ids == ['web_acl_id'] from exactly that
+        shape, which is what proves :simple flattens, and which also disposes of
+        the doubly nested `.map` over list_web_acls that reads statically as
+        though it must raise (ListWebACLs is paginated, so both `.map` levels
+        iterate pages, not struct members). rules_rule_ids is a real method on
+        the singular, and botocore waf marks WebACL.Rules REQUIRED, so it is
+        always an Array: an ACL with no rules yields [] and fails, which is
+        precisely Checkov's FAILED case. scope: global is evidence-backed, not an
+        optimisation — botocore endpoints.json marks waf isRegionalized:false
+        with partitionEndpoint aws-global, and waf/endpoint-rule-set-1.json
+        resolves EVERY region in the aws partition to https://waf.amazonaws.com
+        signing as us-east-1. It is the same endpoint shape as IAM, CloudFront
+        and Route 53. NOTE FOR THE FIRST EXEC: this is the first scope: global
+        entry in resource_map — the live sibling CKV_AWS_176 reads the same
+        aws_waf_web_acls REGIONALLY — so the global branch of enumeration_for()
+        (`found = aws_waf_web_acls.web_acl_ids...`, no aws_region anywhere) has
+        never run. It needs an ambient AWS_REGION in the runner like every other
+        client here does.
+
+  CKV_AWS_210:
+    aws_batch_job_definition:
+      reader: stock
+      enumerate:
+        resource: aws_batch_job_definitions
+        ids: job_definition_names
+      assert:
+        resource: aws_batch_job_definition
+        arg: job_definition_name
+        property: container_properties.privileged
+        satisfies: not_equals
+        value: true
+      note: >-
+        botocore batch confirms ContainerProperties.privileged (optional) and
+        JobDefinition.containerProperties; the Ruby SDK snake-cases the member
+        and create_resource_methods turns the nested hash into an AwsResourceProbe,
+        so the dotted chain resolves — the same shape CKV_AWS_116/117/5/83 use
+        live. not_equals rather than `equals false` on purpose: AWS omits the
+        member when it was never set, the probe answers a missing member with
+        NullResponse, and NullResponse#== returns other.nil?. `should eq false`
+        would therefore FAIL every non-privileged definition; `should_not eq true`
+        passes those and still fails a genuinely privileged one. Three
+        imprecisions, all conservative rather than silent. (1) REVISIONS: the
+        plural emits one row PER REVISION but every row carries the same
+        job_definition_name, and the singular takes job_definitions[0] — so a
+        name with N revisions produces N identical describes of ONE revision and
+        the other N-1 revisions are NEVER ASSESSED. This is a coverage gap, not
+        merely duplicated API calls; treat a pass as covering one revision per
+        name. (2) A definition using ecsProperties/eksProperties/nodeProperties
+        instead of containerProperties has no privileged member and passes —
+        Checkov reads container_properties only, so it shares the blind spot.
+        (3) Both calls omit the `status` filter, so whether deregistered
+        (INACTIVE) revisions are enumerated is a live-run question.
+
+  CKV_AWS_315:
+    aws_autoscaling_group:
+      reader: stock
+      enumerate:
+        resource: aws_auto_scaling_groups
+        ids: names
+      assert:
+        resource: aws_auto_scaling_group
+        arg: auto_scaling_group_name
+        property: launch_configuration_name
+        satisfies: empty
+      note: >-
+        Checkov passes when launch_template OR mixed_instances_policy.launch_template
+        is present — a disjunction the schema cannot express. The deployed
+        equivalent is single-field and exact rather than approximate: botocore
+        autoscaling lists LaunchConfigurationName, LaunchTemplate and
+        MixedInstancesPolicy as separate members, LaunchConfigurationName is
+        absent from the shape's `required` list, and the three are mutually
+        exclusive on a real group — so "launch_configuration_name is unset" is
+        the complement of Checkov's disjunction. launch_configuration_name is a
+        real attr_reader on aws_auto_scaling_group, not a dynamic method, and
+        `empty` leaves nils in scope so absence is the PASSING state and a set
+        name is the failure. HAZARD, and it is worse than the enumeration-only
+        framing suggests: BOTH resources call
+        `group[:vpc_zone_identifier].split(',')` with no nil guard, and
+        catch_aws_errors rescues only Aws::Errors, so a nil raises NoMethodError.
+        In the PLURAL that call sits at CONTROL scope, so one such group errors
+        the WHOLE control and nothing is assessed. This is not EC2-Classic-only:
+        an ASG declared with `availability_zones` and no `vpc_zone_identifier` is
+        a currently supported Terraform pattern, and whether the API answers ""
+        (safe) or omits the member (raises) for one is a live-run question. The
+        same vendored resource is already live under CKV_AWS_153, so the hazard
+        is pre-existing rather than introduced here.
+
+api_specs:
+  # Confirmed against botocore ec2 2016-11-15: DescribeSecurityGroupRulesRequest
+  # has no required members; DescribeSecurityGroupRulesResult.SecurityGroupRules;
+  # SecurityGroupRule members SecurityGroupRuleId, GroupId, GroupOwnerId,
+  # IsEgress, IpProtocol, FromPort, ToPort, CidrIpv4, CidrIpv6, PrefixListId,
+  # ReferencedGroupInfo, Description, Tags, SecurityGroupRuleArn — every id, arn
+  # and field below is on that list. Paginated (paginators-1.json: result_key
+  # SecurityGroupRules), which the reader's page walk handles. aws-sdk-ec2 is in
+  # tools/image_gems.txt and is required unconditionally by aws_backend.rb, so
+  # the LoadError-into-Not-Applicable path cannot fire for this spec.
+  aws_security_group_rule:
+    client: Aws::EC2::Client
+    gem: aws-sdk-ec2
+    list: describe_security_group_rules
+    collection: security_group_rules
+    id: security_group_rule_id
+    arn: security_group_rule_arn
+    scope: regional
+    fields:
+      description: description
+      group_id: group_id
+      is_egress: is_egress
+      ip_protocol: ip_protocol
+      from_port: from_port
+      to_port: to_port
+      cidr_ipv4: cidr_ipv4
+      cidr_ipv6: cidr_ipv6
+
+skipped:
+  CKV_AWS_317: >-
+    Ensure Elasticsearch Domain Audit Logging is enabled — WITHDRAWN on
+    adversarial review; it was proposed as
+    aws_elasticsearchservice_domain.log_publishing_options.AUDIT_LOGS.enabled.
+    botocore es confirms ElasticsearchDomainStatus.LogPublishingOptions is a
+    map<LogType, LogPublishingOption{CloudWatchLogsLogGroupArn, Enabled}> with
+    AUDIT_LOGS in the enum, and create_method does define a singleton method per
+    wire key — but only when the map is NON-EMPTY. AwsResourceDynamicMethods#create_method
+    reads `value.count == 0 ? return_value = value : AwsResourceProbe.new(value)`,
+    so a zero-entry map is handed back as a bare Ruby {} and `{}.AUDIT_LOGS`
+    raises NoMethodError. Aws::Structure#to_h drops nil members, so the control is
+    correct ONLY if the API omits LogPublishingOptions for an unconfigured domain
+    and broken if it returns {} — and that is exactly the population (audit
+    logging never enabled) the control exists to catch, so the coin-flip decides
+    between "fails correctly on every un-audited domain" and "errors on every
+    un-audited domain". It cannot be settled from the schema; it needs one real
+    describe-elasticsearch-domain response. Neither weaker expression is safe
+    either: `log_publishing_options` + not_empty PASSES a domain publishing only
+    SEARCH_SLOW_LOGS, because AwsResourceProbe does not define empty? and
+    respond_to?(:empty?) is false — a false pass on a logging control; and
+    `includes AUDIT_LOGS` always fails, because AwsResourceProbe#include?
+    does @item.key?(opt.to_sym) while the map's keys are Strings. Re-map it once
+    one live response settles the shape; until then the check stays PLANNED,
+    which is a visible gap rather than a claim.
+  CKV_AWS_350: >-
+    Ensure EMR Cluster security configuration encrypts EBS disks — WITHDRAWN on
+    adversarial review; it was proposed as
+    aws_emr_security_configuration.local_disk_encryption == true. That is the
+    identical resource, argument, property, verb and value as CKV_AWS_349
+    ("encrypts local disks"), which is ALREADY LIVE in resource_map_derived and
+    renders `its('local_disk_encryption') { should eq true }`. The vendored
+    reader precomputes local_disk_encryption purely from the PRESENCE and
+    non-emptiness of
+    EncryptionConfiguration.AtRestEncryptionConfiguration.LocalDiskEncryptionConfiguration;
+    it exposes no field for the EnableEbsEncryption leaf that CKV_AWS_350 is
+    named for and no field for EnableAtRestEncryption. So the mapping would not
+    be "narrower than Checkov" — it would render a second control with a
+    byte-identical assertion to CKV_AWS_349 and would PASS a configuration
+    declaring LocalDiskEncryptionConfiguration with EnableEbsEncryption:false,
+    which is precisely the state the check exists to fail. A passing result would
+    read as EBS-disk encryption evidence it never assessed. This needs a reader
+    that returns the parsed EncryptionConfiguration leaves — an api spec, or a
+    field added upstream — not a re-use of CKV_AWS_349's boolean. Note also, for
+    whoever writes that reader: both vendored EMR resources index
+    parsed_json['EncryptionConfiguration'] with no nil guard, and in the PLURAL
+    that runs at control scope, so a single Kerberos-only or
+    InstanceMetadataServiceConfiguration-only security configuration raises
+    NoMethodError and errors the whole control.
+
+metadata:
+  CKV_AWS_23:
+    severity: low
+    impact: 0.3
+    nist:
+    - CM-6
+    - CM-7
+    - CM-7 (1)
+    nist_r4:
+    - CM-6
+    - CM-7
+    - CM-7 (1)
+    cci:
+    - CCI-000366
+    - CCI-000381
+    ksi:
+    - KSI-CMT-CFG
+    nist_source: agent-drafted
+    rationale: An undescribed firewall rule cannot be reviewed. Nobody can say whose
+      it is, what it was opened for, or whether the reason still holds, so the periodic
+      review that is supposed to close stale openings degrades into a guess and the
+      rule survives every review it should not have.
+  CKV_AWS_175:
+    severity: medium
+    impact: 0.5
+    nist:
+    - SC-7
+    - CM-6
+    nist_r4:
+    - SC-7
+    - CM-6
+    cci:
+    - CCI-001097
+    - CCI-000366
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    rationale: A web ACL with no rules inspects nothing. It is attached, it appears in
+      the architecture diagram and it shows up as a control in the SSP, and every
+      request reaching the protected resource passes through it untouched.
+  CKV_AWS_210:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-6
+    - CM-7
+    nist_r4:
+    - AC-6
+    - CM-7
+    cci:
+    - CCI-000225
+    - CCI-000381
+    ksi:
+    - KSI-CMT-CFG
+    nist_source: agent-drafted
+    rationale: A privileged container holds the host's capabilities and device access.
+      Whatever isolation the job was placed in stops mattering, and a compromise of the
+      job becomes a compromise of the instance running it and of every other job on it.
+  CKV_AWS_315:
+    severity: low
+    impact: 0.3
+    nist:
+    - CM-2
+    - CM-6
+    nist_r4:
+    - CM-2
+    - CM-6
+    cci:
+    - CCI-000293
+    - CCI-000366
+    ksi:
+    - KSI-CMT-CFG
+    nist_source: agent-drafted
+    rationale: 'Launch configurations are immutable and cannot be edited in place:
+      changing the baseline means creating a new one and re-pointing the group, so the
+      version instances actually launch from drifts from the one under change control.
+      Launch templates version the baseline inside the service, which is what makes the
+      running fleet''s configuration auditable.'
+
+fixes:
+  CKV_AWS_23:
+    aws_security_group_rule:
+      terraform: |
+        resource "aws_security_group_rule" "app_https" {
+          security_group_id        = aws_security_group.app.id
+          description              = "HTTPS from the public ALB only"
+          type                     = "ingress"
+          protocol                 = "tcp"
+          from_port                = 443
+          to_port                  = 443
+          source_security_group_id = aws_security_group.alb.id
+        }
+      cli: |
+        aws ec2 modify-security-group-rules --group-id <sg-id> --security-group-rules 'SecurityGroupRuleId=<sgr-id>,SecurityGroupRule={Description="HTTPS from the public ALB only",IpProtocol=tcp,FromPort=443,ToPort=443,ReferencedGroupId=<sg-id>}'
+      note: modify-security-group-rules REPLACES the whole rule, so every field must be
+        resupplied or it is reset. Read the rule with describe-security-group-rules
+        first and echo its current values back with the description added. The inline
+        ingress/egress blocks on aws_security_group also accept a description, so a
+        group written that way is fixable in place too — but the inline blocks and the
+        standalone rule resources cannot be mixed on one group.
+    aws_vpc_security_group_ingress_rule:
+      terraform: |
+        resource "aws_vpc_security_group_ingress_rule" "app_https" {
+          security_group_id            = aws_security_group.app.id
+          description                  = "HTTPS from the public ALB only"
+          ip_protocol                  = "tcp"
+          from_port                    = 443
+          to_port                      = 443
+          referenced_security_group_id = aws_security_group.alb.id
+        }
+      note: The aws_vpc_security_group_ingress_rule / _egress_rule pair is the current
+        form and is what a new rule should use; aws_security_group_rule is retained by
+        the provider but is no longer the recommended path. Both carry a per-rule
+        description, and both land on the same SecurityGroupRule object this control
+        reads, so either satisfies it.
+  CKV_AWS_175:
+    aws_waf_web_acl:
+      terraform: |
+        resource "aws_waf_web_acl" "app" {
+          name        = "app"
+          metric_name = "app"
+
+          default_action {
+            type = "ALLOW"
+          }
+
+          rules {
+            priority = 1
+            rule_id  = aws_waf_rule.sql_injection.id
+            type     = "REGULAR"
+
+            action {
+              type = "BLOCK"
+            }
+          }
+        }
+      cli: |
+        aws waf update-web-acl --web-acl-id <id> --change-token "$(aws waf get-change-token --query ChangeToken --output text)" --updates 'Action=INSERT,ActivatedRule={Priority=1,RuleId=<rule-id>,Action={Type=BLOCK},Type=REGULAR}'
+      note: 'This is the WAF Classic form, because WAF Classic is the only WAF type this
+        control can enumerate — wafv2''s list call requires a Scope argument the
+        enumerator cannot supply. WAF Classic is deprecated: a new ACL should be an
+        aws_wafv2_web_acl with at least one rule block (an AWS managed rule group is the
+        usual starting point), and this control will NOT assess it.'
+  CKV_AWS_210:
+    aws_batch_job_definition:
+      terraform: |
+        resource "aws_batch_job_definition" "etl" {
+          name = "etl"
+          type = "container"
+
+          container_properties = jsonencode({
+            image      = "${var.ecr_registry}/etl:1.4.2"
+            jobRoleArn = aws_iam_role.etl_task.arn
+            privileged = false
+            resourceRequirements = [
+              { type = "VCPU", value = "2" },
+              { type = "MEMORY", value = "4096" },
+            ]
+          })
+        }
+      cli: |
+        aws batch register-job-definition --job-definition-name etl --type container --container-properties file://container.json
+      note: 'Job definitions are immutable: there is no in-place fix.
+        register-job-definition creates a new REVISION, and every job queue and
+        submission that names the old revision must be re-pointed before the old one is
+        deregistered. Because this control reads only the first revision the API returns
+        for a name, expect the finding to clear once that revision is the one returned —
+        not the moment the fix is written.'
+  CKV_AWS_315:
+    aws_autoscaling_group:
+      terraform: |
+        resource "aws_launch_template" "app" {
+          name_prefix   = "app-"
+          image_id      = var.ami_id
+          instance_type = "m6i.large"
+
+          metadata_options {
+            http_tokens = "required"
+          }
+        }
+
+        resource "aws_autoscaling_group" "app" {
+          name                = "app"
+          min_size            = 2
+          max_size            = 6
+          desired_capacity    = 2
+          vpc_zone_identifier = var.private_subnet_ids
+
+          launch_template {
+            id      = aws_launch_template.app.id
+            version = "$Latest"
+          }
+        }
+      cli: |
+        aws autoscaling update-auto-scaling-group --auto-scaling-group-name app --launch-template LaunchTemplateId=<lt-id>,Version='$Latest'
+      note: The switch takes effect for instances launched after it. Existing instances
+        keep the launch configuration's settings until they are replaced, so pair this
+        with an instance refresh if changing the baseline is the point rather than
+        clearing the finding. Keep vpc_zone_identifier set rather than relying on
+        availability_zones alone — the vendored reader splits that field without a nil
+        guard.

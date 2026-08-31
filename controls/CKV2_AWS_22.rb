@@ -2,30 +2,55 @@
 #
 # Rule:        CKV2_AWS_22 (checkov 3.3.16)
 # Applies to:  aws_iam_user
-# Status:      PLANNED — no deployed-asset reader exists for aws_iam_user yet.
+# Read with:   aws_iam_users -> aws_iam_user (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_22'] || []
 
 control 'CKV2_AWS_22' do
-  impact 0.0
   title 'Ensure an IAM User does not have access to the console'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_iam_user in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_iam_user resources that actually exist, read through the stock
+    inspec-aws aws_iam_user resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A console password on an IAM user is a standing credential that lives
+    outside the identity provider: it is not covered by the organisation's
+    session policy, its MFA is enforced per user rather than centrally, and
+    it survives the user being deprovisioned upstream. Human console access
+    belongs to federated roles, where revocation happens in one place.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure an IAM User does not have access to the console
+    Checkov looks for: an IAM user with no login profile, so console access
+    is not available through a long-lived local password
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_user
+    Terraform — aws_iam_user:
+
+      # The fix is the ABSENCE of a login profile. Remove any
+      # aws_iam_user_login_profile for this user and let humans reach the
+      # console through federation instead.
+      resource "aws_iam_user" "svc" {
+        name = "svc-deploy"
+        tags = { console_access = "none" }
+      }
+
+    Out of band — aws_iam_user:
+
+      aws iam delete-login-profile --user-name <user>
+
+    Note (aws_iam_user): Deleting the login profile removes console access only;
+    the user's access keys still work, so audit those separately. If the user is
+    a person rather than a service identity, the real remediation is to delete
+    the IAM user and grant them a federated role.
   FIX
 
   tag checkov_id:            'CKV2_AWS_22'
@@ -34,9 +59,56 @@ control 'CKV2_AWS_22' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_iam_user]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_user'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-2', 'AC-2']
+  tag nist_r4:               ['IA-2', 'AC-2']
+  tag cci:                   ['CCI-000764']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_22 — no deployed-asset reader for aws_iam_user" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  # Global service: the same objects come back from any region, so this is
+  # enumerated once rather than once per region.
+  found = aws_iam_users.usernames.to_a.map { |id| [id, nil] }
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_iam_user', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_iam_user enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_iam_user in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_iam_user(user_name: id) do
+      its('has_console_password') { should eq false }
+    end
   end
 end

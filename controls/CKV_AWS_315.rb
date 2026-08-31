@@ -2,30 +2,73 @@
 #
 # Rule:        CKV_AWS_315 (checkov 3.3.16)
 # Applies to:  aws_autoscaling_group
-# Status:      PLANNED — no deployed-asset reader exists for aws_autoscaling_group yet.
+# Read with:   aws_auto_scaling_groups -> aws_auto_scaling_group (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_315'] || []
 
 control 'CKV_AWS_315' do
-  impact 0.0
   title 'Ensure EC2 Auto Scaling groups use EC2 launch templates'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_autoscaling_group in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_autoscaling_group resources that actually exist, read through
+    the stock inspec-aws aws_auto_scaling_group resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Launch configurations are immutable and cannot be edited in place:
+    changing the baseline means creating a new one and re-pointing the
+    group, so the version instances actually launch from drifts from the one
+    under change control. Launch templates version the baseline inside the
+    service, which is what makes the running fleet's configuration
+    auditable.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure EC2 Auto Scaling groups use EC2 launch templates
+    Checkov looks for: Ensure EC2 Auto Scaling groups use EC2 launch
+    templates
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group
+    Terraform — aws_autoscaling_group:
+
+      resource "aws_launch_template" "app" {
+        name_prefix   = "app-"
+        image_id      = var.ami_id
+        instance_type = "m6i.large"
+
+        metadata_options {
+          http_tokens = "required"
+        }
+      }
+
+      resource "aws_autoscaling_group" "app" {
+        name                = "app"
+        min_size            = 2
+        max_size            = 6
+        desired_capacity    = 2
+        vpc_zone_identifier = var.private_subnet_ids
+
+        launch_template {
+          id      = aws_launch_template.app.id
+          version = "$Latest"
+        }
+      }
+
+    Out of band — aws_autoscaling_group:
+
+      aws autoscaling update-auto-scaling-group --auto-scaling-group-name app --launch-template LaunchTemplateId=<lt-id>,Version='$Latest'
+
+    Note (aws_autoscaling_group): The switch takes effect for instances launched
+    after it. Existing instances keep the launch configuration's settings until
+    they are replaced, so pair this with an instance refresh if changing the
+    baseline is the point rather than clearing the finding. Keep
+    vpc_zone_identifier set rather than relying on availability_zones alone —
+    the vendored reader splits that field without a nil guard.
   FIX
 
   tag checkov_id:            'CKV_AWS_315'
@@ -34,9 +77,56 @@ control 'CKV_AWS_315' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_autoscaling_group]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-2', 'CM-6']
+  tag nist_r4:               ['CM-2', 'CM-6']
+  tag cci:                   ['CCI-000293', 'CCI-000366']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_315 — no deployed-asset reader for aws_autoscaling_group" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_auto_scaling_groups(aws_region: region).names.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_autoscaling_group', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_autoscaling_group enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_autoscaling_group in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_auto_scaling_group(auto_scaling_group_name: id, aws_region: region) do
+      its('launch_configuration_name') { should satisfy('be unset or empty') { |v| v.nil? || (v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

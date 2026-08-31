@@ -1,4 +1,338 @@
 # DERIVED, NOT REVIEWED. nist_source records which pass produced each anchor.
+CKV2_AWS_10:
+  cci:
+  - CCI-000162
+  - CCI-002664
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-6
+  - AU-9
+  - SI-4
+  nist_r4:
+  - AU-6
+  - AU-9
+  - SI-4
+  nist_source: agent-drafted
+  rationale: A trail that only writes to S3 produces an archive nobody is watching. Delivery to CloudWatch
+    Logs is what makes metric filters and alarms possible, so it is the difference between events being
+    retained and events being noticed. It also puts a second copy of the audit record in a store with
+    a different access path from the bucket.
+  severity: medium
+  what: a CloudTrail trail whose cloud_watch_logs_group_arn is set, so its events also land somewhere
+    they can be alarmed on
+CKV2_AWS_11:
+  cci:
+  - CCI-002664
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-OSM
+  nist:
+  - SI-4
+  - AU-12
+  nist_r4:
+  - SI-4
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Without a flow log there is no record of what talked to what inside the VPC. An intrusion
+    is then reconstructible only from application logs, and lateral movement between instances — which
+    never touches an application log — leaves no trace at all.
+  severity: medium
+  what: a VPC that has a flow log attached to it, capturing accepted and rejected network traffic
+CKV2_AWS_14:
+  cci:
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-2
+  - CM-6
+  nist_r4:
+  - AC-2
+  - CM-6
+  nist_source: agent-drafted
+  rationale: An empty IAM group is a set of permissions with no members and therefore no owner and no
+    review. It accumulates policy over time because nobody notices it, and it grants everything it holds
+    the moment a user is added to it — which is a one-call change nobody treats as a privilege grant.
+  severity: low
+  what: an IAM group that contains at least one user, rather than a group carrying permissions that nobody
+    holds
+CKV2_AWS_19:
+  cci:
+  - CCI-000366
+  - CCI-001097
+  impact: 0.3
+  ksi:
+  - KSI-CMT-INV
+  nist:
+  - CM-8
+  - SC-7
+  nist_r4:
+  - CM-8
+  - SC-7
+  nist_source: agent-drafted
+  rationale: An allocated but unassociated Elastic IP is an address the account owns and nothing answers
+    on. It is billed continuously, it is still present in any allow-list or DNS record that was written
+    against it, and whatever is associated with it next inherits that reachability without anyone revisiting
+    the decision.
+  severity: low
+  what: an Elastic IP that is associated with something — an instance, a NAT gateway or a network interface
+    — rather than allocated and dangling
+CKV2_AWS_22:
+  cci:
+  - CCI-000764
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - IA-2
+  - AC-2
+  nist_r4:
+  - IA-2
+  - AC-2
+  nist_source: agent-drafted
+  rationale: 'A console password on an IAM user is a standing credential that lives outside the identity
+    provider: it is not covered by the organisation''s session policy, its MFA is enforced per user rather
+    than centrally, and it survives the user being deprovisioned upstream. Human console access belongs
+    to federated roles, where revocation happens in one place.'
+  severity: medium
+  what: an IAM user with no login profile, so console access is not available through a long-lived local
+    password
+CKV2_AWS_34:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A String parameter is returned in plaintext to anyone holding ssm:GetParameter, and its value
+    appears in CloudTrail-visible API responses and in any console listing. SecureString moves the value
+    behind a KMS key, so reading it requires a second, separately auditable authorisation.
+  severity: high
+  what: an SSM parameter whose type is SecureString, so its value is encrypted with KMS rather than stored
+    and returned in clear text
+CKV2_AWS_42:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: The default CloudFront certificate is only valid for the cloudfront.net name, so a distribution
+    relying on it cannot serve the organisation's own domain over TLS that a client will accept. In practice
+    that means users reach the service under a name the organisation does not control, or reach it over
+    a connection whose certificate warning they have been trained to click through.
+  severity: medium
+  what: a CloudFront distribution whose viewer certificate comes from ACM or IAM rather than the default
+    CloudFront certificate
+CKV2_AWS_49:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A DMS endpoint with SslMode "none" replicates the source database's rows in cleartext across
+    the network, including whatever the source considered sensitive enough to encrypt at rest. Migration
+    traffic is the one moment a whole datastore crosses a network boundary in bulk, so it is the worst
+    traffic to leave unprotected.
+  severity: high
+CKV2_AWS_50:
+  cci:
+  - CCI-000553
+  - CCI-002385
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-10
+  - SC-5
+  nist_r4:
+  - CP-10
+  - SC-5
+  nist_source: agent-drafted
+  rationale: 'Without automatic failover a replication group''s primary node is a single point of failure:
+    recovery waits for a human to promote a replica, and until then every write fails. AutomaticFailover
+    is also the setting that makes the Multi-AZ topology an availability control rather than just extra
+    cost.'
+  severity: medium
+CKV2_AWS_52:
+  cci:
+  - CCI-000213
+  - CCI-000764
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - IA-2
+  nist_r4:
+  - AC-3
+  - IA-2
+  nist_source: agent-drafted
+  rationale: Without fine-grained access control the only thing standing between a caller and every index
+    in the domain is the resource-based access policy and the network path. Enabling it puts authentication
+    and per-index, per-document authorisation inside the engine, so a caller that reaches the endpoint
+    is still not automatically a reader of everything in it.
+  severity: high
+CKV2_AWS_54:
+  cci:
+  - CCI-002418
+  - CCI-002450
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_source: agent-drafted
+  rationale: SSLv3 is broken — POODLE recovers plaintext from it — and offering it on the CloudFront-to-origin
+    leg means an attacker who can influence the negotiation downgrades the connection to a cipher suite
+    that no longer protects the traffic. The viewer leg being TLS 1.2 does not help when the origin leg
+    is not.
+  severity: high
+CKV2_AWS_55:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: The EMR security configuration is where at-rest encryption for EBS and S3, in-transit encryption
+    between nodes, and Kerberos authentication are declared. A cluster without one has none of them, and
+    an EMR cluster is by definition processing a bulk copy of data that lives somewhere more protected.
+  severity: medium
+CKV2_AWS_56:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: IAMFullAccess grants unrestricted iam:* — the ability to create a role, attach AdministratorAccess
+    to it and assume it. Any principal holding it is effectively an account administrator regardless of
+    what its other policies say, so the policy is a privilege-escalation path rather than a permission
+    set. Least privilege is asserted here as "nothing is attached to it at all", which is the only state
+    that can be checked without evaluating every attached principal's intent.
+  severity: high
+CKV2_AWS_57:
+  cci:
+  - CCI-000196
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  - KSI-SVC-KMG
+  nist:
+  - IA-5
+  - SC-12
+  nist_r4:
+  - IA-5
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A secret that is never rotated stays valid for as long as it exists, so the window between
+    a leak and its expiry is unbounded. Automatic rotation caps that window without depending on anyone
+    noticing the leak, which is the only form of credential hygiene that survives contact with a real
+    estate.
+  severity: medium
+CKV2_AWS_59:
+  cci:
+  - CCI-000553
+  - CCI-002385
+  impact: 0.3
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-10
+  - SC-5
+  nist_r4:
+  - CP-10
+  - SC-5
+  nist_source: agent-drafted
+  rationale: Without dedicated master nodes the cluster-management workload runs on the same nodes serving
+    queries, so one expensive search can cost the cluster its quorum and take the domain — and anything
+    logging to it — offline. Dedicated masters isolate cluster state from data-plane load.
+  severity: low
+CKV2_AWS_63:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: A network firewall with no logging configuration inspects traffic and records nothing about
+    what it allowed or dropped. The control is still enforcing, but there is no evidence it enforced,
+    and no way to investigate what reached the protected subnets — the firewall becomes unauditable exactly
+    where the boundary matters most.
+  severity: medium
+CKV2_AWS_73:
+  cci:
+  - CCI-002475
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-12
+  - SC-28 (1)
+  nist_r4:
+  - SC-12
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Queue payloads encrypted under the AWS-managed key alias/aws/sqs cannot have their key policy,
+    rotation schedule or grants controlled by the account, and the key cannot be disabled to revoke access
+    in an incident. A customer-managed key makes those decisions the boundary's to make.
+  severity: medium
 CKV_AWS_102:
   cci:
   - CCI-001097
@@ -357,6 +691,24 @@ CKV_AWS_174:
   rationale: Verify CloudFront Distribution Viewer Certificate is using TLS v1.2 or higher. Anchors derived
     from the check's encryption category, not reviewed control by control.
   severity: high
+CKV_AWS_175:
+  cci:
+  - CCI-001097
+  - CCI-000366
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - CM-6
+  nist_r4:
+  - SC-7
+  - CM-6
+  nist_source: agent-drafted
+  rationale: A web ACL with no rules inspects nothing. It is attached, it appears in the architecture
+    diagram and it shows up as a control in the SSP, and every request reaching the protected resource
+    passes through it untouched.
+  severity: medium
 CKV_AWS_176:
   cci: *id009
   impact: 0.5
@@ -437,6 +789,24 @@ CKV_AWS_209:
   rationale: Ensure MQ broker encrypted by KMS using a customer managed Key (CMK). Anchors derived from
     the check's encryption category, not reviewed control by control.
   severity: high
+CKV_AWS_210:
+  cci:
+  - CCI-000225
+  - CCI-000381
+  impact: 0.7
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - AC-6
+  - CM-7
+  nist_r4:
+  - AC-6
+  - CM-7
+  nist_source: agent-drafted
+  rationale: A privileged container holds the host's capabilities and device access. Whatever isolation
+    the job was placed in stops mattering, and a compromise of the job becomes a compromise of the instance
+    running it and of every other job on it.
+  severity: high
 CKV_AWS_216:
   cci: *id011
   impact: 0.5
@@ -475,6 +845,26 @@ CKV_AWS_228:
     a deprecated protocol version means the connection is encrypted with a cipher suite the organisation
     has already retired everywhere else.
   severity: medium
+CKV_AWS_23:
+  cci:
+  - CCI-000366
+  - CCI-000381
+  impact: 0.3
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-6
+  - CM-7
+  - CM-7 (1)
+  nist_r4:
+  - CM-6
+  - CM-7
+  - CM-7 (1)
+  nist_source: agent-drafted
+  rationale: An undescribed firewall rule cannot be reviewed. Nobody can say whose it is, what it was
+    opened for, or whether the reason still holds, so the periodic review that is supposed to close stale
+    openings degrades into a guess and the rule survives every review it should not have.
+  severity: low
 CKV_AWS_238:
   cci:
   - CCI-002664
@@ -546,9 +936,28 @@ CKV_AWS_251:
   rationale: A trail that exists but is stopped produces no record of what happened while it was stopped,
     and the gap is invisible in the console until someone goes looking for the events that should be there.
   severity: high
-  stronger: "Checkov reads enable_logging, the state Terraform asked for. This reads GetTrailStatus, the\
-    \ state the trail is actually in \u2014 a trail stopped by hand after the apply reports the same HCL\
-    \ and a different answer."
+  stronger: Checkov reads enable_logging, the state Terraform asked for. This reads GetTrailStatus, the
+    state the trail is actually in — a trail stopped by hand after the apply reports the same HCL and
+    a different answer.
+CKV_AWS_252:
+  cci:
+  - CCI-000172
+  - CCI-002664
+  impact: 0.3
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-12
+  - SI-4
+  nist_r4:
+  - AU-12
+  - SI-4
+  nist_source: agent-drafted
+  rationale: 'Without an SNS topic on the trail nothing announces that a new log file has been delivered,
+    so anything built on CloudTrail has to poll the bucket and learns about activity late. The deployed
+    trail is what settles this: the topic association can be dropped by a single UpdateTrail call that
+    leaves the Terraform completely unchanged.'
+  severity: low
 CKV_AWS_26:
   cci:
   - CCI-001199
@@ -713,6 +1122,28 @@ CKV_AWS_292:
     then every regional copy is unencrypted, which multiplies one configuration mistake across every region
     the data has been replicated into.
   severity: high
+CKV_AWS_298:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  - KSI-SVC-KMG
+  nist:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A DMS S3 endpoint writes whole tables of migrated source data into a bucket. Under SSE-S3
+    those objects are readable by anyone who can read the bucket; under SSE-KMS reading them additionally
+    requires a decrypt grant on the key, so bucket access alone no longer discloses the migrated records,
+    and key usage is auditable and revocable.
+  severity: medium
 CKV_AWS_3:
   cci: *id007
   impact: 0.7
@@ -733,6 +1164,25 @@ CKV_AWS_305:
   rationale: Ensure CloudFront distribution has a default root object configured. Anchors derived from
     the check's general security category, not reviewed control by control.
   severity: medium
+CKV_AWS_315:
+  cci:
+  - CCI-000293
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-2
+  - CM-6
+  nist_r4:
+  - CM-2
+  - CM-6
+  nist_source: agent-drafted
+  rationale: 'Launch configurations are immutable and cannot be edited in place: changing the baseline
+    means creating a new one and re-pointing the group, so the version instances actually launch from
+    drifts from the one under change control. Launch templates version the baseline inside the service,
+    which is what makes the running fleet''s configuration auditable.'
+  severity: low
 CKV_AWS_319:
   cci:
   - CCI-002664
@@ -771,6 +1221,43 @@ CKV_AWS_323:
   rationale: Ensure ElastiCache clusters do not use the default subnet group. Anchors derived from the
     check's networking category, not reviewed control by control.
   severity: high
+CKV_AWS_329:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: An access point whose root directory is "/" exposes the whole file system to every client
+    that mounts through it, which defeats the reason access points exist. The root directory is fixed
+    when the access point is created, so a deployed access point pointing at "/" is a standing grant that
+    no later Terraform edit narrows.
+  severity: medium
+CKV_AWS_330:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: With no POSIX user enforced the access point uses whatever uid and gid the NFS client presents,
+    so ownership on a shared file system is decided by the caller rather than by the account. Enforcing
+    a uid and gid is what makes per-workload separation on one EFS file system actually hold.
+  severity: medium
 CKV_AWS_331:
   cci:
   - CCI-000213
@@ -1078,6 +1565,25 @@ CKV_AWS_362:
     by, so ownership, data classification and retention policies that key on tags stop applying to the
     copies of the data even though they still apply to the source.
   severity: low
+CKV_AWS_363:
+  cci:
+  - CCI-001227
+  - CCI-002605
+  impact: 0.5
+  ksi:
+  - KSI-CMT-VTD
+  nist:
+  - SI-2
+  - SI-2 (5)
+  nist_r4:
+  - SI-2
+  - SI-2 (5)
+  nist_source: agent-drafted
+  rationale: 'A deprecated Lambda runtime stops receiving security patches for the language runtime and
+    the OS packages beneath it, and AWS eventually blocks first updates and then invocations. The deployed
+    runtime is the one that matters: a function created before its runtime was deprecated keeps running
+    on it until someone changes it, with no Terraform change to notice.'
+  severity: medium
 CKV_AWS_366:
   cci:
   - CCI-000213
@@ -1129,6 +1635,25 @@ CKV_AWS_377:
   rationale: Without the transfer lock, a registrar transfer needs only the auth code, and a transferred
     domain takes the DNS zone -- and with it mail delivery and every certificate issued by DNS validation
     -- to whoever initiated it. Recovering a domain after the fact is a dispute process, not a rollback.
+  severity: medium
+CKV_AWS_378:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A target group registered on HTTP carries requests — including the session cookies and bearer
+    tokens the load balancer just decrypted — in cleartext across the VPC to the target. The perimeter
+    TLS termination protects the internet leg only; anything with a foothold on the path inside reads
+    the rest.
   severity: medium
 CKV_AWS_383:
   cci:

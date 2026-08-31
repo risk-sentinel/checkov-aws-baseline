@@ -2,30 +2,63 @@
 #
 # Rule:        CKV2_AWS_54 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudfront_distribution yet.
+# Read with:   aws_cloudfront_distributions -> aws_cloudfront_distribution (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_54'] || []
 
 control 'CKV2_AWS_54' do
-  impact 0.0
   title 'Ensure AWS CloudFront distribution is using secure SSL protocols for HTTPS communication'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudfront_distribution in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudfront_distribution resources that actually exist, read
+    through the stock inspec-aws aws_cloudfront_distribution resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    SSLv3 is broken — POODLE recovers plaintext from it — and offering it on
+    the CloudFront-to-origin leg means an attacker who can influence the
+    negotiation downgrades the connection to a cipher suite that no longer
+    protects the traffic. The viewer leg being TLS 1.2 does not help when
+    the origin leg is not.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS CloudFront distribution is using secure SSL protocols for HTTPS communication
+    Checkov looks for: Ensure AWS CloudFront distribution is using secure
+    SSL protocols for HTTPS communication
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution
+    Terraform — aws_cloudfront_distribution:
+
+      resource "aws_cloudfront_distribution" "example" {
+        origin {
+          domain_name = "origin.example.com"
+          origin_id   = "custom-origin"
+
+          custom_origin_config {
+            http_port              = 80
+            https_port             = 443
+            origin_protocol_policy = "https-only"
+
+            # SSLv3 removed; TLSv1.2 only
+            origin_ssl_protocols = ["TLSv1.2"]
+          }
+        }
+      }
+
+    Out of band — aws_cloudfront_distribution:
+
+      aws cloudfront get-distribution-config --id <id> > dist.json, edit OriginSslProtocols to remove SSLv3, then aws cloudfront update-distribution --id <id> --distribution-config file://config.json --if-match <etag>
+
+    Note (aws_cloudfront_distribution): CloudFront has no single-field update
+    API — the whole distribution config must be read, edited and written back
+    with the current ETag. Confirm the origin actually negotiates TLS 1.2 before
+    removing the older protocols, or the origin becomes unreachable.
   FIX
 
   tag checkov_id:            'CKV2_AWS_54'
@@ -34,9 +67,56 @@ control 'CKV2_AWS_54' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_cloudfront_distribution]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)', 'SC-13']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)', 'SC-13']
+  tag cci:                   ['CCI-002418', 'CCI-002450']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_54 — no deployed-asset reader for aws_cloudfront_distribution" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  # Global service: the same objects come back from any region, so this is
+  # enumerated once rather than once per region.
+  found = aws_cloudfront_distributions.distribution_ids.to_a.map { |id| [id, nil] }
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_cloudfront_distribution', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_cloudfront_distribution enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_cloudfront_distribution in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_cloudfront_distribution(distribution_id: id) do
+      its('custom_origin_ssl_protocols') { should_not include 'SSLv3' }
+    end
   end
 end

@@ -2,30 +2,70 @@
 #
 # Rule:        CKV2_AWS_63 (checkov 3.3.16)
 # Applies to:  aws_networkfirewall_firewall
-# Status:      PLANNED — no deployed-asset reader exists for aws_networkfirewall_firewall yet.
+# Read with:   aws_network_firewall_firewalls -> aws_network_firewall_logging_configuration (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_63'] || []
 
 control 'CKV2_AWS_63' do
-  impact 0.0
   title 'Ensure Network firewall has logging configuration defined'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_networkfirewall_firewall in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_networkfirewall_firewall resources that actually exist, read
+    through the stock inspec-aws aws_network_firewall_logging_configuration
+    resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A network firewall with no logging configuration inspects traffic and
+    records nothing about what it allowed or dropped. The control is still
+    enforcing, but there is no evidence it enforced, and no way to
+    investigate what reached the protected subnets — the firewall becomes
+    unauditable exactly where the boundary matters most.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure Network firewall has logging configuration defined
+    Checkov looks for: Ensure Network firewall has logging configuration
+    defined
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/networkfirewall_firewall
+    Terraform — aws_networkfirewall_firewall:
+
+      resource "aws_networkfirewall_logging_configuration" "example" {
+        firewall_arn = aws_networkfirewall_firewall.example.arn
+
+        logging_configuration {
+          log_destination_config {
+            log_destination_type = "CloudWatchLogs"
+            log_type             = "FLOW"
+            log_destination = {
+              logGroup = aws_cloudwatch_log_group.firewall_flow.name
+            }
+          }
+
+          log_destination_config {
+            log_destination_type = "CloudWatchLogs"
+            log_type             = "ALERT"
+            log_destination = {
+              logGroup = aws_cloudwatch_log_group.firewall_alert.name
+            }
+          }
+        }
+      }
+
+    Out of band — aws_networkfirewall_firewall:
+
+      aws network-firewall update-logging-configuration --firewall-name <name> --logging-configuration file://logging.json
+
+    Note (aws_networkfirewall_firewall): Configure both log types: ALERT records
+    what the rule groups acted on, FLOW records the traffic they saw. Only one
+    destination change is accepted per call, so adding both types out of band
+    takes two calls.
   FIX
 
   tag checkov_id:            'CKV2_AWS_63'
@@ -34,9 +74,56 @@ control 'CKV2_AWS_63' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_networkfirewall_firewall]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/networkfirewall_firewall'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_63 — no deployed-asset reader for aws_networkfirewall_firewall" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_network_firewall_firewalls(aws_region: region).firewall_names.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_networkfirewall_firewall', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_networkfirewall_firewall enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_networkfirewall_firewall in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_network_firewall_logging_configuration(firewall_name: id, aws_region: region) do
+      its('logging_configuration.log_destination_configs') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

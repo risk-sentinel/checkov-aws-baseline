@@ -2,30 +2,63 @@
 #
 # Rule:        CKV2_AWS_10 (checkov 3.3.16)
 # Applies to:  aws_cloudtrail
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudtrail yet.
+# Read with:   aws_cloudtrail_trails -> aws_cloudtrail_trail (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_10'] || []
 
 control 'CKV2_AWS_10' do
-  impact 0.0
   title 'Ensure CloudTrail trails are integrated with CloudWatch Logs'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudtrail in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudtrail resources that actually exist, read through the stock
+    inspec-aws aws_cloudtrail_trail resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A trail that only writes to S3 produces an archive nobody is watching.
+    Delivery to CloudWatch Logs is what makes metric filters and alarms
+    possible, so it is the difference between events being retained and
+    events being noticed. It also puts a second copy of the audit record in
+    a store with a different access path from the bucket.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure CloudTrail trails are integrated with CloudWatch Logs
+    Checkov looks for: a CloudTrail trail whose cloud_watch_logs_group_arn
+    is set, so its events also land somewhere they can be alarmed on
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail
+    Terraform — aws_cloudtrail:
+
+      resource "aws_cloudwatch_log_group" "trail" {
+        name              = "/aws/cloudtrail/org"
+        retention_in_days = 365
+      }
+
+      resource "aws_cloudtrail" "org" {
+        name                          = "org-trail"
+        s3_bucket_name                = aws_s3_bucket.trail.id
+        is_multi_region_trail         = true
+        enable_log_file_validation    = true
+        cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.trail.arn}:*"
+        cloud_watch_logs_role_arn     = aws_iam_role.trail_to_cwl.arn
+      }
+
+    Out of band — aws_cloudtrail:
+
+      aws cloudtrail update-trail --name <trail> --cloud-watch-logs-log-group-arn <log-group-arn>:* --cloud-watch-logs-role-arn <role-arn>
+
+    Note (aws_cloudtrail): Two things bite here. The log group ARN must carry
+    the trailing ":*" or CloudTrail rejects it, and the role in
+    cloud_watch_logs_role_arn must trust cloudtrail.amazonaws.com and hold
+    logs:CreateLogStream and logs:PutLogEvents on that group. Without the role
+    the trail still reports the group and delivers nothing, which this control
+    cannot see.
   FIX
 
   tag checkov_id:            'CKV2_AWS_10'
@@ -34,9 +67,56 @@ control 'CKV2_AWS_10' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_cloudtrail]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-6', 'AU-9', 'SI-4']
+  tag nist_r4:               ['AU-6', 'AU-9', 'SI-4']
+  tag cci:                   ['CCI-000162', 'CCI-002664']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_10 — no deployed-asset reader for aws_cloudtrail" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_cloudtrail_trails(aws_region: region).trail_arns.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_cloudtrail', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_cloudtrail enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudtrail in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_cloudtrail_trail(trail_name: id, aws_region: region) do
+      its('cloud_watch_logs_log_group_arn') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

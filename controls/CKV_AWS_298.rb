@@ -2,30 +2,62 @@
 #
 # Rule:        CKV_AWS_298 (checkov 3.3.16)
 # Applies to:  aws_dms_s3_endpoint
-# Status:      PLANNED — no deployed-asset reader exists for aws_dms_s3_endpoint yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_298'] || []
 
 control 'CKV_AWS_298' do
-  impact 0.0
   title 'Ensure DMS S3 uses Customer Managed Key (CMK)'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_dms_s3_endpoint in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_dms_s3_endpoint resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A DMS S3 endpoint writes whole tables of migrated source data into a
+    bucket. Under SSE-S3 those objects are readable by anyone who can read
+    the bucket; under SSE-KMS reading them additionally requires a decrypt
+    grant on the key, so bucket access alone no longer discloses the
+    migrated records, and key usage is auditable and revocable.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_dms_s3_endpoint: kms_key_arn is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dms_s3_endpoint#kms-key-arn
+    Terraform — aws_dms_s3_endpoint:
+
+      resource "aws_kms_key" "dms" {
+        description         = "DMS S3 target encryption"
+        enable_key_rotation = true
+      }
+
+      resource "aws_dms_s3_endpoint" "target" {
+        endpoint_id             = "s3-target"
+        endpoint_type           = "target"
+        bucket_name             = aws_s3_bucket.dms.id
+        service_access_role_arn = aws_iam_role.dms.arn
+        encryption_mode         = "SSE_KMS"
+        kms_key_arn             = aws_kms_key.dms.arn
+      }
+
+    Out of band — aws_dms_s3_endpoint:
+
+      aws dms modify-endpoint --endpoint-arn <endpoint-arn> --s3-settings BucketName=<bucket>,ServiceAccessRoleArn=<role-arn>,EncryptionMode=SSE_KMS,ServerSideEncryptionKmsKeyId=<key-arn>
+
+    Note (aws_dms_s3_endpoint): modify-endpoint REPLACES the whole S3Settings
+    structure rather than merging into it, so every setting the endpoint already
+    has must be resent in the same call or it is silently reset to its default.
+    Note also that AWS allows changing EncryptionMode from SSE_KMS back to
+    SSE_S3 but not from SSE_S3 to SSE_KMS on an existing endpoint, so an
+    endpoint that is already on SSE_S3 has to be replaced.
   FIX
 
   tag checkov_id:            'CKV_AWS_298'
@@ -34,9 +66,46 @@ control 'CKV_AWS_298' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_dms_s3_endpoint]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dms_s3_endpoint#kms-key-arn'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)', 'SC-12']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)', 'SC-12']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER', 'KSI-SVC-KMG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_298 — no deployed-asset reader for aws_dms_s3_endpoint" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_dms_s3_endpoint', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_dms_s3_endpoint enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:s3_encryption_mode].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_dms_s3_endpoint in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_dms_s3_endpoint #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:s3_encryption_mode] }
+      it { should match(/\A(?i:SSE[_-]KMS)\z/) }
+    end
   end
 end

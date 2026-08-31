@@ -2,30 +2,62 @@
 #
 # Rule:        CKV_AWS_210 (checkov 3.3.16)
 # Applies to:  aws_batch_job_definition
-# Status:      PLANNED — no deployed-asset reader exists for aws_batch_job_definition yet.
+# Read with:   aws_batch_job_definitions -> aws_batch_job_definition (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_210'] || []
 
 control 'CKV_AWS_210' do
-  impact 0.0
   title 'Batch job does not define a privileged container'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_batch_job_definition in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_batch_job_definition resources that actually exist, read through
+    the stock inspec-aws aws_batch_job_definition resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A privileged container holds the host's capabilities and device access.
+    Whatever isolation the job was placed in stops mattering, and a
+    compromise of the job becomes a compromise of the instance running it
+    and of every other job on it.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: Batch job does not define a privileged container
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/batch_job_definition
+    Terraform — aws_batch_job_definition:
+
+      resource "aws_batch_job_definition" "etl" {
+        name = "etl"
+        type = "container"
+
+        container_properties = jsonencode({
+          image      = "${var.ecr_registry}/etl:1.4.2"
+          jobRoleArn = aws_iam_role.etl_task.arn
+          privileged = false
+          resourceRequirements = [
+            { type = "VCPU", value = "2" },
+            { type = "MEMORY", value = "4096" },
+          ]
+        })
+      }
+
+    Out of band — aws_batch_job_definition:
+
+      aws batch register-job-definition --job-definition-name etl --type container --container-properties file://container.json
+
+    Note (aws_batch_job_definition): Job definitions are immutable: there is no
+    in-place fix. register-job-definition creates a new REVISION, and every job
+    queue and submission that names the old revision must be re-pointed before
+    the old one is deregistered. Because this control reads only the first
+    revision the API returns for a name, expect the finding to clear once that
+    revision is the one returned — not the moment the fix is written.
   FIX
 
   tag checkov_id:            'CKV_AWS_210'
@@ -34,9 +66,56 @@ control 'CKV_AWS_210' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_batch_job_definition]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/batch_job_definition'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AC-6', 'CM-7']
+  tag nist_r4:               ['AC-6', 'CM-7']
+  tag cci:                   ['CCI-000225', 'CCI-000381']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_210 — no deployed-asset reader for aws_batch_job_definition" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_batch_job_definitions(aws_region: region).job_definition_names.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_batch_job_definition', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_batch_job_definition enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
+
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_batch_job_definition in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_batch_job_definition(job_definition_name: id, aws_region: region) do
+      its('container_properties.privileged') { should_not eq true }
+    end
   end
 end

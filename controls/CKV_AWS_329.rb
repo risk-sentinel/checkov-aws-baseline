@@ -2,30 +2,69 @@
 #
 # Rule:        CKV_AWS_329 (checkov 3.3.16)
 # Applies to:  aws_efs_access_point
-# Status:      PLANNED — no deployed-asset reader exists for aws_efs_access_point yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_329'] || []
 
 control 'CKV_AWS_329' do
-  impact 0.0
   title 'EFS access points should enforce a root directory'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_efs_access_point in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_efs_access_point resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    An access point whose root directory is "/" exposes the whole file
+    system to every client that mounts through it, which defeats the reason
+    access points exist. The root directory is fixed when the access point
+    is created, so a deployed access point pointing at "/" is a standing
+    grant that no later Terraform edit narrows.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_efs_access_point: root_directory/[0]/path is not /
+    Checkov looks for: aws_efs_access_point: root_directory/[0]/path is not
+    /
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/efs_access_point#root-directory
+    Terraform — aws_efs_access_point:
+
+      resource "aws_efs_access_point" "example" {
+        file_system_id = aws_efs_file_system.example.id
+
+        root_directory {
+          path = "/app-data"
+
+          creation_info {
+            owner_uid   = 1000
+            owner_gid   = 1000
+            permissions = "0750"
+          }
+        }
+
+        posix_user {
+          uid = 1000
+          gid = 1000
+        }
+      }
+
+    Out of band — aws_efs_access_point:
+
+      aws efs create-access-point --file-system-id <fs-id> --root-directory 'Path=/app-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=0750}' --posix-user Uid=1000,Gid=1000
+      aws efs delete-access-point --access-point-id <old-access-point-id>
+
+    Note (aws_efs_access_point): There is no in-place fix: an access point's
+    root directory is fixed at creation. The path is a replacement access point
+    plus repointing every mount — ECS volume configuration, EKS persistent
+    volume, or /etc/fstab — at the new id before the old one is deleted.
+    CreationInfo must be supplied or EFS will not create the directory, and
+    mounts then fail.
   FIX
 
   tag checkov_id:            'CKV_AWS_329'
@@ -34,9 +73,46 @@ control 'CKV_AWS_329' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_efs_access_point]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/efs_access_point#root-directory'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AC-3', 'AC-6']
+  tag nist_r4:               ['AC-3', 'AC-6']
+  tag cci:                   ['CCI-000213', 'CCI-002233']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_329 — no deployed-asset reader for aws_efs_access_point" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_efs_access_point', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_efs_access_point enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:root_directory_path].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_efs_access_point in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_efs_access_point #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:root_directory_path] }
+      it { should_not eq '/' }
+    end
   end
 end
