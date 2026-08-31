@@ -85,6 +85,9 @@ control 'CKV_AWS_88' do
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
                    .reject { |a| a[:public_ip].nil? }
 

@@ -57,10 +57,9 @@ control 'CKV_AWS_201' do
 
   assets = aws_api_assets(type: 'aws_memorydb_cluster', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject { |a| a[:kms_key_id].nil? }
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = assets.assets(exempt: exempt)
 
   applicable = !in_scope.empty?
   impact 0.5
@@ -70,7 +69,7 @@ control 'CKV_AWS_201' do
   in_scope.each do |asset|
     describe "aws_memorydb_cluster #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:kms_key_id] }
-      it { should_not be_empty }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

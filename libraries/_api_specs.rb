@@ -5,244 +5,419 @@
 # libraries/aws_api_assets.rb; see tools/api_specs.yml for what each key means.
 API_SPECS = {
   'aws_acm_certificate' => {
-    'gem' => 'aws-sdk-acm',
-    'client' => 'Aws::ACM::Client',
-    'list' => 'list_certificates',
-    'collection' => 'certificate_summary_list',
-    'id' => 'domain_name',
     'arn' => 'certificate_arn',
+    'client' => 'Aws::ACM::Client',
+    'collection' => 'certificate_summary_list',
     'fields' => {
-      'key_algorithm' => 'key_algorithm',
-      'in_use' => 'in_use'
-    }
+      'in_use' => 'in_use',
+      'key_algorithm' => 'key_algorithm'
+    },
+    'gem' => 'aws-sdk-acm',
+    'id' => 'domain_name',
+    'list' => 'list_certificates'
   },
   'aws_apprunner_service' => {
-    'gem' => 'aws-sdk-apprunner',
-    'client' => 'Aws::AppRunner::Client',
-    'list' => 'list_services',
-    'collection' => 'service_summary_list',
-    'id' => 'service_name',
     'arn' => 'service_arn',
-    'fields' => {}
+    'client' => 'Aws::AppRunner::Client',
+    'collection' => 'service_summary_list',
+    'fields' => {},
+    'gem' => 'aws-sdk-apprunner',
+    'id' => 'service_name',
+    'list' => 'list_services'
   },
   'aws_athena_workgroup' => {
-    'gem' => 'aws-sdk-athena',
     'client' => 'Aws::Athena::Client',
-    'list' => 'list_work_groups',
     'collection' => 'work_groups',
-    'id' => 'name',
     'fields' => {
       'state' => 'state'
-    }
+    },
+    'gem' => 'aws-sdk-athena',
+    'id' => 'name',
+    'list' => 'list_work_groups'
   },
   'aws_backup_vault' => {
-    'gem' => 'aws-sdk-backup',
-    'client' => 'Aws::Backup::Client',
-    'list' => 'list_backup_vaults',
-    'collection' => 'backup_vault_list',
-    'id' => 'backup_vault_name',
     'arn' => 'backup_vault_arn',
+    'client' => 'Aws::Backup::Client',
+    'collection' => 'backup_vault_list',
     'fields' => {
       'encryption_key_arn' => 'encryption_key_arn'
-    }
+    },
+    'gem' => 'aws-sdk-backup',
+    'id' => 'backup_vault_name',
+    'list' => 'list_backup_vaults'
+  },
+  'aws_bedrockagent_agent' => {
+    'client' => 'Aws::BedrockAgent::Client',
+    'collection' => 'agent_summaries',
+    'fields' => {
+      'agent_status' => 'agent_status',
+      'guardrail_identifier' => 'guardrail_configuration.guardrail_identifier',
+      'guardrail_version' => 'guardrail_configuration.guardrail_version'
+    },
+    'gem' => 'aws-sdk-bedrockagent',
+    'id' => 'agent_id',
+    'list' => 'list_agents',
+    'scope' => 'regional'
   },
   'aws_cloudwatch_log_group' => {
-    'gem' => 'aws-sdk-cloudwatchlogs',
-    'client' => 'Aws::CloudWatchLogs::Client',
-    'list' => 'describe_log_groups',
-    'collection' => 'log_groups',
-    'id' => 'log_group_name',
     'arn' => 'arn',
+    'client' => 'Aws::CloudWatchLogs::Client',
+    'collection' => 'log_groups',
     'fields' => {
       'kms_key_id' => 'kms_key_id',
       'retention_in_days' => 'retention_in_days'
-    }
+    },
+    'gem' => 'aws-sdk-cloudwatchlogs',
+    'id' => 'log_group_name',
+    'list' => 'describe_log_groups'
+  },
+  'aws_cloudwatch_metric_alarm' => {
+    'arn' => 'alarm_arn',
+    'client' => 'Aws::CloudWatch::Client',
+    'collection' => 'metric_alarms',
+    'fields' => {
+      'actions_enabled' => 'actions_enabled',
+      'alarm_actions' => 'alarm_actions'
+    },
+    'gem' => 'aws-sdk-cloudwatch',
+    'id' => 'alarm_name',
+    'list' => 'describe_alarms',
+    'scope' => 'regional'
+  },
+  'aws_config_configuration_aggregator' => {
+    'arn' => 'configuration_aggregator_arn',
+    'client' => 'Aws::ConfigService::Client',
+    'collection' => 'configuration_aggregators',
+    'fields' => {
+      'organization_all_aws_regions' => 'organization_aggregation_source.all_aws_regions',
+      'organization_role_arn' => 'organization_aggregation_source.role_arn'
+    },
+    'gem' => 'aws-sdk-configservice',
+    'id' => 'configuration_aggregator_name',
+    'list' => 'describe_configuration_aggregators',
+    'scope' => 'regional'
+  },
+  'aws_dax_cluster' => {
+    'arn' => 'cluster_arn',
+    'client' => 'Aws::DAX::Client',
+    'collection' => 'clusters',
+    'fields' => {
+      'cluster_endpoint_encryption_type' => 'cluster_endpoint_encryption_type',
+      'node_type' => 'node_type',
+      'sse_status' => 'sse_description.status'
+    },
+    'gem' => 'aws-sdk-dax',
+    'id' => 'cluster_name',
+    'list' => 'describe_clusters',
+    'scope' => 'regional'
   },
   'aws_dms_replication_instance' => {
-    'gem' => 'aws-sdk-databasemigrationservice',
-    'client' => 'Aws::DatabaseMigrationService::Client',
-    'list' => 'describe_replication_instances',
-    'collection' => 'replication_instances',
-    'id' => 'replication_instance_identifier',
     'arn' => 'replication_instance_arn',
+    'client' => 'Aws::DatabaseMigrationService::Client',
+    'collection' => 'replication_instances',
     'fields' => {
-      'publicly_accessible' => 'publicly_accessible',
       'auto_minor_version_upgrade' => 'auto_minor_version_upgrade',
-      'multi_az' => 'multi_az'
-    }
+      'multi_az' => 'multi_az',
+      'publicly_accessible' => 'publicly_accessible'
+    },
+    'gem' => 'aws-sdk-databasemigrationservice',
+    'id' => 'replication_instance_identifier',
+    'list' => 'describe_replication_instances'
+  },
+  'aws_docdb_cluster' => {
+    'arn' => 'db_cluster_arn',
+    'client' => 'Aws::DocDB::Client',
+    'collection' => 'db_clusters',
+    'fields' => {
+      'backup_retention_period' => 'backup_retention_period',
+      'deletion_protection' => 'deletion_protection',
+      'engine' => 'engine',
+      'kms_key_id' => 'kms_key_id',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-docdb',
+    'id' => 'db_cluster_identifier',
+    'list' => 'describe_db_clusters',
+    'scope' => 'regional'
+  },
+  'aws_docdb_global_cluster' => {
+    'arn' => 'global_cluster_arn',
+    'client' => 'Aws::DocDB::Client',
+    'collection' => 'global_clusters',
+    'fields' => {
+      'engine' => 'engine',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-docdb',
+    'id' => 'global_cluster_identifier',
+    'list' => 'describe_global_clusters',
+    'scope' => 'regional'
+  },
+  'aws_ec2_transit_gateway' => {
+    'arn' => 'transit_gateway_arn',
+    'client' => 'Aws::EC2::Client',
+    'collection' => 'transit_gateways',
+    'fields' => {
+      'auto_accept_shared_attachments' => 'options.auto_accept_shared_attachments',
+      'default_route_table_association' => 'options.default_route_table_association',
+      'dns_support' => 'options.dns_support',
+      'state' => 'state'
+    },
+    'gem' => 'aws-sdk-ec2',
+    'id' => 'transit_gateway_id',
+    'list' => 'describe_transit_gateways',
+    'scope' => 'regional'
   },
   'aws_ecr_repository' => {
-    'gem' => 'aws-sdk-ecr',
-    'client' => 'Aws::ECR::Client',
-    'list' => 'describe_repositories',
-    'collection' => 'repositories',
-    'id' => 'repository_name',
     'arn' => 'repository_arn',
+    'client' => 'Aws::ECR::Client',
+    'collection' => 'repositories',
     'fields' => {
-      'scan_on_push' => 'image_scanning_configuration.scan_on_push',
-      'image_tag_mutability' => 'image_tag_mutability',
       'encryption_type' => 'encryption_configuration.encryption_type',
-      'kms_key' => 'encryption_configuration.kms_key'
-    }
+      'image_tag_mutability' => 'image_tag_mutability',
+      'kms_key' => 'encryption_configuration.kms_key',
+      'scan_on_push' => 'image_scanning_configuration.scan_on_push'
+    },
+    'gem' => 'aws-sdk-ecr',
+    'id' => 'repository_name',
+    'list' => 'describe_repositories'
   },
   'aws_efs_file_system' => {
-    'gem' => 'aws-sdk-efs',
-    'client' => 'Aws::EFS::Client',
-    'list' => 'describe_file_systems',
-    'collection' => 'file_systems',
-    'id' => 'file_system_id',
     'arn' => 'file_system_arn',
+    'client' => 'Aws::EFS::Client',
+    'collection' => 'file_systems',
     'fields' => {
       'encrypted' => 'encrypted',
       'kms_key_id' => 'kms_key_id'
-    }
-  },
-  'aws_elasticsearch_domain' => {
-    'gem' => 'aws-sdk-elasticsearchservice',
-    'client' => 'Aws::ElasticsearchService::Client',
-    'list' => 'list_domain_names',
-    'collection' => 'domain_names',
-    'id' => 'domain_name',
-    'fields' => {}
+    },
+    'gem' => 'aws-sdk-efs',
+    'id' => 'file_system_id',
+    'list' => 'describe_file_systems'
   },
   'aws_emr_cluster' => {
-    'gem' => 'aws-sdk-emr',
-    'client' => 'Aws::EMR::Client',
-    'list' => 'list_clusters',
-    'collection' => 'clusters',
-    'id' => 'id',
     'arn' => 'cluster_arn',
+    'client' => 'Aws::EMR::Client',
+    'collection' => 'clusters',
     'fields' => {
       'status' => 'status.state'
-    }
+    },
+    'gem' => 'aws-sdk-emr',
+    'id' => 'id',
+    'list' => 'list_clusters'
   },
   'aws_glue_crawler' => {
-    'gem' => 'aws-sdk-glue',
     'client' => 'Aws::Glue::Client',
-    'list' => 'get_crawlers',
     'collection' => 'crawlers',
-    'id' => 'name',
     'fields' => {
       'security_configuration' => 'crawler_security_configuration'
-    }
-  },
-  'aws_guardduty_detector' => {
-    'gem' => 'aws-sdk-guardduty',
-    'client' => 'Aws::GuardDuty::Client',
-    'list' => 'list_detectors',
-    'collection' => 'detector_ids',
-    'id' => 'detector_ids',
-    'fields' => {}
+    },
+    'gem' => 'aws-sdk-glue',
+    'id' => 'name',
+    'list' => 'get_crawlers'
   },
   'aws_kinesis_stream' => {
-    'gem' => 'aws-sdk-kinesis',
-    'client' => 'Aws::Kinesis::Client',
-    'list' => 'list_streams',
-    'collection' => 'stream_summaries',
-    'id' => 'stream_name',
     'arn' => 'stream_arn',
-    'fields' => {
-      'encryption_type' => 'stream_mode_details.stream_mode'
-    }
+    'client' => 'Aws::Kinesis::Client',
+    'collection' => 'stream_summaries',
+    'fields' => {},
+    'gem' => 'aws-sdk-kinesis',
+    'id' => 'stream_name',
+    'list' => 'list_streams'
   },
   'aws_lambda_function' => {
-    'gem' => 'aws-sdk-lambda',
-    'client' => 'Aws::Lambda::Client',
-    'list' => 'list_functions',
-    'collection' => 'functions',
-    'id' => 'function_name',
     'arn' => 'function_arn',
+    'client' => 'Aws::Lambda::Client',
+    'collection' => 'functions',
     'fields' => {
-      'tracing_mode' => 'tracing_config.mode',
+      'code_signing_config_arn' => 'code_signing_config_arn',
       'kms_key_arn' => 'kms_key_arn',
       'runtime' => 'runtime',
-      'vpc_subnet_ids' => 'vpc_config.subnet_ids',
-      'code_signing_config_arn' => 'code_signing_config_arn'
-    }
+      'tracing_mode' => 'tracing_config.mode',
+      'vpc_subnet_ids' => 'vpc_config.subnet_ids'
+    },
+    'gem' => 'aws-sdk-lambda',
+    'id' => 'function_name',
+    'list' => 'list_functions'
   },
   'aws_memorydb_cluster' => {
-    'gem' => 'aws-sdk-memorydb',
-    'client' => 'Aws::MemoryDB::Client',
-    'list' => 'describe_clusters',
-    'collection' => 'clusters',
-    'id' => 'name',
     'arn' => 'arn',
+    'client' => 'Aws::MemoryDB::Client',
+    'collection' => 'clusters',
     'fields' => {
-      'tls_enabled' => 'tls_enabled',
       'kms_key_id' => 'kms_key_id',
-      'snapshot_retention_limit' => 'snapshot_retention_limit'
-    }
+      'snapshot_retention_limit' => 'snapshot_retention_limit',
+      'tls_enabled' => 'tls_enabled'
+    },
+    'gem' => 'aws-sdk-memorydb',
+    'id' => 'name',
+    'list' => 'describe_clusters'
+  },
+  'aws_memorydb_snapshot' => {
+    'arn' => 'arn',
+    'client' => 'Aws::MemoryDB::Client',
+    'collection' => 'snapshots',
+    'fields' => {
+      'kms_key_arn' => 'kms_key_id',
+      'source' => 'source',
+      'status' => 'status'
+    },
+    'gem' => 'aws-sdk-memorydb',
+    'id' => 'name',
+    'list' => 'describe_snapshots',
+    'scope' => 'regional'
+  },
+  'aws_msk_cluster' => {
+    'arn' => 'cluster_arn',
+    'client' => 'Aws::Kafka::Client',
+    'collection' => 'cluster_info_list',
+    'fields' => {
+      'encryption_at_rest_kms_key_id' => 'encryption_info.encryption_at_rest.data_volume_kms_key_id',
+      'encryption_in_transit_client_broker' => 'encryption_info.encryption_in_transit.client_broker',
+      'encryption_in_transit_in_cluster' => 'encryption_info.encryption_in_transit.in_cluster',
+      'logging_cloudwatch_enabled' => 'logging_info.broker_logs.cloud_watch_logs.enabled',
+      'logging_firehose_enabled' => 'logging_info.broker_logs.firehose.enabled',
+      'logging_s3_enabled' => 'logging_info.broker_logs.s3.enabled',
+      'public_access_type' => 'broker_node_group_info.connectivity_info.public_access.type'
+    },
+    'gem' => 'aws-sdk-kafka',
+    'id' => 'cluster_name',
+    'list' => 'list_clusters',
+    'scope' => 'regional'
+  },
+  'aws_neptune_cluster' => {
+    'arn' => 'db_cluster_arn',
+    'client' => 'Aws::Neptune::Client',
+    'collection' => 'db_clusters',
+    'fields' => {
+      'backup_retention_period' => 'backup_retention_period',
+      'copy_tags_to_snapshot' => 'copy_tags_to_snapshot',
+      'deletion_protection' => 'deletion_protection',
+      'engine' => 'engine',
+      'iam_database_authentication_enabled' => 'iam_database_authentication_enabled',
+      'kms_key_id' => 'kms_key_id',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-neptune',
+    'id' => 'db_cluster_identifier',
+    'list' => 'describe_db_clusters',
+    'scope' => 'regional'
+  },
+  'aws_neptune_cluster_instance' => {
+    'arn' => 'db_instance_arn',
+    'client' => 'Aws::Neptune::Client',
+    'collection' => 'db_instances',
+    'fields' => {
+      'engine' => 'engine',
+      'publicly_accessible' => 'publicly_accessible',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-neptune',
+    'id' => 'db_instance_identifier',
+    'list' => 'describe_db_instances',
+    'scope' => 'regional'
+  },
+  'aws_neptune_cluster_snapshot' => {
+    'arn' => 'db_cluster_snapshot_arn',
+    'client' => 'Aws::Neptune::Client',
+    'collection' => 'db_cluster_snapshots',
+    'fields' => {
+      'engine' => 'engine',
+      'kms_key_id' => 'kms_key_id',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-neptune',
+    'id' => 'db_cluster_snapshot_identifier',
+    'list' => 'describe_db_cluster_snapshots',
+    'scope' => 'regional'
   },
   'aws_networkfirewall_firewall' => {
-    'gem' => 'aws-sdk-networkfirewall',
-    'client' => 'Aws::NetworkFirewall::Client',
-    'list' => 'list_firewalls',
-    'collection' => 'firewalls',
-    'id' => 'firewall_name',
     'arn' => 'firewall_arn',
-    'fields' => {}
+    'client' => 'Aws::NetworkFirewall::Client',
+    'collection' => 'firewalls',
+    'fields' => {},
+    'gem' => 'aws-sdk-networkfirewall',
+    'id' => 'firewall_name',
+    'list' => 'list_firewalls'
+  },
+  'aws_rds_global_cluster' => {
+    'arn' => 'global_cluster_arn',
+    'client' => 'Aws::RDS::Client',
+    'collection' => 'global_clusters',
+    'fields' => {
+      'deletion_protection' => 'deletion_protection',
+      'engine' => 'engine',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-rds',
+    'id' => 'global_cluster_identifier',
+    'list' => 'describe_global_clusters',
+    'scope' => 'regional'
+  },
+  'aws_route53domains_registered_domain' => {
+    'client' => 'Aws::Route53Domains::Client',
+    'collection' => 'domains',
+    'fields' => {
+      'auto_renew' => 'auto_renew',
+      'transfer_lock' => 'transfer_lock'
+    },
+    'gem' => 'aws-sdk-route53domains',
+    'id' => 'domain_name',
+    'list' => 'list_domains',
+    'scope' => 'global'
   },
   'aws_secretsmanager_secret' => {
-    'gem' => 'aws-sdk-secretsmanager',
-    'client' => 'Aws::SecretsManager::Client',
-    'list' => 'list_secrets',
-    'collection' => 'secret_list',
-    'id' => 'name',
     'arn' => 'arn',
+    'client' => 'Aws::SecretsManager::Client',
+    'collection' => 'secret_list',
     'fields' => {
       'kms_key_id' => 'kms_key_id',
       'rotation_enabled' => 'rotation_enabled'
-    }
+    },
+    'gem' => 'aws-sdk-secretsmanager',
+    'id' => 'name',
+    'list' => 'list_secrets'
   },
   'aws_sfn_state_machine' => {
-    'gem' => 'aws-sdk-states',
-    'client' => 'Aws::States::Client',
-    'list' => 'list_state_machines',
-    'collection' => 'state_machines',
-    'id' => 'name',
     'arn' => 'state_machine_arn',
+    'client' => 'Aws::States::Client',
+    'collection' => 'state_machines',
     'fields' => {
       'type' => 'type'
-    }
+    },
+    'gem' => 'aws-sdk-states',
+    'id' => 'name',
+    'list' => 'list_state_machines'
   },
   'aws_sns_topic' => {
-    'gem' => 'aws-sdk-sns',
-    'client' => 'Aws::SNS::Client',
-    'list' => 'list_topics',
-    'collection' => 'topics',
-    'id' => 'topic_arn',
     'arn' => 'topic_arn',
-    'fields' => {}
-  },
-  'aws_sqs_queue' => {
-    'gem' => 'aws-sdk-sqs',
-    'client' => 'Aws::SQS::Client',
-    'list' => 'list_queues',
-    'collection' => 'queue_urls',
-    'id' => 'queue_urls',
-    'fields' => {}
+    'client' => 'Aws::SNS::Client',
+    'collection' => 'topics',
+    'fields' => {},
+    'gem' => 'aws-sdk-sns',
+    'id' => 'topic_arn',
+    'list' => 'list_topics'
   },
   'aws_transfer_server' => {
-    'gem' => 'aws-sdk-transfer',
-    'client' => 'Aws::Transfer::Client',
-    'list' => 'list_servers',
-    'collection' => 'servers',
-    'id' => 'server_id',
     'arn' => 'arn',
+    'client' => 'Aws::Transfer::Client',
+    'collection' => 'servers',
     'fields' => {
       'endpoint_type' => 'endpoint_type',
       'identity_provider_type' => 'identity_provider_type'
-    }
+    },
+    'gem' => 'aws-sdk-transfer',
+    'id' => 'server_id',
+    'list' => 'list_servers'
   },
   'aws_workspaces_workspace' => {
-    'gem' => 'aws-sdk-workspaces',
     'client' => 'Aws::WorkSpaces::Client',
-    'list' => 'describe_workspaces',
     'collection' => 'workspaces',
-    'id' => 'workspace_id',
     'fields' => {
       'root_volume_encryption_enabled' => 'root_volume_encryption_enabled',
       'user_volume_encryption_enabled' => 'user_volume_encryption_enabled'
-    }
+    },
+    'gem' => 'aws-sdk-workspaces',
+    'id' => 'workspace_id',
+    'list' => 'describe_workspaces'
   },
 }.freeze

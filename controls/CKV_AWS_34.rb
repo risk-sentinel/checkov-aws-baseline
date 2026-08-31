@@ -2,30 +2,81 @@
 #
 # Rule:        CKV_AWS_34 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudfront_distribution yet.
+# Read with:   aws_cloudfront_distributions -> aws_cloudfront_distribution (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_34'] || []
 
 control 'CKV_AWS_34' do
-  impact 0.0
   title 'Ensure CloudFront distribution ViewerProtocolPolicy is set to HTTPS'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudfront_distribution in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudfront_distribution resources that actually exist, read
+    through the stock inspec-aws aws_cloudfront_distribution resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    allow-all leaves the plain HTTP listener answering, so a client that
+    starts on HTTP -- or is pushed there -- completes the request in the
+    clear, cookies and all. Redirecting or refusing is what makes the TLS
+    certificate on the distribution mean anything.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure CloudFront distribution ViewerProtocolPolicy is set to HTTPS
+    Checkov looks for: no cache behaviour sets viewer_protocol_policy to
+    allow-all
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution
+    Terraform — aws_cloudfront_distribution:
+
+      resource "aws_cloudfront_distribution" "site" {
+        enabled             = true
+        default_root_object = "index.html"
+
+        origin {
+          domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+          origin_id                = "s3-site"
+          origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+        }
+
+        default_cache_behavior {
+          target_origin_id       = "s3-site"
+          viewer_protocol_policy = "redirect-to-https"   # never allow-all
+          allowed_methods        = ["GET", "HEAD"]
+          cached_methods         = ["GET", "HEAD"]
+          cache_policy_id        = data.aws_cloudfront_cache_policy.optimized.id
+        }
+
+        ordered_cache_behavior {
+          path_pattern           = "/api/*"
+          target_origin_id       = "s3-site"
+          viewer_protocol_policy = "https-only"
+          allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+          cached_methods         = ["GET", "HEAD"]
+          cache_policy_id        = data.aws_cloudfront_cache_policy.disabled.id
+        }
+
+        restrictions {
+          geo_restriction { restriction_type = "none" }
+        }
+
+        viewer_certificate {
+          acm_certificate_arn      = aws_acm_certificate.site.arn
+          ssl_support_method       = "sni-only"
+          minimum_protocol_version = "TLSv1.2_2021"
+        }
+      }
+
+    Out of band — aws_cloudfront_distribution:
+
+      There is no single-field CloudFront update. Fetch the current config,
+      change every viewer_protocol_policy, and put it back with the ETag:
+      aws cloudfront get-distribution-config --id <id> > dist.json
+      aws cloudfront update-distribution --id <id> --distribution-config file://config.json --if-match <etag>
   FIX
 
   tag checkov_id:            'CKV_AWS_34'
@@ -34,9 +85,29 @@ control 'CKV_AWS_34' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_cloudfront_distribution]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_34 — no deployed-asset reader for aws_cloudfront_distribution" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_cloudfront_distributions.distribution_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_cloudfront_distribution', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_cloudfront_distribution in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_cloudfront_distribution(distribution_id: id) do
+      its('has_viewer_protocol_policies_allowing_http?') { should eq false }
+    end
   end
 end

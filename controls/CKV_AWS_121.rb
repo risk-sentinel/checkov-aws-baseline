@@ -2,30 +2,54 @@
 #
 # Rule:        CKV_AWS_121 (checkov 3.3.16)
 # Applies to:  aws_config_configuration_aggregator
-# Status:      PLANNED — no deployed-asset reader exists for aws_config_configuration_aggregator yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_121'] || []
 
 control 'CKV_AWS_121' do
-  impact 0.0
   title 'Ensure AWS Config is enabled in all regions'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_config_configuration_aggregator in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_config_configuration_aggregator resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    An aggregator pinned to a region list records configuration only where
+    someone remembered to look. Resources appear in unexpected regions
+    precisely when nobody is watching them, so a region-limited aggregator
+    makes the inventory look complete while missing the part that matters.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS Config is enabled in all regions
+    Checkov looks for: an aggregation source covers all regions
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/config_configuration_aggregator
+    Terraform — aws_config_configuration_aggregator:
+
+      resource "aws_config_configuration_aggregator" "org" {
+        name = "org-aggregator"
+
+        organization_aggregation_source {
+          all_regions = true                       # API: AllAwsRegions
+          role_arn    = aws_iam_role.config_aggregator.arn
+        }
+      }
+
+    Out of band — aws_config_configuration_aggregator:
+
+      aws configservice put-configuration-aggregator --configuration-aggregator-name org-aggregator --organization-aggregation-source RoleArn=<role-arn>,AllAwsRegions=true
+
+    Note (aws_config_configuration_aggregator): The aggregator only collects
+    what the recorders in each region actually record. Turning all_regions on
+    does not enable AWS Config anywhere -- a region with no recorder still
+    contributes nothing.
   FIX
 
   tag checkov_id:            'CKV_AWS_121'
@@ -34,9 +58,32 @@ control 'CKV_AWS_121' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_config_configuration_aggregator]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/config_configuration_aggregator'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-8', 'AU-12']
+  tag nist_r4:               ['CM-8', 'AU-12']
+  tag cci:                   ['CCI-000172', 'CCI-000366']
+  tag ksi:                   ['KSI-CMT-INV']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_121 — no deployed-asset reader for aws_config_configuration_aggregator" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_config_configuration_aggregator', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:organization_all_aws_regions].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_config_configuration_aggregator in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_config_configuration_aggregator #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:organization_all_aws_regions] }
+      it { should eq true }
+    end
   end
 end

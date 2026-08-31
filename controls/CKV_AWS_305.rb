@@ -61,7 +61,7 @@ control 'CKV_AWS_305' do
 
   in_scope.each do |id|
     describe aws_cloudfront_distribution(distribution_id: id) do
-      its('default_root_object') { should_not be_empty }
+      its('default_root_object') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

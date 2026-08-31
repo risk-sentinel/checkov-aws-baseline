@@ -61,7 +61,7 @@ control 'CKV_AWS_209' do
 
   in_scope.each do |id|
     describe aws_mq_broker(broker_id: id) do
-      its('encryption_options') { should_not be_empty }
+      its('encryption_options') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

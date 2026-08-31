@@ -61,7 +61,7 @@ control 'CKV_AWS_124' do
 
   in_scope.each do |id|
     describe aws_cloudformation_stack(stack_name: id) do
-      its('notification_arns') { should_not be_empty }
+      its('notification_arns') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

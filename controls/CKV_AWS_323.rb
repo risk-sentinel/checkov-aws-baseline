@@ -60,7 +60,7 @@ control 'CKV_AWS_323' do
 
   in_scope.each do |id|
     describe aws_elasticache_cluster(elasticache_cluster_identifier: id) do
-      its('cache_subnet_group_name') { should_not be_empty }
+      its('cache_subnet_group_name') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

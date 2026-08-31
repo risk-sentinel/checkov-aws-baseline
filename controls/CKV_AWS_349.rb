@@ -2,30 +2,74 @@
 #
 # Rule:        CKV_AWS_349 (checkov 3.3.16)
 # Applies to:  aws_emr_security_configuration
-# Status:      PLANNED — no deployed-asset reader exists for aws_emr_security_configuration yet.
+# Read with:   aws_emr_security_configurations -> aws_emr_security_configuration (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_349'] || []
 
 control 'CKV_AWS_349' do
-  impact 0.0
   title 'Ensure EMR Cluster security configuration encrypts local disks'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_emr_security_configuration in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_emr_security_configuration resources that actually exist, read
+    through the stock inspec-aws aws_emr_security_configuration resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    EMR spills intermediate results to the instance storage attached to each
+    node. Those files hold the same data as the source dataset and survive
+    until the node is reclaimed, so the local disks need the same treatment
+    as the source store.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure EMR Cluster security configuration encrypts local disks
+    Checkov looks for: the security configuration enables at-rest encryption
+    with a local disk encryption configuration
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_security_configuration
+    Terraform — aws_emr_security_configuration:
+
+      resource "aws_emr_security_configuration" "app" {
+        name = "app-emr-sec"
+
+        configuration = jsonencode({
+          EncryptionConfiguration = {
+            EnableAtRestEncryption = true
+            AtRestEncryptionConfiguration = {
+              LocalDiskEncryptionConfiguration = {
+                EncryptionKeyProviderType = "AwsKms"
+                AwsKmsKey                 = aws_kms_key.emr.arn
+                EnableEbsEncryption       = true
+              }
+              S3EncryptionConfiguration = {
+                EncryptionMode = "SSE-KMS"
+                AwsKmsKey      = aws_kms_key.emr.arn
+              }
+            }
+            EnableInTransitEncryption = true
+            InTransitEncryptionConfiguration = {
+              TLSCertificateConfiguration = {
+                CertificateProviderType = "PEM"
+                S3Object                = "s3://${aws_s3_bucket.emr.id}/certs.zip"
+              }
+            }
+          }
+        })
+      }
+
+    Out of band — aws_emr_security_configuration:
+
+      There is no in-place fix. An EMR security configuration is immutable:
+      create a replacement and point new clusters at it.
+      aws emr create-security-configuration --name app-emr-sec-v2 --security-configuration file://sec.json
+
+    Note (aws_emr_security_configuration): A running cluster keeps the
+    configuration it launched with. Changing this requires launching a
+    replacement cluster against the new configuration.
   FIX
 
   tag checkov_id:            'CKV_AWS_349'
@@ -34,9 +78,29 @@ control 'CKV_AWS_349' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_emr_security_configuration]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_security_configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_349 — no deployed-asset reader for aws_emr_security_configuration" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_emr_security_configurations.security_configuration_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_emr_security_configuration', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_emr_security_configuration in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_emr_security_configuration(security_configuration_name: id) do
+      its('local_disk_encryption') { should eq true }
+    end
   end
 end

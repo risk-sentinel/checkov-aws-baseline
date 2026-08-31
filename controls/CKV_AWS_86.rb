@@ -61,7 +61,7 @@ control 'CKV_AWS_86' do
 
   in_scope.each do |id|
     describe aws_cloudfront_distribution(distribution_id: id) do
-      its('logging_config') { should_not be_empty }
+      its('logging_config') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

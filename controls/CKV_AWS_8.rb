@@ -101,8 +101,9 @@ control 'CKV_AWS_8' do
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
-                   .reject { |a| a[:unencrypted_volumes].nil? }
 
   applicable = !in_scope.empty?
 

@@ -72,7 +72,7 @@ control 'CKV_AWS_354' do
 
   in_scope.each do |id|
     describe aws_rds_instance(id) do
-      its('performance_insights_kms_key_id') { should_not be_empty }
+      its('performance_insights_kms_key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

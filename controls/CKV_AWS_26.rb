@@ -2,30 +2,54 @@
 #
 # Rule:        CKV_AWS_26 (checkov 3.3.16)
 # Applies to:  aws_sns_topic
-# Status:      PLANNED — no deployed-asset reader exists for aws_sns_topic yet.
+# Read with:   aws_sns_topics -> aws_sns_topic (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_26'] || []
 
 control 'CKV_AWS_26' do
-  impact 0.0
   title 'Ensure all data stored in the SNS topic is encrypted'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_sns_topic in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_sns_topic resources that actually exist, read through the stock
+    inspec-aws aws_sns_topic resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Messages sit in the topic between publish and delivery, and topics
+    routinely carry identifiers, tokens and operational detail from the
+    systems that publish to them. Server-side encryption puts that at-rest
+    window under a key whose use is logged and can be revoked.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_sns_topic: kms_master_key_id is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic#kms-master-key-id
+    Terraform — aws_sns_topic:
+
+      resource "aws_kms_key" "sns" {
+        description         = "SNS topic encryption"
+        enable_key_rotation = true
+      }
+
+      resource "aws_sns_topic" "alerts" {
+        name              = "alerts"
+        kms_master_key_id = aws_kms_key.sns.id
+      }
+
+    Out of band — aws_sns_topic:
+
+      aws sns set-topic-attributes --topic-arn <arn> --attribute-name KmsMasterKeyId --attribute-value <key-id>
+
+    Note (aws_sns_topic): Encryption applies to messages published after the
+    change; anything already in flight is unaffected. Every publisher and
+    subscriber principal needs kms:GenerateDataKey and kms:Decrypt on the key,
+    or publishing starts failing at the moment the attribute is set.
   FIX
 
   tag checkov_id:            'CKV_AWS_26'
@@ -34,9 +58,29 @@ control 'CKV_AWS_26' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_sns_topic]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic#kms-master-key-id'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_26 — no deployed-asset reader for aws_sns_topic" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_sns_topics.topic_arns
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_sns_topic', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_sns_topic in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_sns_topic(arn: id) do
+      its('kms_master_key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

@@ -63,7 +63,7 @@ control 'CKV_AWS_176' do
 
   in_scope.each do |id|
     describe aws_waf_web_acl(web_acl_id: id) do
-      its('logging_configuration') { should_not be_empty }
+      its('logging_configuration') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

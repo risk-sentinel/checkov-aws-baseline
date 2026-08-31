@@ -2,30 +2,64 @@
 #
 # Rule:        CKV_AWS_92 (checkov 3.3.16)
 # Applies to:  aws_elb
-# Status:      PLANNED — no deployed-asset reader exists for aws_elb yet.
+# Read with:   aws_elbs -> aws_elb (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_92'] || []
 
 control 'CKV_AWS_92' do
-  impact 0.0
   title 'Ensure the ELB has access logging enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_elb in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_elb resources that actually exist, read through the stock
+    inspec-aws aws_elb resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without access logs the load balancer is the one hop in the request path
+    that keeps no record. Client address, path and response code for traffic
+    that never reached a backend exist nowhere else, which is exactly the
+    traffic an investigation needs.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure the ELB has access logging enabled
+    Checkov looks for: an access_logs block is present and not disabled
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb
+    Terraform — aws_elb:
+
+      resource "aws_elb" "app" {
+        name            = "app-elb"
+        subnets         = var.subnet_ids
+        security_groups = [aws_security_group.elb.id]
+
+        listener {
+          instance_port      = 8080
+          instance_protocol  = "https"
+          lb_port            = 443
+          lb_protocol        = "https"
+          ssl_certificate_id = aws_acm_certificate.app.arn
+        }
+
+        access_logs {
+          enabled       = true
+          bucket        = aws_s3_bucket.elb_logs.id
+          bucket_prefix = "app-elb"
+          interval      = 60
+        }
+      }
+
+    Out of band — aws_elb:
+
+      aws elb modify-load-balancer-attributes --load-balancer-name app-elb --load-balancer-attributes '{"AccessLog":{"Enabled":true,"S3BucketName":"my-elb-logs","EmitInterval":60,"S3BucketPrefix":"app-elb"}}'
+
+    Note (aws_elb): The log bucket needs a policy allowing the regional ELB
+    account principal to PutObject, or the attribute update is rejected
+    outright.
   FIX
 
   tag checkov_id:            'CKV_AWS_92'
@@ -34,9 +68,29 @@ control 'CKV_AWS_92' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_elb]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_92 — no deployed-asset reader for aws_elb" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_elbs.load_balancer_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_elb', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_elb in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_elb(load_balancer_name: id) do
+      its('access_log_enabled?') { should eq true }
+    end
   end
 end

@@ -2,30 +2,65 @@
 #
 # Rule:        CKV_AWS_146 (checkov 3.3.16)
 # Applies to:  aws_db_cluster_snapshot
-# Status:      PLANNED — no deployed-asset reader exists for aws_db_cluster_snapshot yet.
+# Read with:   aws_rds_db_cluster_snapshots -> aws_rds_db_cluster_snapshot (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_146'] || []
 
 control 'CKV_AWS_146' do
-  impact 0.0
   title 'Ensure that RDS database cluster snapshot is encrypted'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_db_cluster_snapshot in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_db_cluster_snapshot resources that actually exist, read through
+    the stock inspec-aws aws_rds_db_cluster_snapshot resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A cluster snapshot holds a full copy of the database and outlives the
+    cluster it came from. If it is unencrypted, the data is readable by
+    anyone who can restore it or who gains access to the snapshot store,
+    without ever touching the running database.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_db_cluster_snapshot: storage_encrypted is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_cluster_snapshot#storage-encrypted
+    Terraform — aws_db_cluster_snapshot:
+
+      # A cluster snapshot inherits encryption from the cluster; it cannot be
+      # encrypted on its own. Encrypt the cluster and every snapshot follows.
+      resource "aws_rds_cluster" "app" {
+        cluster_identifier = "app-aurora"
+        engine             = "aurora-postgresql"
+        engine_version     = "15.4"
+        master_username    = "app"
+        manage_master_user_password = true
+
+        storage_encrypted = true
+        kms_key_id        = aws_kms_key.rds.arn
+      }
+
+      resource "aws_db_cluster_snapshot" "app" {
+        db_cluster_identifier          = aws_rds_cluster.app.id
+        db_cluster_snapshot_identifier = "app-aurora-2026-08-30"
+      }
+
+    Out of band — aws_db_cluster_snapshot:
+
+      There is no in-place fix. A snapshot's encryption is fixed at creation and
+      so is the cluster's. Copy the snapshot to an encrypted one, then restore
+      a new cluster from the copy and cut over:
+      aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier app-aurora-2026-08-30 --target-db-cluster-snapshot-identifier app-aurora-2026-08-30-enc --kms-key-id <key-arn>
+
+    Note (aws_db_cluster_snapshot): Encryption cannot be turned on for an
+    existing cluster or an existing snapshot. The remediation is a
+    copy-and-restore, and the unencrypted original should be deleted once the
+    replacement is verified.
   FIX
 
   tag checkov_id:            'CKV_AWS_146'
@@ -34,9 +69,29 @@ control 'CKV_AWS_146' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_db_cluster_snapshot]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_cluster_snapshot#storage-encrypted'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_146 — no deployed-asset reader for aws_db_cluster_snapshot" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_rds_db_cluster_snapshots.db_cluster_snapshot_identifiers
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_db_cluster_snapshot', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_db_cluster_snapshot in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_rds_db_cluster_snapshot(db_cluster_snapshot_id: id) do
+      its('storage_encrypted') { should eq true }
+    end
   end
 end

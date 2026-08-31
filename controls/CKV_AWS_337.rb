@@ -59,7 +59,7 @@ control 'CKV_AWS_337' do
 
   in_scope.each do |id|
     describe aws_ssm_parameter(name: id) do
-      its('key_id') { should_not be_empty }
+      its('key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

@@ -2,30 +2,48 @@
 #
 # Rule:        CKV_AWS_359 (checkov 3.3.16)
 # Applies to:  aws_neptune_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_neptune_cluster yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_359'] || []
 
 control 'CKV_AWS_359' do
-  impact 0.0
   title 'Neptune DB clusters should have IAM database authentication enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_neptune_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_neptune_cluster resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without IAM database authentication the cluster is reached with a static
+    password that lives in application configuration and does not expire.
+    With it enabled, access is a short-lived token tied to an IAM principal,
+    so revocation and audit happen in one place.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_neptune_cluster: iam_database_authentication_enabled is True
+    Checkov looks for: aws_neptune_cluster:
+    iam_database_authentication_enabled is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster#iam-database-authentication-enabled
+    Terraform — aws_neptune_cluster:
+
+      resource "aws_neptune_cluster" "graph" {
+        cluster_identifier                  = "graph"
+        engine                              = "neptune"
+        storage_encrypted                   = true
+        iam_database_authentication_enabled = true
+      }
+
+    Out of band — aws_neptune_cluster:
+
+      aws neptune modify-db-cluster --db-cluster-identifier graph --enable-iam-database-authentication --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_359'
@@ -34,9 +52,32 @@ control 'CKV_AWS_359' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_neptune_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster#iam-database-authentication-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-2', 'IA-5']
+  tag nist_r4:               ['IA-2', 'IA-5']
+  tag cci:                   ['CCI-000764', 'CCI-000196']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_359 — no deployed-asset reader for aws_neptune_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_neptune_cluster', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:iam_database_authentication_enabled].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_neptune_cluster in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_neptune_cluster #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:iam_database_authentication_enabled] }
+      it { should eq true }
+    end
   end
 end

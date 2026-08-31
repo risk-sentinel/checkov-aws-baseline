@@ -2,30 +2,53 @@
 #
 # Rule:        CKV_AWS_284 (checkov 3.3.16)
 # Applies to:  aws_sfn_state_machine
-# Status:      PLANNED — no deployed-asset reader exists for aws_sfn_state_machine yet.
+# Read with:   aws_stepfunctions_state_machines -> aws_stepfunctions_state_machine (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_284'] || []
 
 control 'CKV_AWS_284' do
-  impact 0.0
   title 'Ensure State Machine has X-Ray tracing enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_sfn_state_machine in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_sfn_state_machine resources that actually exist, read through
+    the stock inspec-aws aws_stepfunctions_state_machine resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without tracing, a failed execution shows which state errored but not
+    what the downstream call did, so the boundary between the workflow's
+    fault and a dependency's fault cannot be established from the record.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_sfn_state_machine: tracing_configuration/[0]/enabled is True
+    Checkov looks for: aws_sfn_state_machine:
+    tracing_configuration/[0]/enabled is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sfn_state_machine#tracing-configuration
+    Terraform — aws_sfn_state_machine:
+
+      resource "aws_sfn_state_machine" "orders" {
+        name       = "orders"
+        role_arn   = aws_iam_role.sfn.arn
+        definition = file("${path.module}/orders.asl.json")
+
+        tracing_configuration {
+          enabled = true
+        }
+      }
+
+    Out of band — aws_sfn_state_machine:
+
+      aws stepfunctions update-state-machine --state-machine-arn <arn> --tracing-configuration enabled=true
+
+    Note (aws_sfn_state_machine): The state machine's role also needs the X-Ray
+    write permissions (xray:PutTraceSegments, xray:PutTelemetryRecords,
+    xray:GetSamplingRules, xray:GetSamplingTargets) or no segments are recorded.
   FIX
 
   tag checkov_id:            'CKV_AWS_284'
@@ -34,9 +57,29 @@ control 'CKV_AWS_284' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_sfn_state_machine]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sfn_state_machine#tracing-configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_284 — no deployed-asset reader for aws_sfn_state_machine" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_stepfunctions_state_machines.state_machine_arns
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_sfn_state_machine', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_sfn_state_machine in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_stepfunctions_state_machine(state_machine_arn: id) do
+      its('tracing_configuration.enabled') { should eq true }
+    end
   end
 end

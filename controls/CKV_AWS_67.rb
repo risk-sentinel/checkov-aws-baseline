@@ -2,30 +2,46 @@
 #
 # Rule:        CKV_AWS_67 (checkov 3.3.16)
 # Applies to:  aws_cloudtrail
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudtrail yet.
+# Read with:   aws_cloudtrail_trails -> aws_cloudtrail_trail (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_67'] || []
 
 control 'CKV_AWS_67' do
-  impact 0.0
   title 'Ensure CloudTrail is enabled in all Regions'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudtrail in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudtrail resources that actually exist, read through the stock
+    inspec-aws aws_cloudtrail_trail resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A single-region trail records nothing in the other enabled regions, and
+    an unused region is where activity is least likely to be noticed. Only a
+    multi-region trail follows the account into a region nobody watches.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_cloudtrail: is_multi_region_trail is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail#is-multi-region-trail
+    Terraform — aws_cloudtrail:
+
+      resource "aws_cloudtrail" "org" {
+        name                          = "org-trail"
+        s3_bucket_name                = aws_s3_bucket.trail.id
+        is_multi_region_trail         = true
+        include_global_service_events = true
+        enable_log_file_validation    = true
+      }
+
+    Out of band — aws_cloudtrail:
+
+      aws cloudtrail update-trail --name org-trail --is-multi-region-trail --include-global-service-events
   FIX
 
   tag checkov_id:            'CKV_AWS_67'
@@ -34,9 +50,29 @@ control 'CKV_AWS_67' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cloudtrail]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudtrail#is-multi-region-trail'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-12']
+  tag cci:                   ['CCI-000169', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_67 — no deployed-asset reader for aws_cloudtrail" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_cloudtrail_trails.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_cloudtrail', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_cloudtrail in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_cloudtrail_trail(trail_name: id) do
+      its('is_multi_region_trail') { should eq true }
+    end
   end
 end

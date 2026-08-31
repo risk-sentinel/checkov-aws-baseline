@@ -60,7 +60,7 @@ control 'CKV_AWS_189' do
 
   in_scope.each do |id|
     describe aws_ebs_volume(volume_id: id) do
-      its('kms_key_id') { should_not be_empty }
+      its('kms_key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

@@ -2,30 +2,61 @@
 #
 # Rule:        CKV_AWS_319 (checkov 3.3.16)
 # Applies to:  aws_cloudwatch_metric_alarm
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudwatch_metric_alarm yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_319'] || []
 
 control 'CKV_AWS_319' do
-  impact 0.0
   title 'Ensure that CloudWatch alarm actions are enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudwatch_metric_alarm in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudwatch_metric_alarm resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    An alarm with actions disabled still changes state and still shows red
+    on a dashboard, but notifies nobody. It is the failure mode that looks
+    most like working monitoring, which is why it survives unnoticed for so
+    long.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_cloudwatch_metric_alarm: actions_enabled is not False
+    Checkov looks for: aws_cloudwatch_metric_alarm: actions_enabled is not
+    False
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm#actions-enabled
+    Terraform — aws_cloudwatch_metric_alarm:
+
+      resource "aws_cloudwatch_metric_alarm" "high_5xx" {
+        alarm_name          = "app-high-5xx"
+        namespace           = "AWS/ApplicationELB"
+        metric_name         = "HTTPCode_Target_5XX_Count"
+        statistic           = "Sum"
+        period              = 300
+        evaluation_periods  = 2
+        threshold           = 10
+        comparison_operator = "GreaterThanThreshold"
+        treat_missing_data  = "notBreaching"
+
+        actions_enabled = true                       # the default; state it
+        alarm_actions   = [aws_sns_topic.alerts.arn]
+        ok_actions      = [aws_sns_topic.alerts.arn]
+      }
+
+    Out of band — aws_cloudwatch_metric_alarm:
+
+      aws cloudwatch enable-alarm-actions --alarm-names app-high-5xx
+
+    Note (aws_cloudwatch_metric_alarm): Enabling actions on an alarm that has no
+    alarm_actions changes nothing observable. Check that the action list is
+    non-empty at the same time.
   FIX
 
   tag checkov_id:            'CKV_AWS_319'
@@ -34,9 +65,32 @@ control 'CKV_AWS_319' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_cloudwatch_metric_alarm]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm#actions-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SI-4', 'AU-12']
+  tag nist_r4:               ['SI-4', 'AU-12']
+  tag cci:                   ['CCI-002664', 'CCI-000172']
+  tag ksi:                   ['KSI-MLA-OSM']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_319 — no deployed-asset reader for aws_cloudwatch_metric_alarm" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_cloudwatch_metric_alarm', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:actions_enabled].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudwatch_metric_alarm in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_cloudwatch_metric_alarm #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:actions_enabled] }
+      it { should eq true }
+    end
   end
 end

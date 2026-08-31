@@ -2,30 +2,52 @@
 #
 # Rule:        CKV_AWS_377 (checkov 3.3.16)
 # Applies to:  aws_route53domains_registered_domain
-# Status:      PLANNED — no deployed-asset reader exists for aws_route53domains_registered_domain yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_377'] || []
 
 control 'CKV_AWS_377' do
-  impact 0.0
   title 'Ensure Route 53 domains have transfer lock protection'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_route53domains_registered_domain in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_route53domains_registered_domain resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without the transfer lock, a registrar transfer needs only the auth
+    code, and a transferred domain takes the DNS zone -- and with it mail
+    delivery and every certificate issued by DNS validation -- to whoever
+    initiated it. Recovering a domain after the fact is a dispute process,
+    not a rollback.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_route53domains_registered_domain: transfer_lock is not False
+    Checkov looks for: aws_route53domains_registered_domain: transfer_lock
+    is not False
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53domains_registered_domain#transfer-lock
+    Terraform — aws_route53domains_registered_domain:
+
+      resource "aws_route53domains_registered_domain" "example" {
+        domain_name   = "example.com"
+        transfer_lock = true
+        auto_renew    = true
+      }
+
+    Out of band — aws_route53domains_registered_domain:
+
+      aws route53domains enable-domain-transfer-lock --domain-name example.com --region us-east-1
+
+    Note (aws_route53domains_registered_domain): The transfer lock cannot be set
+    during the first 60 days after registration or after a transfer in; the API
+    rejects it until the domain leaves that window.
   FIX
 
   tag checkov_id:            'CKV_AWS_377'
@@ -34,9 +56,32 @@ control 'CKV_AWS_377' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_route53domains_registered_domain]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route53domains_registered_domain#transfer-lock'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-6', 'AC-3']
+  tag nist_r4:               ['CM-6', 'AC-3']
+  tag cci:                   ['CCI-000366', 'CCI-000213']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_377 — no deployed-asset reader for aws_route53domains_registered_domain" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_route53domains_registered_domain', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:transfer_lock].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_route53domains_registered_domain in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_route53domains_registered_domain #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:transfer_lock] }
+      it { should eq true }
+    end
   end
 end

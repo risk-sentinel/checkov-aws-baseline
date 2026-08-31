@@ -2,30 +2,58 @@
 #
 # Rule:        CKV_AWS_346 (checkov 3.3.16)
 # Applies to:  aws_networkfirewall_firewall_policy
-# Status:      PLANNED — no deployed-asset reader exists for aws_networkfirewall_firewall_policy yet.
+# Read with:   aws_network_firewall_firewall_policies -> aws_network_firewall_firewall_policy (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_346'] || []
 
 control 'CKV_AWS_346' do
-  impact 0.0
   title 'Ensure Network Firewall Policy defines an encryption configuration that uses a customer managed Key (CMK)'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_networkfirewall_firewall_policy in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_networkfirewall_firewall_policy resources that actually exist,
+    read through the stock inspec-aws aws_network_firewall_firewall_policy
+    resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A firewall policy is a description of what the boundary permits. Holding
+    it under a customer managed key keeps its use inside the account's own
+    key grants and CloudTrail record.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_networkfirewall_firewall_policy: encryption_configuration/[0]/key_id is CKV_ANY
+    Checkov looks for: aws_networkfirewall_firewall_policy:
+    encryption_configuration/[0]/key_id is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/networkfirewall_firewall_policy#encryption-configuration
+    Terraform — aws_networkfirewall_firewall_policy:
+
+      resource "aws_networkfirewall_firewall_policy" "edge" {
+        name = "edge"
+
+        encryption_configuration {
+          key_id = aws_kms_key.nfw.arn
+          type   = "CUSTOMER_KMS"
+        }
+
+        firewall_policy {
+          stateless_default_actions          = ["aws:forward_to_sfe"]
+          stateless_fragment_default_actions = ["aws:forward_to_sfe"]
+
+          stateful_rule_group_reference {
+            resource_arn = aws_networkfirewall_rule_group.block.arn
+          }
+        }
+      }
+
+    Out of band — aws_networkfirewall_firewall_policy:
+
+      aws network-firewall update-firewall-policy --firewall-policy-name edge --encryption-configuration KeyId=<key-arn>,Type=CUSTOMER_KMS --update-token <token>
   FIX
 
   tag checkov_id:            'CKV_AWS_346'
@@ -34,9 +62,29 @@ control 'CKV_AWS_346' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_networkfirewall_firewall_policy]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/networkfirewall_firewall_policy#encryption-configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-12', 'SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-12', 'SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-002450', 'CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-KMG']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_346 — no deployed-asset reader for aws_networkfirewall_firewall_policy" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_network_firewall_firewall_policies.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_networkfirewall_firewall_policy', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_networkfirewall_firewall_policy in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_network_firewall_firewall_policy(firewall_policy_name: id) do
+      its('firewall_policy_response.encryption_configuration.key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

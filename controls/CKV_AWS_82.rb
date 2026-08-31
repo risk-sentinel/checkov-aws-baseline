@@ -2,30 +2,61 @@
 #
 # Rule:        CKV_AWS_82 (checkov 3.3.16)
 # Applies to:  aws_athena_workgroup
-# Status:      PLANNED — no deployed-asset reader exists for aws_athena_workgroup yet.
+# Read with:   aws_athena_work_groups -> aws_athena_work_group (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_82'] || []
 
 control 'CKV_AWS_82' do
-  impact 0.0
   title 'Ensure Athena Workgroup should enforce configuration to prevent client disabling encryption'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_athena_workgroup in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_athena_workgroup resources that actually exist, read through the
+    stock inspec-aws aws_athena_work_group resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Unless the workgroup configuration is enforced, a client can override
+    the result location and the encryption settings per query, so the
+    encryption the workgroup declares is advisory rather than binding.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_athena_workgroup: configuration/[0]/enforce_workgroup_configuration is True
+    Checkov looks for: aws_athena_workgroup:
+    configuration/[0]/enforce_workgroup_configuration is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/athena_workgroup#configuration
+    Terraform — aws_athena_workgroup:
+
+      resource "aws_athena_workgroup" "analytics" {
+        name = "analytics"
+
+        configuration {
+          enforce_workgroup_configuration    = true
+          publish_cloudwatch_metrics_enabled = true
+
+          result_configuration {
+            output_location = "s3://${aws_s3_bucket.results.bucket}/output/"
+
+            encryption_configuration {
+              encryption_option = "SSE_KMS"
+              kms_key_arn       = aws_kms_key.athena.arn
+            }
+          }
+        }
+      }
+
+    Out of band — aws_athena_workgroup:
+
+      aws athena update-work-group --work-group <name> --configuration-updates EnforceWorkGroupConfiguration=true
+
+    Note (aws_athena_workgroup): Enforcing the configuration overrides any
+    client-side result location, so confirm callers are not relying on writing
+    results to their own bucket before applying it.
   FIX
 
   tag checkov_id:            'CKV_AWS_82'
@@ -34,9 +65,29 @@ control 'CKV_AWS_82' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_athena_workgroup]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/athena_workgroup#configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-7', 'AC-3']
+  tag nist_r4:               ['CM-7', 'AC-3']
+  tag cci:                   ['CCI-000382', 'CCI-000213']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_82 — no deployed-asset reader for aws_athena_workgroup" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_athena_work_groups.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_athena_workgroup', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_athena_workgroup in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_athena_work_group(work_group: id) do
+      its('configuration.enforce_workgroup_configuration') { should eq true }
+    end
   end
 end

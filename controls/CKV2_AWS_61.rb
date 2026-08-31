@@ -82,7 +82,7 @@ control 'CKV2_AWS_61' do
 
   in_scope.each do |id|
     describe aws_s3_bucket(bucket_name: id) do
-      its('bucket_lifecycle_rules') { should_not be_empty }
+      its('bucket_lifecycle_rules') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

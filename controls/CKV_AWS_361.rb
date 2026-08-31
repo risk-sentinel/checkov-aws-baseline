@@ -2,30 +2,47 @@
 #
 # Rule:        CKV_AWS_361 (checkov 3.3.16)
 # Applies to:  aws_neptune_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_neptune_cluster yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_361'] || []
 
 control 'CKV_AWS_361' do
-  impact 0.0
   title 'Ensure that Neptune DB cluster has automated backups enabled with adequate retention'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_neptune_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_neptune_cluster resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Automated backups are the only recovery path for a destructive write or
+    a ransomware event on the cluster. A one-day window means the damage has
+    to be noticed within a day; a week of retention gives a realistic
+    detection interval to restore from.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure that Neptune DB cluster has automated backups enabled with adequate retention
+    Checkov looks for: backup_retention_period is at least 7 days
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster
+    Terraform — aws_neptune_cluster:
+
+      resource "aws_neptune_cluster" "graph" {
+        cluster_identifier      = "graph"
+        engine                  = "neptune"
+        backup_retention_period = 7
+        preferred_backup_window = "03:00-04:00"
+      }
+
+    Out of band — aws_neptune_cluster:
+
+      aws neptune modify-db-cluster --db-cluster-identifier graph --backup-retention-period 7 --apply-immediately
   FIX
 
   tag checkov_id:            'CKV_AWS_361'
@@ -34,9 +51,32 @@ control 'CKV_AWS_361' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_neptune_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CP-9', 'SI-12']
+  tag nist_r4:               ['CP-9', 'SI-12']
+  tag cci:                   ['CCI-000535', 'CCI-001678']
+  tag ksi:                   ['KSI-RPL-ABO']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_361 — no deployed-asset reader for aws_neptune_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_neptune_cluster', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:backup_retention_period].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_neptune_cluster in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_neptune_cluster #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:backup_retention_period] }
+      it { should be > 6 }
+    end
   end
 end

@@ -60,7 +60,7 @@ control 'CKV_AWS_68' do
 
   in_scope.each do |id|
     describe aws_cloudfront_distribution(distribution_id: id) do
-      its('web_acl_id') { should_not be_empty }
+      its('web_acl_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

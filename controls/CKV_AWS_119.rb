@@ -2,30 +2,61 @@
 #
 # Rule:        CKV_AWS_119 (checkov 3.3.16)
 # Applies to:  aws_dynamodb_table
-# Status:      PLANNED — no deployed-asset reader exists for aws_dynamodb_table yet.
+# Read with:   aws_dynamodb_tables -> aws_dynamodb_table (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_119'] || []
 
 control 'CKV_AWS_119' do
-  impact 0.0
   title 'Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_dynamodb_table in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_dynamodb_table resources that actually exist, read through the
+    stock inspec-aws aws_dynamodb_table resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A table on the AWS-owned default key is encrypted, but the key is
+    invisible -- it has no key policy to read, no grants to audit, and no
+    CloudTrail record of its use. Moving to a KMS key puts the table's
+    encryption under the same key policy and usage log as everything else.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure DynamoDB Tables are encrypted using a KMS Customer Managed CMK
+    Checkov looks for: server_side_encryption is enabled with a kms_key_arn,
+    rather than the AWS-owned default key
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table
+    Terraform — aws_dynamodb_table:
+
+      resource "aws_dynamodb_table" "orders" {
+        name         = "orders"
+        billing_mode = "PAY_PER_REQUEST"
+        hash_key     = "order_id"
+
+        attribute {
+          name = "order_id"
+          type = "S"
+        }
+
+        server_side_encryption {
+          enabled     = true
+          kms_key_arn = aws_kms_key.dynamodb.arn
+        }
+
+        point_in_time_recovery {
+          enabled = true
+        }
+      }
+
+    Out of band — aws_dynamodb_table:
+
+      aws dynamodb update-table --table-name orders --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId=<key-arn>
+      This is an in-place change; the table stays available while it applies.
   FIX
 
   tag checkov_id:            'CKV_AWS_119'
@@ -34,9 +65,29 @@ control 'CKV_AWS_119' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_dynamodb_table]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-12', 'SC-28 (1)']
+  tag nist_r4:               ['SC-12', 'SC-28 (1)']
+  tag cci:                   ['CCI-002475']
+  tag ksi:                   ['KSI-SVC-KMG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_119 — no deployed-asset reader for aws_dynamodb_table" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_dynamodb_tables.table_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_dynamodb_table', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_dynamodb_table in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_dynamodb_table(table_name: id) do
+      its('encrypted?') { should eq true }
+    end
   end
 end

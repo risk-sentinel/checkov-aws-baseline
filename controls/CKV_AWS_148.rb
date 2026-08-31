@@ -2,30 +2,57 @@
 #
 # Rule:        CKV_AWS_148 (checkov 3.3.16)
 # Applies to:  aws_default_vpc
-# Status:      PLANNED — no deployed-asset reader exists for aws_default_vpc yet.
+# Read with:   aws_vpcs -> aws_vpc (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_148'] || []
 
 control 'CKV_AWS_148' do
-  impact 0.0
   title 'Ensure no default VPC is planned to be provisioned'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_default_vpc in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_default_vpc resources that actually exist, read through the
+    stock inspec-aws aws_vpc resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A default VPC ships with a public subnet in every availability zone, an
+    internet gateway and a security group that allows all traffic between
+    its members. An instance launched without an explicit subnet lands
+    there.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure no default VPC is planned to be provisioned
+    Checkov looks for: any aws_default_vpc resource is declared at all
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/default_vpc
+    Terraform — aws_default_vpc:
+
+      # There is no Terraform that removes a default VPC: `aws_default_vpc`
+      # ADOPTS the existing one, and destroying that resource only drops it
+      # from state. Manage the workload's own VPC instead, and delete the
+      # default out of band.
+      resource "aws_vpc" "app" {
+        cidr_block           = "10.0.0.0/16"
+        enable_dns_hostnames = true
+
+        tags = {
+          Name = "app"
+        }
+      }
+
+    Out of band — aws_default_vpc:
+
+      aws ec2 delete-vpc --vpc-id <default-vpc-id> --region <region>
+
+    Note (aws_default_vpc): Delete the default VPC in every enabled region, not
+    just the one you work in, and detach or delete its internet gateway, subnets
+    and route tables first. Anything already launched into it must be moved
+    before the delete will succeed.
   FIX
 
   tag checkov_id:            'CKV_AWS_148'
@@ -34,9 +61,29 @@ control 'CKV_AWS_148' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_default_vpc]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/default_vpc'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-7', 'CM-7']
+  tag nist_r4:               ['SC-7', 'CM-7']
+  tag cci:                   ['CCI-001097', 'CCI-000381']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_148 — no deployed-asset reader for aws_default_vpc" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_vpcs.vpc_ids
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_default_vpc', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_default_vpc in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_vpc(vpc_id: id) do
+      its('is_default') { should eq false }
+    end
   end
 end

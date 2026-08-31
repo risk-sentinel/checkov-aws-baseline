@@ -2,30 +2,62 @@
 #
 # Rule:        CKV_AWS_285 (checkov 3.3.16)
 # Applies to:  aws_sfn_state_machine
-# Status:      PLANNED — no deployed-asset reader exists for aws_sfn_state_machine yet.
+# Read with:   aws_stepfunctions_state_machines -> aws_stepfunctions_state_machine (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_285'] || []
 
 control 'CKV_AWS_285' do
-  impact 0.0
   title 'Ensure State Machine has execution history logging enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_sfn_state_machine in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_sfn_state_machine resources that actually exist, read through
+    the stock inspec-aws aws_stepfunctions_state_machine resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Execution history is retained for ninety days inside Step Functions and
+    then gone. Logging with execution data is what puts the input and output
+    of each state into a log group that retention policy and alerting can
+    reach.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_sfn_state_machine: logging_configuration/[0]/include_execution_data is True
+    Checkov looks for: aws_sfn_state_machine:
+    logging_configuration/[0]/include_execution_data is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sfn_state_machine#logging-configuration
+    Terraform — aws_sfn_state_machine:
+
+      resource "aws_cloudwatch_log_group" "sfn" {
+        name              = "/aws/vendedlogs/states/orders"
+        retention_in_days = 365
+      }
+
+      resource "aws_sfn_state_machine" "orders" {
+        name       = "orders"
+        role_arn   = aws_iam_role.sfn.arn
+        definition = file("${path.module}/orders.asl.json")
+
+        logging_configuration {
+          log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+          include_execution_data = true
+          level                  = "ALL"
+        }
+      }
+
+    Out of band — aws_sfn_state_machine:
+
+      aws stepfunctions update-state-machine --state-machine-arn <arn> --logging-configuration level=ALL,includeExecutionData=true,destinations=[{cloudWatchLogsLogGroup={logGroupArn=<log-group-arn>:*}}]
+
+    Note (aws_sfn_state_machine): Execution data includes state input and
+    output, so the log group inherits whatever sensitivity the workflow carries
+    — set its retention and KMS key accordingly rather than leaving it at the
+    defaults.
   FIX
 
   tag checkov_id:            'CKV_AWS_285'
@@ -34,9 +66,29 @@ control 'CKV_AWS_285' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_sfn_state_machine]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sfn_state_machine#logging-configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-3', 'AU-12']
+  tag nist_r4:               ['AU-2', 'AU-3', 'AU-12']
+  tag cci:                   ['CCI-000130', 'CCI-000169']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_285 — no deployed-asset reader for aws_sfn_state_machine" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_stepfunctions_state_machines.state_machine_arns
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_sfn_state_machine', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_sfn_state_machine in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_stepfunctions_state_machine(state_machine_arn: id) do
+      its('logging_configuration.include_execution_data') { should eq true }
+    end
   end
 end

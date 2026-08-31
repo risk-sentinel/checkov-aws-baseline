@@ -62,7 +62,7 @@ control 'CKV_AWS_195' do
 
   in_scope.each do |id|
     describe aws_glue_crawler(name: id) do
-      its('security_configuration') { should_not be_empty }
+      its('security_configuration') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

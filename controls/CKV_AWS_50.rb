@@ -60,10 +60,11 @@ control 'CKV_AWS_50' do
 
   assets = aws_api_assets(type: 'aws_lambda_function', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject { |a| a[:tracing_mode].nil? }
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:tracing_mode].nil? }
 
   applicable = !in_scope.empty?
   impact 0.3

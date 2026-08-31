@@ -2,30 +2,53 @@
 #
 # Rule:        CKV_AWS_331 (checkov 3.3.16)
 # Applies to:  aws_ec2_transit_gateway
-# Status:      PLANNED — no deployed-asset reader exists for aws_ec2_transit_gateway yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_331'] || []
 
 control 'CKV_AWS_331' do
-  impact 0.0
   title 'Ensure Transit Gateways do not automatically accept VPC attachment requests'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_ec2_transit_gateway in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_ec2_transit_gateway resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    With auto-accept on, any account the gateway is shared with can attach a
+    VPC and reach everything else on the gateway without anyone in this
+    account approving it. Attachment stops being a reviewed decision.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_ec2_transit_gateway: auto_accept_shared_attachments is not e or n or a or b or l or e
+    Checkov looks for: aws_ec2_transit_gateway:
+    auto_accept_shared_attachments is not e or n or a or b or l or e
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ec2_transit_gateway#auto-accept-shared-attachments
+    Terraform — aws_ec2_transit_gateway:
+
+      resource "aws_ec2_transit_gateway" "main" {
+        description                     = "main"
+        auto_accept_shared_attachments  = "disable"
+        default_route_table_association = "disable"
+        default_route_table_propagation = "disable"
+        dns_support                     = "enable"
+      }
+
+    Out of band — aws_ec2_transit_gateway:
+
+      aws ec2 modify-transit-gateway --transit-gateway-id <tgw-id> --options AutoAcceptSharedAttachments=disable
+
+    Note (aws_ec2_transit_gateway): Turning auto-accept off does not detach
+    anything already attached. Review the existing attachments with
+    describe-transit-gateway-attachments and remove the ones that were never
+    approved.
   FIX
 
   tag checkov_id:            'CKV_AWS_331'
@@ -34,9 +57,32 @@ control 'CKV_AWS_331' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_ec2_transit_gateway]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ec2_transit_gateway#auto-accept-shared-attachments'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AC-3', 'SC-7', 'CM-7']
+  tag nist_r4:               ['AC-3', 'SC-7', 'CM-7']
+  tag cci:                   ['CCI-000213', 'CCI-001097']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_331 — no deployed-asset reader for aws_ec2_transit_gateway" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_ec2_transit_gateway', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:auto_accept_shared_attachments].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_ec2_transit_gateway in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_ec2_transit_gateway #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:auto_accept_shared_attachments] }
+      it { should be_in ['disable'] }
+    end
   end
 end

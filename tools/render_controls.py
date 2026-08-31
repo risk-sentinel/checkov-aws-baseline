@@ -212,10 +212,8 @@ control '{cid}' do
 
   assets = aws_api_assets(type: '{tf_type}', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject {{ |a| a[:{field}].nil? }}
+{nil_filter_comment}
+  in_scope = assets.assets(exempt: exempt){nil_filter}
 
   applicable = !in_scope.empty?
   impact {impact}
@@ -335,8 +333,9 @@ def render(cid, version, entry, mapping, meta, fixes):
     prose = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     types_rb = "%w[" + " ".join(types) + "]"
 
-    # f-string template below, so this must be a local rather than a format arg.
+    # f-string template below, so these must be locals rather than format args.
     nist_source = meta.get("nist_source", "reviewed")
+    nil_filter, nil_filter_comment = nil_filter_for(satisfies, field)
 
     stronger = ""
     if meta.get("stronger"):
@@ -395,8 +394,8 @@ control '{cid}' do
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
-  in_scope = assets.assets_of(applies_to, exempt: exempt)
-                   .reject {{ |a| a[:{field}].nil? }}
+{nil_filter_comment}
+  in_scope = assets.assets_of(applies_to, exempt: exempt){nil_filter}
 
   applicable = !in_scope.empty?
 
@@ -429,24 +428,12 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
     tf_type = next(iter(mapping))
     spec = mapping[tf_type]
     enum, assertion = spec["enumerate"], spec["assert"]
+    # One matcher implementation, shared with render_api. This block used to be a
+    # duplicate of it and drifted: the shared one learned to quote strings, this
+    # one did not, so a stock mapping with a string value would still render a
+    # bare lowercased identifier — a NameError that reads as a finding.
     satisfies = assertion.get("satisfies", "equals")
-    value = assertion.get("value")
-    if satisfies == "equals":
-        matcher = f"should eq {str(value).lower()}"
-    elif satisfies == "not_empty":
-        matcher = "should_not be_empty"
-    elif satisfies == "empty":
-        matcher = "should be_empty"
-    elif satisfies == "greater_than":
-        matcher = f"should be > {value}"
-    elif satisfies == "in_list":
-        # A literal array in the control, so the accepted set is visible in the
-        # result rather than hidden behind a helper.
-        # Ruby escapes a single quote inside a single-quoted string by doubling it.
-        allowed = ", ".join("'" + str(v).replace("'", "''") + "'" for v in value)
-        matcher = f"should be_in [{allowed}]"
-    else:
-        raise SystemExit(f"{cid}: unknown satisfies '{satisfies}'")
+    matcher = matcher_for(cid, satisfies, assertion.get("value"))
 
     return STOCK_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type,
@@ -471,19 +458,56 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
         prop=assertion["property"], matcher=matcher)
 
 
+def ruby_literal(value):
+    """A value as Ruby source.
+
+    `str(value).lower()` was wrong for anything but a boolean: an expected value
+    of "IMMUTABLE" rendered as the bare word `immutable`, which is a NameError at
+    exec and reports as a FAILED control rather than an errored one — a broken
+    control that reads as a finding.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def nil_filter_for(satisfies, field):
+    """Whether a nil field means "out of scope" or "this is the failure".
+
+    For a value comparison, a field the API did not return means the asset does
+    not express the setting: out of scope, not in breach. For a PRESENCE check
+    (`not_empty`), nil is precisely the failing state, and filtering it first
+    made the control structurally unfailable — it silently rendered Not
+    Applicable for every asset that should have failed.
+    """
+    if satisfies in ("not_empty", "empty"):
+        return ("", "  # A nil field is the FAILING state for a presence check, so it is\n"
+                    "  # deliberately not filtered out here.")
+    return (f"\n                   .reject {{ |a| a[:{field}].nil? }}",
+            "  # A field the API did not return is nil, and nil is not a failing value:\n"
+            "  # the asset does not express this setting, so it is out of scope for this\n"
+            "  # check rather than in breach of it.")
+
+
 def matcher_for(cid, satisfies, value):
     """The RSpec matcher a `satisfies` maps to, shared by the stock and API shapes."""
     if satisfies == "equals":
-        return f"should eq {str(value).lower()}"
+        return f"should eq {ruby_literal(value)}"
     if satisfies == "not_empty":
-        return "should_not be_empty"
+        # "is set" — nil and an empty string/array all fail. `should_not be_empty`
+        # alone raises on nil, and filtering nil out beforehand removes exactly the
+        # population that fails.
+        return ("should satisfy('be set') { |v| "
+                "!v.nil? && !(v.respond_to?(:empty?) && v.empty?) }")
     if satisfies == "empty":
-        return "should be_empty"
+        return ("should satisfy('be unset or empty') { |v| "
+                "v.nil? || (v.respond_to?(:empty?) && v.empty?) }")
     if satisfies == "greater_than":
         return f"should be > {value}"
     if satisfies == "in_list":
-        allowed = ", ".join("'" + str(v).replace("'", "''") + "'" for v in value)
-        return f"should be_in [{allowed}]"
+        return "should be_in [" + ", ".join(ruby_literal(v) for v in value) + "]"
     raise SystemExit(f"{cid}: unknown satisfies '{satisfies}'")
 
 
@@ -507,6 +531,8 @@ def render_api(cid, version, entry, mapping, meta, fixes):
         sev=meta["severity"], impact=meta["impact"],
         nist_source=meta.get("nist_source", "reviewed"),
         field=spec["field"],
+        nil_filter=nil_filter_for(spec.get("satisfies", "equals"), spec["field"])[0],
+        nil_filter_comment=nil_filter_for(spec.get("satisfies", "equals"), spec["field"])[1],
         matcher=matcher_for(cid, spec.get("satisfies", "equals"), spec.get("value")))
 
 

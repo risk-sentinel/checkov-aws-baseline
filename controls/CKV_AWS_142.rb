@@ -59,7 +59,7 @@ control 'CKV_AWS_142' do
 
   in_scope.each do |id|
     describe aws_redshift_cluster(cluster_identifier: id) do
-      its('kms_key_id') { should_not be_empty }
+      its('kms_key_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

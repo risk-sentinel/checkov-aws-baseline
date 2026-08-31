@@ -2,30 +2,61 @@
 #
 # Rule:        CKV_AWS_116 (checkov 3.3.16)
 # Applies to:  aws_lambda_function
-# Status:      PLANNED — no deployed-asset reader exists for aws_lambda_function yet.
+# Read with:   aws_lambdas -> aws_lambda (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_116'] || []
 
 control 'CKV_AWS_116' do
-  impact 0.0
   title 'Ensure that AWS Lambda function is configured for a Dead Letter Queue(DLQ)'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_lambda_function in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_lambda_function resources that actually exist, read through the
+    stock inspec-aws aws_lambda resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    An asynchronous invocation that exhausts its retries is discarded
+    silently when there is no dead-letter target. The work is lost and
+    nothing records that it existed, so the failure is invisible to both
+    operations and audit.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_lambda_function: dead_letter_config/[0]/target_arn is CKV_ANY
+    Checkov looks for: aws_lambda_function:
+    dead_letter_config/[0]/target_arn is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function#dead-letter-config
+    Terraform — aws_lambda_function:
+
+      resource "aws_sqs_queue" "dlq" {
+        name = "app-dlq"
+      }
+
+      resource "aws_lambda_function" "app" {
+        function_name = "app"
+        role          = aws_iam_role.app.arn
+        handler       = "index.handler"
+        runtime       = "python3.12"
+        filename      = "app.zip"
+
+        dead_letter_config {
+          target_arn = aws_sqs_queue.dlq.arn
+        }
+      }
+
+    Out of band — aws_lambda_function:
+
+      aws lambda update-function-configuration --function-name <name> --dead-letter-config TargetArn=<queue-or-topic-arn>
+
+    Note (aws_lambda_function): The function's execution role also needs
+    sqs:SendMessage (or sns:Publish) on the target; without it the delivery
+    fails silently and the check still passes, because the configuration is
+    present.
   FIX
 
   tag checkov_id:            'CKV_AWS_116'
@@ -34,9 +65,29 @@ control 'CKV_AWS_116' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_lambda_function]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_function#dead-letter-config'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SI-11']
+  tag nist_r4:               ['SI-11']
+  tag cci:                   ['CCI-001312']
+  tag ksi:                   ['KSI-RPL-RCY']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_116 — no deployed-asset reader for aws_lambda_function" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_lambdas.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_lambda_function', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_lambda_function in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_lambda(lambda_name: id) do
+      its('dead_letter_config.target_arn') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

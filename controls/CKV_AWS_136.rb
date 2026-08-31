@@ -61,10 +61,11 @@ control 'CKV_AWS_136' do
 
   assets = aws_api_assets(type: 'aws_ecr_repository', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject { |a| a[:encryption_type].nil? }
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:encryption_type].nil? }
 
   applicable = !in_scope.empty?
   impact 0.5
@@ -74,7 +75,7 @@ control 'CKV_AWS_136' do
   in_scope.each do |asset|
     describe "aws_ecr_repository #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:encryption_type] }
-      it { should eq kms }
+      it { should eq 'KMS' }
     end
   end
 end

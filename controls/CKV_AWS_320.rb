@@ -68,7 +68,7 @@ control 'CKV_AWS_320' do
 
   in_scope.each do |id|
     describe aws_redshift_cluster(cluster_identifier: id) do
-      its('db_name') { should_not be_empty }
+      its('db_name') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

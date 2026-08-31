@@ -58,10 +58,11 @@ control 'CKV_AWS_89' do
 
   assets = aws_api_assets(type: 'aws_dms_replication_instance', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject { |a| a[:publicly_accessible].nil? }
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:publicly_accessible].nil? }
 
   applicable = !in_scope.empty?
   impact 0.7

@@ -2,30 +2,65 @@
 #
 # Rule:        CKV_AWS_351 (checkov 3.3.16)
 # Applies to:  aws_emr_security_configuration
-# Status:      PLANNED — no deployed-asset reader exists for aws_emr_security_configuration yet.
+# Read with:   aws_emr_security_configurations -> aws_emr_security_configuration (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_351'] || []
 
 control 'CKV_AWS_351' do
-  impact 0.0
   title 'Ensure EMR Cluster security configuration encrypts InTransit'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_emr_security_configuration in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_emr_security_configuration resources that actually exist, read
+    through the stock inspec-aws aws_emr_security_configuration resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Cluster nodes shuffle whole partitions of the dataset between each other
+    over the VPC network. Unencrypted, that traffic exposes the data to
+    anything with a foothold in the subnet, which is a much lower bar than
+    access to the cluster itself.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure EMR Cluster security configuration encrypts InTransit
+    Checkov looks for: the security configuration sets
+    EnableInTransitEncryption
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_security_configuration
+    Terraform — aws_emr_security_configuration:
+
+      resource "aws_emr_security_configuration" "app" {
+        name = "app-emr-sec"
+
+        configuration = jsonencode({
+          EncryptionConfiguration = {
+            EnableInTransitEncryption = true
+            InTransitEncryptionConfiguration = {
+              TLSCertificateConfiguration = {
+                CertificateProviderType = "PEM"
+                S3Object                = "s3://${aws_s3_bucket.emr.id}/certs.zip"
+              }
+            }
+            EnableAtRestEncryption = true
+            AtRestEncryptionConfiguration = {
+              LocalDiskEncryptionConfiguration = {
+                EncryptionKeyProviderType = "AwsKms"
+                AwsKmsKey                 = aws_kms_key.emr.arn
+                EnableEbsEncryption       = true
+              }
+            }
+          }
+        })
+      }
+
+    Out of band — aws_emr_security_configuration:
+
+      There is no in-place fix -- an EMR security configuration is immutable.
+      Create a replacement and launch clusters against it.
   FIX
 
   tag checkov_id:            'CKV_AWS_351'
@@ -34,9 +69,29 @@ control 'CKV_AWS_351' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_emr_security_configuration]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/emr_security_configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_351 — no deployed-asset reader for aws_emr_security_configuration" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_emr_security_configurations.security_configuration_names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_emr_security_configuration', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_emr_security_configuration in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_emr_security_configuration(security_configuration_name: id) do
+      its('encryption_in_transit') { should eq true }
+    end
   end
 end

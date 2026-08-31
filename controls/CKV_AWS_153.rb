@@ -2,30 +2,66 @@
 #
 # Rule:        CKV_AWS_153 (checkov 3.3.16)
 # Applies to:  aws_autoscaling_group
-# Status:      PLANNED — no deployed-asset reader exists for aws_autoscaling_group yet.
+# Read with:   aws_auto_scaling_groups -> aws_auto_scaling_group (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+exempt = (input('exempt_assets') || {})['CKV_AWS_153'] || []
 
 control 'CKV_AWS_153' do
-  impact 0.0
   title 'Autoscaling groups should supply tags to launch configurations'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_autoscaling_group in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_autoscaling_group resources that actually exist, read through
+    the stock inspec-aws aws_auto_scaling_group resource.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Instances launched by an untagged Auto Scaling group appear in the
+    account with no owner, environment or data classification, and they
+    appear and disappear on their own schedule. Anything that keys off tags
+    -- cost attribution, backup selection, patch groups -- silently skips
+    them.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Autoscaling groups should supply tags to launch configurations
+    Checkov looks for: the group declares at least one tag
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group
+    Terraform — aws_autoscaling_group:
+
+      resource "aws_autoscaling_group" "app" {
+        name                = "app"
+        min_size            = 2
+        max_size            = 6
+        desired_capacity    = 2
+        vpc_zone_identifier = aws_subnet.private[*].id
+
+        launch_template {
+          id      = aws_launch_template.app.id
+          version = "$Latest"
+        }
+
+        tag {
+          key                 = "Owner"
+          value               = "platform"
+          propagate_at_launch = true
+        }
+
+        tag {
+          key                 = "Environment"
+          value               = "prod"
+          propagate_at_launch = true
+        }
+      }
+
+    Out of band — aws_autoscaling_group:
+
+      aws autoscaling create-or-update-tags --tags ResourceId=app,ResourceType=auto-scaling-group,Key=Owner,Value=platform,PropagateAtLaunch=true
+      Instances already running are not retagged; tag them with `aws ec2 create-tags` or let them roll.
   FIX
 
   tag checkov_id:            'CKV_AWS_153'
@@ -34,9 +70,29 @@ control 'CKV_AWS_153' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_autoscaling_group]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-8', 'AU-12']
+  tag nist_r4:               ['CM-8', 'AU-12']
+  tag cci:                   ['CCI-000366']
+  tag ksi:                   ['KSI-CMT-INV']
+  tag severity:              'low'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_153 — no deployed-asset reader for aws_autoscaling_group" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  ids = aws_auto_scaling_groups.names
+  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_autoscaling_group', rules: exempt) }
+
+  applicable = !in_scope.empty?
+  impact 0.3
+  impact 0.0 unless applicable
+  only_if('no aws_autoscaling_group in scope') { applicable }
+
+  in_scope.each do |id|
+    describe aws_auto_scaling_group(auto_scaling_group_name: id) do
+      its('tags') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

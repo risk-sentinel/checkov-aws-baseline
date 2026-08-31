@@ -60,7 +60,7 @@ control 'CKV_AWS_154' do
 
   in_scope.each do |id|
     describe aws_redshift_cluster(cluster_identifier: id) do
-      its('cluster_subnet_group_name') { should_not be_empty }
+      its('cluster_subnet_group_name') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

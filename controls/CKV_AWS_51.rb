@@ -57,10 +57,11 @@ control 'CKV_AWS_51' do
 
   assets = aws_api_assets(type: 'aws_ecr_repository', regions: scan_regions)
 
-  # A field the API did not return is nil, and nil is not a failing value: the
-  # asset does not express this setting, so it is out of scope for this check
-  # rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt).reject { |a| a[:image_tag_mutability].nil? }
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:image_tag_mutability].nil? }
 
   applicable = !in_scope.empty?
   impact 0.5
@@ -70,7 +71,7 @@ control 'CKV_AWS_51' do
   in_scope.each do |asset|
     describe "aws_ecr_repository #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:image_tag_mutability] }
-      it { should eq immutable }
+      it { should eq 'IMMUTABLE' }
     end
   end
 end
