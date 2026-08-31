@@ -21,478 +21,566 @@ readers:
   aws_launch_configuration:  {resource: aws_compute_assets, type: aws_launch_configuration}
 
 checks:
-  CKV_AWS_79:
-    aws_instance:             {field: imds_tokens_or_disabled, satisfies: equals, value: true}
-    aws_launch_template:      {field: imds_tokens_or_disabled, satisfies: equals, value: true}
-    aws_launch_configuration: {field: imds_tokens_or_disabled, satisfies: equals, value: true}
-
-  CKV_AWS_88:
-    aws_instance:        {field: public_ip, satisfies: equals, value: false}
-    aws_launch_template: {field: public_ip, satisfies: equals, value: false}
-
-  CKV_AWS_8:
-    aws_instance:
-      field: unencrypted_volumes
-      satisfies: empty
-      note: >-
-        Stronger than the IaC check. Checkov sees the block devices declared in
-        HCL; DescribeVolumes sees every volume actually attached, including ones
-        attached later by hand, outside Terraform.
-    aws_launch_configuration: {field: unencrypted_volumes, satisfies: empty}
-
-  CKV_AWS_126:
-    aws_instance: {field: detailed_monitoring, satisfies: equals, value: true}
-
-  CKV_AWS_135:
-    aws_instance: {field: ebs_optimized, satisfies: equals, value: true}
-
-  CKV_AWS_46:
-    aws_instance:             {field: user_data_secrets, satisfies: empty}
-    aws_launch_template:      {field: user_data_secrets, satisfies: empty}
-    aws_launch_configuration: {field: user_data_secrets, satisfies: empty}
-
-  # --- S3, read through stock inspec-aws resources (no custom reader) ---
-  CKV_AWS_18:
-    aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
-      assert:
-        resource: aws_s3_bucket
-        arg: bucket_name
-        property: "has_access_logging_enabled?"
-        satisfies: equals
-        value: true
-  CKV_AWS_19:
-    aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
-      assert:
-        resource: aws_s3_bucket
-        arg: bucket_name
-        property: "has_default_encryption_enabled?"
-        satisfies: equals
-        value: true
-  CKV_AWS_21:
-    aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
-      assert:
-        resource: aws_s3_bucket
-        arg: bucket_name
-        property: "has_versioning_enabled?"
-        satisfies: equals
-        value: true
-  CKV_AWS_20:
-    aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
-      assert:
-        resource: aws_s3_bucket
-        arg: bucket_name
-        property: "public?"
-        satisfies: equals
-        value: false
-  CKV_AWS_379:
-    aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
-      assert:
-        resource: aws_s3_bucket
-        arg: bucket_name
-        property: "has_secure_transport_enabled?"
-        satisfies: equals
-        value: true
   CKV2_AWS_6:
     aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
       assert:
-        resource: aws_s3_bucket
         arg: bucket_name
-        property: "prevent_public_access?"
+        property: prevent_public_access?
+        resource: aws_s3_bucket
         satisfies: equals
         value: true
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
   CKV2_AWS_61:
     aws_s3_bucket:
-      reader: stock
-      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
       assert:
-        resource: aws_s3_bucket
         arg: bucket_name
-        property: "bucket_lifecycle_rules"
+        property: bucket_lifecycle_rules
+        resource: aws_s3_bucket
         satisfies: not_empty
-
-  # --- RDS instances, read through stock inspec-aws (create_resource_methods
-  #     exposes every DescribeDBInstances field as a method) ---
-  CKV_AWS_16:
-    aws_db_instance:
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
       reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "storage_encrypted"
-        satisfies: equals
-        value: true
-  CKV_AWS_17:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "publicly_accessible"
-        satisfies: equals
-        value: false
-  CKV_AWS_157:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "multi_az"
-        satisfies: equals
-        value: true
-  CKV_AWS_161:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "iam_database_authentication_enabled"
-        satisfies: equals
-        value: true
-  CKV_AWS_226:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "auto_minor_version_upgrade"
-        satisfies: equals
-        value: true
-  CKV_AWS_293:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "deletion_protection"
-        satisfies: equals
-        value: true
-  CKV_AWS_353:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "performance_insights_enabled"
-        satisfies: equals
-        value: true
-  CKV_AWS_354:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "performance_insights_kms_key_id"
-        satisfies: not_empty
-  CKV_AWS_129:
-    aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "enabled_cloudwatch_logs_exports"
-        satisfies: not_empty
   CKV_AWS_118:
     aws_db_instance:
-      reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
       assert:
+        arg: db_instance_identifier
+        property: monitoring_interval
         resource: aws_rds_instance
-        arg: positional
-        property: "monitoring_interval"
         satisfies: greater_than
         value: 0
-  CKV_AWS_211:
-    aws_db_instance:
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
       reader: stock
-      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
-      assert:
-        resource: aws_rds_instance
-        arg: positional
-        property: "ca_certificate_identifier"
-        satisfies: in_list
-        value: ['rds-ca-rsa2048-g1', 'rds-ca-rsa4096-g1', 'rds-ca-ecc384-g1']
-
-  # --- Aurora/RDS clusters, Redshift, ElastiCache (stock inspec-aws) ---
-  CKV_AWS_96:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "storage_encrypted"
-        satisfies: equals
-        value: true
-  CKV_AWS_139:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "deletion_protection"
-        satisfies: equals
-        value: true
-  CKV_AWS_162:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "iam_database_authentication_enabled"
-        satisfies: equals
-        value: true
-  CKV_AWS_313:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "copy_tags_to_snapshot"
-        satisfies: equals
-        value: true
-  CKV_AWS_324:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "enabled_cloudwatch_logs_exports"
-        satisfies: not_empty
-  CKV_AWS_327:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "kms_key_id"
-        satisfies: not_empty
-  CKV_AWS_326:
-    aws_rds_cluster:
-      reader: stock
-      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
-      assert:
-        resource: aws_rds_cluster
-        arg: db_cluster_identifier
-        property: "backtrack_window"
-        satisfies: greater_than
-        value: 0
-  CKV_AWS_64:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "encrypted"
-        satisfies: equals
-        value: true
-  CKV_AWS_87:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "publicly_accessible"
-        satisfies: equals
-        value: false
-  CKV_AWS_141:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "allow_version_upgrade"
-        satisfies: equals
-        value: true
-  CKV_AWS_321:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "enhanced_vpc_routing"
-        satisfies: equals
-        value: true
-  CKV_AWS_343:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "automated_snapshot_retention_period"
-        satisfies: greater_than
-        value: 0
-  CKV_AWS_320:
-    aws_redshift_cluster:
-      reader: stock
-      enumerate: {resource: aws_redshift_clusters, ids: cluster_identifiers}
-      assert:
-        resource: aws_redshift_cluster
-        arg: cluster_identifier
-        property: "db_name"
-        satisfies: not_empty
-  CKV_AWS_29:
-    aws_elasticache_replication_group:
-      reader: stock
-      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
-      assert:
-        resource: aws_elasticache_replication_group
-        arg: replication_group_id
-        property: "at_rest_encryption_enabled"
-        satisfies: equals
-        value: true
-  CKV_AWS_30:
-    aws_elasticache_replication_group:
-      reader: stock
-      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
-      assert:
-        resource: aws_elasticache_replication_group
-        arg: replication_group_id
-        property: "transit_encryption_enabled"
-        satisfies: equals
-        value: true
-  CKV_AWS_191:
-    aws_elasticache_replication_group:
-      reader: stock
-      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
-      assert:
-        resource: aws_elasticache_replication_group
-        arg: replication_group_id
-        property: "kms_key_id"
-        satisfies: not_empty
-  CKV_AWS_134:
-    aws_elasticache_replication_group:
-      reader: stock
-      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
-      assert:
-        resource: aws_elasticache_replication_group
-        arg: replication_group_id
-        property: "snapshot_retention_limit"
-        satisfies: greater_than
-        value: 0
-
-  # --- types inspec-aws does not ship, read via tools/api_specs.yml ---
-  CKV_AWS_50:
-    aws_lambda_function:
-      reader: api
-      field: tracing_mode
-      satisfies: in_list
-      value: ['Active', 'PassThrough']
-  CKV_AWS_272:
-    aws_lambda_function:
-      reader: api
-      field: code_signing_config_arn
-      satisfies: not_empty
-  CKV_AWS_173:
-    aws_lambda_function:
-      reader: api
-      field: kms_key_arn
-      satisfies: not_empty
-  CKV_AWS_158:
-    aws_cloudwatch_log_group:
-      reader: api
-      field: kms_key_id
-      satisfies: not_empty
-  CKV_AWS_66:
-    aws_cloudwatch_log_group:
-      reader: api
-      field: retention_in_days
-      satisfies: not_empty
-  CKV_AWS_163:
-    aws_ecr_repository:
-      reader: api
-      field: scan_on_push
+  CKV_AWS_126:
+    aws_instance:
+      field: detailed_monitoring
       satisfies: equals
       value: true
-  CKV_AWS_51:
-    aws_ecr_repository:
-      reader: api
-      field: image_tag_mutability
+  CKV_AWS_129:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: enabled_cloudwatch_logs_exports
+        resource: aws_rds_instance
+        satisfies: not_empty
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_134:
+    aws_elasticache_replication_group:
+      assert:
+        arg: replication_group_id
+        property: snapshot_retention_limit
+        resource: aws_elasticache_replication_group
+        satisfies: greater_than
+        value: 0
+      enumerate:
+        ids: ids
+        resource: aws_elasticache_replication_groups
+      reader: stock
+  CKV_AWS_135:
+    aws_instance:
+      field: ebs_optimized
       satisfies: equals
-      value: IMMUTABLE
+      value: true
   CKV_AWS_136:
     aws_ecr_repository:
-      reader: api
       field: encryption_type
+      reader: api
       satisfies: equals
       value: KMS
+  CKV_AWS_139:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: deletion_protection
+        resource: aws_rds_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_141:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: allow_version_upgrade
+        resource: aws_redshift_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_149:
+    aws_secretsmanager_secret:
+      field: kms_key_id
+      reader: api
+      satisfies: not_empty
   CKV_AWS_155:
     aws_workspaces_workspace:
-      reader: api
       field: user_volume_encryption_enabled
+      reader: api
       satisfies: equals
       value: true
   CKV_AWS_156:
     aws_workspaces_workspace:
-      reader: api
       field: root_volume_encryption_enabled
+      reader: api
       satisfies: equals
       value: true
-  CKV_AWS_89:
-    aws_dms_replication_instance:
+  CKV_AWS_157:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: multi_az
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_158:
+    aws_cloudwatch_log_group:
+      field: kms_key_id
       reader: api
-      field: publicly_accessible
-      satisfies: equals
-      value: false
-  CKV_AWS_222:
-    aws_dms_replication_instance:
+      satisfies: not_empty
+  CKV_AWS_16:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: storage_encrypted
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_161:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: iam_database_authentication_enabled
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_162:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: iam_database_authentication_enabled
+        resource: aws_rds_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_163:
+    aws_ecr_repository:
+      field: scan_on_push
       reader: api
-      field: auto_minor_version_upgrade
       satisfies: equals
       value: true
-  CKV_AWS_202:
-    aws_memorydb_cluster:
-      reader: api
-      field: tls_enabled
-      satisfies: equals
-      value: true
-  CKV_AWS_201:
-    aws_memorydb_cluster:
-      reader: api
-      field: kms_key_id
-      satisfies: not_empty
-  CKV_AWS_2:
-    aws_secretsmanager_secret:
-      reader: api
-      field: kms_key_id
-      satisfies: not_empty
-  CKV_AWS_149:
-    aws_secretsmanager_secret:
-      reader: api
-      field: kms_key_id
-      satisfies: not_empty
   CKV_AWS_166:
     aws_backup_vault:
-      reader: api
       field: encryption_key_arn
+      reader: api
       satisfies: not_empty
+  CKV_AWS_17:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: publicly_accessible
+        resource: aws_rds_instance
+        satisfies: equals
+        value: false
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_173:
+    aws_lambda_function:
+      field: kms_key_arn
+      reader: api
+      satisfies: not_empty
+  CKV_AWS_18:
+    aws_s3_bucket:
+      assert:
+        arg: bucket_name
+        property: has_access_logging_enabled?
+        resource: aws_s3_bucket
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
+  CKV_AWS_19:
+    aws_s3_bucket:
+      assert:
+        arg: bucket_name
+        property: has_default_encryption_enabled?
+        resource: aws_s3_bucket
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
+  CKV_AWS_191:
+    aws_elasticache_replication_group:
+      assert:
+        arg: replication_group_id
+        property: kms_key_id
+        resource: aws_elasticache_replication_group
+        satisfies: not_empty
+      enumerate:
+        ids: ids
+        resource: aws_elasticache_replication_groups
+      reader: stock
+  CKV_AWS_2:
+    aws_secretsmanager_secret:
+      field: kms_key_id
+      reader: api
+      satisfies: not_empty
+  CKV_AWS_20:
+    aws_s3_bucket:
+      assert:
+        arg: bucket_name
+        property: public?
+        resource: aws_s3_bucket
+        satisfies: equals
+        value: false
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
+  CKV_AWS_201:
+    aws_memorydb_cluster:
+      field: kms_key_id
+      reader: api
+      satisfies: not_empty
+  CKV_AWS_202:
+    aws_memorydb_cluster:
+      field: tls_enabled
+      reader: api
+      satisfies: equals
+      value: true
+  CKV_AWS_21:
+    aws_s3_bucket:
+      assert:
+        arg: bucket_name
+        property: has_versioning_enabled?
+        resource: aws_s3_bucket
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
+  CKV_AWS_211:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: ca_certificate_identifier
+        resource: aws_rds_instance
+        satisfies: in_list
+        value:
+        - rds-ca-rsa2048-g1
+        - rds-ca-rsa4096-g1
+        - rds-ca-ecc384-g1
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_222:
+    aws_dms_replication_instance:
+      field: auto_minor_version_upgrade
+      reader: api
+      satisfies: equals
+      value: true
+  CKV_AWS_226:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: auto_minor_version_upgrade
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_272:
+    aws_lambda_function:
+      field: code_signing_config_arn
+      reader: api
+      satisfies: not_empty
+  CKV_AWS_29:
+    aws_elasticache_replication_group:
+      assert:
+        arg: replication_group_id
+        property: at_rest_encryption_enabled
+        resource: aws_elasticache_replication_group
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: ids
+        resource: aws_elasticache_replication_groups
+      reader: stock
+  CKV_AWS_293:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: deletion_protection
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_30:
+    aws_elasticache_replication_group:
+      assert:
+        arg: replication_group_id
+        property: transit_encryption_enabled
+        resource: aws_elasticache_replication_group
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: ids
+        resource: aws_elasticache_replication_groups
+      reader: stock
+  CKV_AWS_313:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: copy_tags_to_snapshot
+        resource: aws_rds_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_320:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: db_name
+        resource: aws_redshift_cluster
+        satisfies: not_empty
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_321:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: enhanced_vpc_routing
+        resource: aws_redshift_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_324:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: enabled_cloudwatch_logs_exports
+        resource: aws_rds_cluster
+        satisfies: not_empty
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_326:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: backtrack_window
+        resource: aws_rds_cluster
+        satisfies: greater_than
+        value: 0
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_327:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: kms_key_id
+        resource: aws_rds_cluster
+        satisfies: not_empty
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock
+  CKV_AWS_343:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: automated_snapshot_retention_period
+        resource: aws_redshift_cluster
+        satisfies: greater_than
+        value: 0
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_353:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: performance_insights_enabled
+        resource: aws_rds_instance
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_354:
+    aws_db_instance:
+      assert:
+        arg: db_instance_identifier
+        property: performance_insights_kms_key_id
+        resource: aws_rds_instance
+        satisfies: not_empty
+      enumerate:
+        ids: db_instance_identifiers
+        resource: aws_rds_instances
+      reader: stock
+  CKV_AWS_379:
+    aws_s3_bucket:
+      assert:
+        arg: bucket_name
+        property: has_secure_transport_enabled?
+        resource: aws_s3_bucket
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: bucket_names
+        resource: aws_s3_buckets
+      reader: stock
+  CKV_AWS_46:
+    aws_instance:
+      field: user_data_secrets
+      satisfies: empty
+    aws_launch_configuration:
+      field: user_data_secrets
+      satisfies: empty
+    aws_launch_template:
+      field: user_data_secrets
+      satisfies: empty
+  CKV_AWS_50:
+    aws_lambda_function:
+      field: tracing_mode
+      reader: api
+      satisfies: in_list
+      value:
+      - Active
+      - PassThrough
+  CKV_AWS_51:
+    aws_ecr_repository:
+      field: image_tag_mutability
+      reader: api
+      satisfies: equals
+      value: IMMUTABLE
+  CKV_AWS_64:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: encrypted
+        resource: aws_redshift_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_66:
+    aws_cloudwatch_log_group:
+      field: retention_in_days
+      reader: api
+      satisfies: not_empty
+  CKV_AWS_79:
+    aws_instance:
+      field: imds_tokens_or_disabled
+      satisfies: equals
+      value: true
+    aws_launch_configuration:
+      field: imds_tokens_or_disabled
+      satisfies: equals
+      value: true
+    aws_launch_template:
+      field: imds_tokens_or_disabled
+      satisfies: equals
+      value: true
+  CKV_AWS_8:
+    aws_instance:
+      field: unencrypted_volumes
+      note: Stronger than the IaC check. Checkov sees the block devices declared in HCL; DescribeVolumes
+        sees every volume actually attached, including ones attached later by hand, outside Terraform.
+      satisfies: empty
+    aws_launch_configuration:
+      field: unencrypted_volumes
+      satisfies: empty
+  CKV_AWS_87:
+    aws_redshift_cluster:
+      assert:
+        arg: cluster_identifier
+        property: publicly_accessible
+        resource: aws_redshift_cluster
+        satisfies: equals
+        value: false
+      enumerate:
+        ids: cluster_identifiers
+        resource: aws_redshift_clusters
+      reader: stock
+  CKV_AWS_88:
+    aws_instance:
+      field: public_ip
+      satisfies: equals
+      value: false
+    aws_launch_template:
+      field: public_ip
+      satisfies: equals
+      value: false
+  CKV_AWS_89:
+    aws_dms_replication_instance:
+      field: publicly_accessible
+      reader: api
+      satisfies: equals
+      value: false
+  CKV_AWS_96:
+    aws_rds_cluster:
+      assert:
+        arg: db_cluster_identifier
+        property: storage_encrypted
+        resource: aws_rds_cluster
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: cluster_identifier
+        resource: aws_rds_clusters
+      reader: stock

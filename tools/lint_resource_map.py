@@ -135,6 +135,15 @@ def main() -> int:
                     problems.append(
                         f"{cid}/{tf_type}: {plural} has no column '{column}'. It registers: {have}")
 
+            # `resource(id, aws_region: region)` is two arguments and InSpec's
+            # *args dispatch accepts one — "wrong number of arguments (given 2,
+            # expected 0..1)" at exec, on 13 controls at once. A regional stock
+            # mapping must name the parameter it passes.
+            if spec.get("scope") != "global" and assertion.get("arg") in (None, "", "positional"):
+                problems.append(
+                    f"{cid}/{tf_type}: regional stock mapping passes a positional argument; "
+                    f"it must name {singular}'s parameter so the region can travel with it")
+
             if singular not in resources:
                 problems.append(f"{cid}/{tf_type}: no resource named '{singular}' in the pack")
             elif (req := resources[singular]["required"]) and assertion.get("arg") not in req + ["positional"]:

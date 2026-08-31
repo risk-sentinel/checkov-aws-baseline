@@ -7,7 +7,8 @@
 # The rule id is the identity: file name, control id and `tag checkov_id` all
 # carry it, and tools/lint_catalog_drift.py asserts the three agree.
 
-exempt = (input('exempt_assets') || {})['CKV_AWS_131'] || []
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_131'] || []
 
 control 'CKV_AWS_131' do
   title 'Ensure that ALB drops HTTP headers'
@@ -50,16 +51,39 @@ control 'CKV_AWS_131' do
   # Enumerated at control scope, then each asset asserted on its own. The
   # resource is an ARGUMENT to `describe`, which evaluates on the control --
   # calling it inside the block would defer it into the example.
-  ids = aws_albs.canonical_hosted_zone_ids
-  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_alb', rules: exempt) }
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    aws_albs(aws_region: region).canonical_hosted_zone_ids.to_a.map { |id| [id, region] }
+  end
+
+  # A plural resource whose table is built from the API response returns nil for
+  # a column that does not exist, rather than raising. Passing that on gives
+  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
+  # and asserted on below, so a wrong `ids` column is a visible failure rather
+  # than a crash or a silent Not Applicable.
+  unusable = found.count { |id, _r| "#{id}".strip.empty? }
+  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_alb', rules: exempt) }
+
+  if unusable.positive?
+    describe "aws_alb enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      end
+    end
+  end
 
   applicable = !in_scope.empty?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_alb in scope') { applicable }
 
-  in_scope.each do |id|
-    describe aws_alb(load_balancer_arn: id) do
+  in_scope.each do |id, region|
+    describe aws_alb(load_balancer_arn: id, aws_region: region) do
       its('drop_invalid_header_fields') { should eq true }
     end
   end

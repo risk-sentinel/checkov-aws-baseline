@@ -1,9 +1,15 @@
 # Generated: tools/derive_mappings.py plus agent-drafted entries.
-# DERIVED, NOT REVIEWED — see control_metadata_derived.yml for the anchors.
+# DERIVED, NOT REVIEWED.
 #
-# Removed after a live exec proved them broken (a static lint cannot see either):
-#   CKV_AWS_238: aws_guardduty_detectors yields non-String ids; the singular rejects them (expected params[:detector_id] to be a String). Confirmed at exec.
-#   CKV_AWS_159: the nested probe chain configuration.result_configuration.encryption_configuration raises rather than returning nil when a level is absent. Confirmed at exec.
+# Removed after a live exec proved them broken — a static lint sees none of these:
+#   CKV_AWS_238: aws_guardduty_detectors yields non-String ids.
+#   CKV_AWS_159: a nested probe chain raises instead of returning nil.
+#   CKV_AWS_189: enumerated aws_ebs_volumes.kms_key_ids as if they were volume ids.
+#   CKV_AWS_37: aws_eks_clusters.names yields nil rows in an account with no EKS clusters, and the singular then rejects a nil cluster_name
+#   CKV_AWS_39: same as CKV_AWS_37
+#   CKV_AWS_58: same as CKV_AWS_37
+#   CKV_AWS_339: same as CKV_AWS_37
+#   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
 checks:
   CKV_AWS_102:
     aws_neptune_cluster_instance:
@@ -121,7 +127,7 @@ checks:
   CKV_AWS_133:
     aws_db_instance:
       assert:
-        arg: positional
+        arg: db_instance_identifier
         property: backup_retention_period
         resource: aws_rds_instance
         satisfies: greater_than
@@ -320,17 +326,6 @@ checks:
         ids: names
         resource: aws_efs_file_systems
       reader: stock
-  CKV_AWS_189:
-    aws_ebs_volume:
-      assert:
-        arg: volume_id
-        property: kms_key_id
-        resource: aws_ebs_volume
-        satisfies: not_empty
-      enumerate:
-        ids: kms_key_ids
-        resource: aws_ebs_volumes
-      reader: stock
   CKV_AWS_195:
     aws_glue_crawler:
       assert:
@@ -353,27 +348,6 @@ checks:
       enumerate:
         ids: broker_ids
         resource: aws_mq_brokers
-      reader: stock
-  CKV_AWS_206:
-    aws_api_gateway_domain_name:
-      assert:
-        arg: domain_name
-        property: security_policy
-        resource: aws_api_gateway_domain_name
-        satisfies: in_list
-        value:
-        - TLS_1_2
-        - SecurityPolicy_TLS12_2018_EDGE
-        - SecurityPolicy_TLS12_PFS_2025_EDGE
-        - SecurityPolicy_TLS13_1_2_2021_06
-        - SecurityPolicy_TLS13_1_2_PFS_PQ_2025_09
-        - SecurityPolicy_TLS13_1_2_PQ_2025_09
-        - SecurityPolicy_TLS13_1_3_2025_09
-        - SecurityPolicy_TLS13_1_3_FIPS_2025_09
-        - SecurityPolicy_TLS13_2025_EDGE
-      enumerate:
-        ids: api_gateway_domain_name_identifiers
-        resource: aws_api_gateway_domain_names
       reader: stock
   CKV_AWS_207:
     aws_mq_broker:
@@ -502,7 +476,7 @@ checks:
   CKV_AWS_266:
     aws_db_snapshot_copy:
       assert:
-        arg: positional
+        arg: db_snapshot_identifier
         property: kms_key_id
         resource: aws_rds_snapshot
         satisfies: not_empty
@@ -685,25 +659,6 @@ checks:
       reader: api
       satisfies: greater_than
       value: 364
-  CKV_AWS_339:
-    aws_eks_cluster:
-      assert:
-        arg: cluster_name
-        property: version
-        resource: aws_eks_cluster
-        satisfies: in_list
-        value:
-        - '1.29'
-        - '1.30'
-        - '1.31'
-        - '1.32'
-        - '1.33'
-        - '1.34'
-        - '1.35'
-      enumerate:
-        ids: eks_cluster_identifiers
-        resource: aws_eks_clusters
-      reader: stock
   CKV_AWS_34:
     aws_cloudfront_distribution:
       assert:
@@ -876,22 +831,6 @@ checks:
         ids: identity_pool_ids
         resource: aws_cognito_identity_pools
       reader: stock
-  CKV_AWS_37:
-    aws_eks_cluster:
-      assert:
-        arg: cluster_name
-        property: disabled_logging_types
-        resource: aws_eks_cluster
-        satisfies: empty
-      enumerate:
-        ids: names
-        resource: aws_eks_clusters
-      note: Asserted as the COMPLEMENT. Checkov requires all five of api, audit, authenticator, controllerManager
-        and scheduler to appear in enabled_cluster_log_types; the schema has no "contains all of" satisfies.
-        DescribeCluster returns logging.clusterLogging with every type marked enabled or disabled, and
-        aws_eks_cluster pre-computes both sides as attr_readers. "nothing is disabled" is exactly "all
-        five are enabled", with no list to keep in sync.
-      reader: stock
   CKV_AWS_377:
     aws_route53domains_registered_domain:
       field: transfer_lock
@@ -920,18 +859,6 @@ checks:
       enumerate:
         ids: names
         resource: aws_launch_configurations
-      reader: stock
-  CKV_AWS_39:
-    aws_eks_cluster:
-      assert:
-        arg: cluster_name
-        property: vpc_config
-        resource: aws_eks_cluster
-        satisfies: equals
-        value: false
-      enumerate:
-        ids: eks_cluster_identifiers
-        resource: aws_eks_clusters
       reader: stock
   CKV_AWS_42:
     aws_efs_file_system:
@@ -988,23 +915,6 @@ checks:
         output shape.
       reader: stock
     aws_opensearch_domain: *id004
-  CKV_AWS_58:
-    aws_eks_cluster:
-      assert:
-        arg: cluster_name
-        property: encryption_config
-        resource: aws_eks_cluster
-        satisfies: not_empty
-      enumerate:
-        ids: names
-        resource: aws_eks_clusters
-      note: "Checkov's expected value is the stringified list \"['secrets']\", which cannot become a Ruby\
-        \ literal. Asserted instead on the presence of encryptionConfig, which is faithful because \"\
-        secrets\" is the only resource EKS envelope encryption supports \u2014 a non-empty encryptionConfig\
-        \ IS secrets encryption. It is a list of structures, so AwsResourceDynamicMethods returns an Array\
-        \ of probes and `empty?` is Array#empty?; absent entirely it is NullResponse, whose empty? is\
-        \ true."
-      reader: stock
   CKV_AWS_6:
     aws_elasticsearch_domain: &id005
       assert:

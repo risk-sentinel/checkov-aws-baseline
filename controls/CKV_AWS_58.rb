@@ -2,62 +2,30 @@
 #
 # Rule:        CKV_AWS_58 (checkov 3.3.16)
 # Applies to:  aws_eks_cluster
-# Read with:   aws_eks_clusters -> aws_eks_cluster (stock inspec-aws, no custom reader)
+# Status:      PLANNED — no deployed-asset reader exists for aws_eks_cluster yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-exempt = (input('exempt_assets') || {})['CKV_AWS_58'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_58' do
+  impact 0.0
   title 'Ensure EKS Cluster has Secrets Encryption Enabled'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_eks_cluster resources that actually exist, read through the
-    stock inspec-aws aws_eks_cluster resource.
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_eks_cluster in this profile, so there is nothing to assert against.
+
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
   DESC
 
-  desc 'rationale', <<~RATIONALE
-    Without envelope encryption a Kubernetes Secret is stored in etcd as
-    base64, which is an encoding and not a protection. Anyone who can read
-    the cluster's backing store, or restore it from a backup, reads every
-    credential in it.
-  RATIONALE
-
   desc 'check', <<~CHECK
-    Checkov looks for: aws_eks_cluster: encryption_config/[0]/resources is
-    ['secrets']
+    Checkov looks for: aws_eks_cluster: encryption_config/[0]/resources is ['secrets']
   CHECK
 
   desc 'fix', <<~'FIX'
-    Terraform — aws_eks_cluster:
-
-      resource "aws_eks_cluster" "main" {
-        name     = "main"
-        role_arn = aws_iam_role.cluster.arn
-        version  = "1.31"
-
-        encryption_config {
-          resources = ["secrets"]
-
-          provider {
-            key_arn = aws_kms_key.eks.arn
-          }
-        }
-
-        vpc_config {
-          subnet_ids = var.private_subnet_ids
-        }
-      }
-
-    Out of band — aws_eks_cluster:
-
-      aws eks associate-encryption-config --cluster-name <cluster> --encryption-config '[{"resources":["secrets"],"provider":{"keyArn":"<key-arn>"}}]'
-
-    Note (aws_eks_cluster): Association is one-way and cannot be undone or
-    repointed at another key, and existing Secrets are only re-encrypted when
-    they are next written — run a rewrite of every Secret after associating.
+    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster#encryption-config
   FIX
 
   tag checkov_id:            'CKV_AWS_58'
@@ -66,29 +34,9 @@ control 'CKV_AWS_58' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_eks_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster#encryption-config'
-  tag nist:                  ['SC-28', 'SC-28 (1)']
-  tag nist_r4:               ['SC-28', 'SC-28 (1)']
-  tag cci:                   ['CCI-001199', 'CCI-002475']
-  tag ksi:                   ['KSI-SVC-CER']
-  tag severity:              'high'
-  tag severity_source:       'assessed'
-  tag nist_source:           'agent-drafted'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  # Enumerated at control scope, then each asset asserted on its own. The
-  # resource is an ARGUMENT to `describe`, which evaluates on the control --
-  # calling it inside the block would defer it into the example.
-  ids = aws_eks_clusters.names
-  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_eks_cluster', rules: exempt) }
-
-  applicable = !in_scope.empty?
-  impact 0.7
-  impact 0.0 unless applicable
-  only_if('no aws_eks_cluster in scope') { applicable }
-
-  in_scope.each do |id|
-    describe aws_eks_cluster(cluster_name: id) do
-      its('encryption_config') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
-    end
+  describe "CKV_AWS_58 — no deployed-asset reader for aws_eks_cluster" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end

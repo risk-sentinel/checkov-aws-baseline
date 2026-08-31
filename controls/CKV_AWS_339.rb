@@ -2,31 +2,26 @@
 #
 # Rule:        CKV_AWS_339 (checkov 3.3.16)
 # Applies to:  aws_eks_cluster
-# Read with:   aws_eks_clusters -> aws_eks_cluster (stock inspec-aws, no custom reader)
+# Status:      PLANNED — no deployed-asset reader exists for aws_eks_cluster yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-exempt = (input('exempt_assets') || {})['CKV_AWS_339'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_339' do
+  impact 0.0
   title 'Ensure EKS clusters run on a supported Kubernetes version'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_eks_cluster resources that actually exist, read through the
-    stock inspec-aws aws_eks_cluster resource.
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_eks_cluster in this profile, so there is nothing to assert against.
+
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
   DESC
 
-  desc 'rationale', <<~RATIONALE
-    Ensure EKS clusters run on a supported Kubernetes version. Anchors
-    derived from the check's kubernetes category, not reviewed control by
-    control.
-  RATIONALE
-
   desc 'check', <<~CHECK
-    Checkov looks for: aws_eks_cluster: version is 1.29 or 1.30 or 1.31 or
-    1.32 or 1.33 or 1.34 or 1.35
+    Checkov looks for: aws_eks_cluster: version is 1.29 or 1.30 or 1.31 or 1.32 or 1.33 or 1.34 or 1.35
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -39,29 +34,9 @@ control 'CKV_AWS_339' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_eks_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster#version'
-  tag nist:                  ['CM-6', 'SC-7']
-  tag nist_r4:               ['CM-6', 'SC-7']
-  tag cci:                   ['CCI-000366']
-  tag ksi:                   ['KSI-CMT-CFG']
-  tag severity:              'medium'
-  tag severity_source:       'assessed'
-  tag nist_source:           'category-derived'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  # Enumerated at control scope, then each asset asserted on its own. The
-  # resource is an ARGUMENT to `describe`, which evaluates on the control --
-  # calling it inside the block would defer it into the example.
-  ids = aws_eks_clusters.eks_cluster_identifiers
-  in_scope = ids.reject { |id| checkov_exempt?(id: id, type: 'aws_eks_cluster', rules: exempt) }
-
-  applicable = !in_scope.empty?
-  impact 0.5
-  impact 0.0 unless applicable
-  only_if('no aws_eks_cluster in scope') { applicable }
-
-  in_scope.each do |id|
-    describe aws_eks_cluster(cluster_name: id) do
-      its('version') { should be_in ['1.29', '1.30', '1.31', '1.32', '1.33', '1.34', '1.35'] }
-    end
+  describe "CKV_AWS_339 — no deployed-asset reader for aws_eks_cluster" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end
