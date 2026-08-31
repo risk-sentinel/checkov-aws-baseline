@@ -2,30 +2,43 @@
 #
 # Rule:        CKV_AWS_166 (checkov 3.3.16)
 # Applies to:  aws_backup_vault
-# Status:      PLANNED — no deployed-asset reader exists for aws_backup_vault yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_166'] || []
 
 control 'CKV_AWS_166' do
-  impact 0.0
   title 'Ensure Backup Vault is encrypted at rest using KMS CMK'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_backup_vault in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_backup_vault resources that actually exist, enumerated through
+    the declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A backup vault holds the copy that survives the incident; encrypting it
+    with a customer-managed key keeps that copy under the same key control
+    as the source.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_backup_vault: kms_key_arn is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/backup_vault#kms-key-arn
+    Terraform — aws_backup_vault:
+
+      resource "aws_backup_vault" "example" {
+        kms_key_arn = aws_kms_key.backup.arn
+      }
+
+    Out of band — aws_backup_vault:
+
+      Set at creation; the vault key cannot be changed afterwards.
   FIX
 
   tag checkov_id:            'CKV_AWS_166'
@@ -34,9 +47,31 @@ control 'CKV_AWS_166' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_backup_vault]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/backup_vault#kms-key-arn'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_166 — no deployed-asset reader for aws_backup_vault" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_backup_vault', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value: the
+  # asset does not express this setting, so it is out of scope for this check
+  # rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt).reject { |a| a[:encryption_key_arn].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_backup_vault in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_backup_vault #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:encryption_key_arn] }
+      it { should_not be_empty }
+    end
   end
 end

@@ -16,6 +16,15 @@ API_SPECS = {
       'in_use' => 'in_use'
     }
   },
+  'aws_apprunner_service' => {
+    'gem' => 'aws-sdk-apprunner',
+    'client' => 'Aws::AppRunner::Client',
+    'list' => 'list_services',
+    'collection' => 'service_summary_list',
+    'id' => 'service_name',
+    'arn' => 'service_arn',
+    'fields' => {}
+  },
   'aws_athena_workgroup' => {
     'gem' => 'aws-sdk-athena',
     'client' => 'Aws::Athena::Client',
@@ -24,6 +33,17 @@ API_SPECS = {
     'id' => 'name',
     'fields' => {
       'state' => 'state'
+    }
+  },
+  'aws_backup_vault' => {
+    'gem' => 'aws-sdk-backup',
+    'client' => 'Aws::Backup::Client',
+    'list' => 'list_backup_vaults',
+    'collection' => 'backup_vault_list',
+    'id' => 'backup_vault_name',
+    'arn' => 'backup_vault_arn',
+    'fields' => {
+      'encryption_key_arn' => 'encryption_key_arn'
     }
   },
   'aws_cloudwatch_log_group' => {
@@ -77,6 +97,43 @@ API_SPECS = {
       'kms_key_id' => 'kms_key_id'
     }
   },
+  'aws_elasticsearch_domain' => {
+    'gem' => 'aws-sdk-elasticsearchservice',
+    'client' => 'Aws::ElasticsearchService::Client',
+    'list' => 'list_domain_names',
+    'collection' => 'domain_names',
+    'id' => 'domain_name',
+    'fields' => {}
+  },
+  'aws_emr_cluster' => {
+    'gem' => 'aws-sdk-emr',
+    'client' => 'Aws::EMR::Client',
+    'list' => 'list_clusters',
+    'collection' => 'clusters',
+    'id' => 'id',
+    'arn' => 'cluster_arn',
+    'fields' => {
+      'status' => 'status.state'
+    }
+  },
+  'aws_glue_crawler' => {
+    'gem' => 'aws-sdk-glue',
+    'client' => 'Aws::Glue::Client',
+    'list' => 'get_crawlers',
+    'collection' => 'crawlers',
+    'id' => 'name',
+    'fields' => {
+      'security_configuration' => 'crawler_security_configuration'
+    }
+  },
+  'aws_guardduty_detector' => {
+    'gem' => 'aws-sdk-guardduty',
+    'client' => 'Aws::GuardDuty::Client',
+    'list' => 'list_detectors',
+    'collection' => 'detector_ids',
+    'id' => 'detector_ids',
+    'fields' => {}
+  },
   'aws_kinesis_stream' => {
     'gem' => 'aws-sdk-kinesis',
     'client' => 'Aws::Kinesis::Client',
@@ -125,6 +182,18 @@ API_SPECS = {
     'arn' => 'firewall_arn',
     'fields' => {}
   },
+  'aws_secretsmanager_secret' => {
+    'gem' => 'aws-sdk-secretsmanager',
+    'client' => 'Aws::SecretsManager::Client',
+    'list' => 'list_secrets',
+    'collection' => 'secret_list',
+    'id' => 'name',
+    'arn' => 'arn',
+    'fields' => {
+      'kms_key_id' => 'kms_key_id',
+      'rotation_enabled' => 'rotation_enabled'
+    }
+  },
   'aws_sfn_state_machine' => {
     'gem' => 'aws-sdk-states',
     'client' => 'Aws::States::Client',
@@ -134,6 +203,35 @@ API_SPECS = {
     'arn' => 'state_machine_arn',
     'fields' => {
       'type' => 'type'
+    }
+  },
+  'aws_sns_topic' => {
+    'gem' => 'aws-sdk-sns',
+    'client' => 'Aws::SNS::Client',
+    'list' => 'list_topics',
+    'collection' => 'topics',
+    'id' => 'topic_arn',
+    'arn' => 'topic_arn',
+    'fields' => {}
+  },
+  'aws_sqs_queue' => {
+    'gem' => 'aws-sdk-sqs',
+    'client' => 'Aws::SQS::Client',
+    'list' => 'list_queues',
+    'collection' => 'queue_urls',
+    'id' => 'queue_urls',
+    'fields' => {}
+  },
+  'aws_transfer_server' => {
+    'gem' => 'aws-sdk-transfer',
+    'client' => 'Aws::Transfer::Client',
+    'list' => 'list_servers',
+    'collection' => 'servers',
+    'id' => 'server_id',
+    'arn' => 'arn',
+    'fields' => {
+      'endpoint_type' => 'endpoint_type',
+      'identity_provider_type' => 'identity_provider_type'
     }
   },
   'aws_workspaces_workspace' => {

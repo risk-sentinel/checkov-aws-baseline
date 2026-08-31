@@ -582,3 +582,33 @@ CKV_AWS_201:
   ksi: ['KSI-SVC-CER']
   rationale: >-
     The default service key cannot be rotated, scoped or revoked by the account that owns the data.
+
+CKV_AWS_2:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the secret.
+
+CKV_AWS_149:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    A secret encrypted with the service default key is protected by a key the account cannot audit use of.
+
+CKV_AWS_166:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    A backup vault holds the copy that survives the incident; encrypting it with a customer-managed key keeps that copy under the same key control as the source.

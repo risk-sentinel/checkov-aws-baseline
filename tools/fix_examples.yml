@@ -718,3 +718,30 @@ CKV_AWS_201:
       }
     cli: |
       Set at creation; the key cannot be changed on an existing cluster.
+
+CKV_AWS_2:
+  aws_secretsmanager_secret:
+    terraform: |
+      resource "aws_secretsmanager_secret" "example" {
+        kms_key_id = aws_kms_key.secrets.arn
+      }
+    cli: |
+      aws secretsmanager update-secret --secret-id <name> --kms-key-id <key-arn>
+
+CKV_AWS_149:
+  aws_secretsmanager_secret:
+    terraform: |
+      resource "aws_secretsmanager_secret" "example" {
+        kms_key_id = aws_kms_key.secrets.arn
+      }
+    cli: |
+      aws secretsmanager update-secret --secret-id <name> --kms-key-id <key-arn>
+
+CKV_AWS_166:
+  aws_backup_vault:
+    terraform: |
+      resource "aws_backup_vault" "example" {
+        kms_key_arn = aws_kms_key.backup.arn
+      }
+    cli: |
+      Set at creation; the vault key cannot be changed afterwards.

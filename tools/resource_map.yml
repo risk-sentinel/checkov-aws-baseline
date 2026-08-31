@@ -481,3 +481,18 @@ checks:
       reader: api
       field: kms_key_id
       satisfies: not_empty
+  CKV_AWS_2:
+    aws_secretsmanager_secret:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+  CKV_AWS_149:
+    aws_secretsmanager_secret:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+  CKV_AWS_166:
+    aws_backup_vault:
+      reader: api
+      field: encryption_key_arn
+      satisfies: not_empty
