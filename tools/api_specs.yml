@@ -320,6 +320,16 @@ aws_transfer_server:
   gem: aws-sdk-transfer
   id: server_id
   list: list_servers
+aws_vpc_endpoint_service:
+  client: Aws::EC2::Client
+  collection: service_configurations
+  fields:
+    acceptance_required: acceptance_required
+    service_name: service_name
+    service_state: service_state
+  gem: aws-sdk-ec2
+  id: service_id
+  list: describe_vpc_endpoint_service_configurations
 aws_workspaces_workspace:
   client: Aws::WorkSpaces::Client
   collection: workspaces

@@ -2,7 +2,7 @@
 #
 # Rule:        CKV_AWS_123 (checkov 3.3.16)
 # Applies to:  aws_vpc_endpoint_service
-# Read with:   aws_vpc_endpoint_services -> aws_vpc_endpoint_service (stock inspec-aws, no custom reader)
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
 # The rule id is the identity: file name, control id and `tag checkov_id` all
 # carry it, and tools/lint_catalog_drift.py asserts the three agree.
@@ -15,8 +15,8 @@ control 'CKV_AWS_123' do
 
   desc <<~DESC
     Checkov asserts this against Terraform. This profile asserts it against
-    the aws_vpc_endpoint_service resources that actually exist, read through
-    the stock inspec-aws aws_vpc_endpoint_service resource.
+    the aws_vpc_endpoint_service resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
 
   desc 'rationale', <<~RATIONALE
@@ -48,47 +48,37 @@ control 'CKV_AWS_123' do
   tag nist_source:           'category-derived'
   tag implementation_status: 'implemented'
 
-  # Enumerated at control scope, then each asset asserted on its own. The
-  # resource is an ARGUMENT to `describe`, which evaluates on the control --
-  # calling it inside the block would defer it into the example.
-  #
-  # Every call carries aws_region: a stock resource otherwise reads only the
-  # region the connection was built with, and every other region's resources
-  # report as absent, which renders Not Applicable rather than unexamined.
-  found = checkov_scan_regions(scan_regions).flat_map do |region|
-    aws_vpc_endpoint_services(aws_region: region).base_endpoint_dns_names.to_a.map { |id| [id, region] }
-  end
+  assets = aws_api_assets(type: 'aws_vpc_endpoint_service', regions: scan_regions)
 
-  # A plural resource whose table is built from the API response returns nil for
-  # a column that does not exist, rather than raising. Passing that on gives
-  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
-  # and asserted on below, so a wrong `ids` column is a visible failure rather
-  # than a crash or a silent Not Applicable.
-  unusable = found.count { |id, _r| "#{id}".strip.empty? }
-  found = found.reject { |id, _r| "#{id}".strip.empty? }
-  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_vpc_endpoint_service', rules: exempt) }
-
-  if unusable.positive?
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
     describe "aws_vpc_endpoint_service enumeration" do
-      it 'produced usable identifiers' do
-        expect(unusable).to eq(0),
-          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
       end
     end
   end
 
-  # `unusable.positive?` keeps the control APPLICABLE when every id came back
-  # blank. Without it only_if skips the control, and the wrong-column case this
-  # guard exists to catch is exactly the case it would suppress — a Not
-  # Applicable that means "the enumeration is broken".
-  applicable = !in_scope.empty? || unusable.positive?
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:acceptance_required].nil? }
+
+  applicable = !in_scope.empty?
   impact 0.7
   impact 0.0 unless applicable
-  only_if('no aws_vpc_endpoint_service in scope') { applicable }
+  only_if('no aws_vpc_endpoint_service in scope expressing this setting') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_vpc_endpoint_service(service_name: id, aws_region: region) do
-      its('acceptance_required') { should eq true }
+  in_scope.each do |asset|
+    describe "aws_vpc_endpoint_service #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:acceptance_required] }
+      it { should eq true }
     end
   end
 end

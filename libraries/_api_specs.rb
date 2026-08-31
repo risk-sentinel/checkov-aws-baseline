@@ -46,6 +46,21 @@ API_SPECS = {
     'id' => 'backup_vault_name',
     'list' => 'list_backup_vaults'
   },
+  'aws_cloudtrail' => {
+    'arn' => 'trail_arn',
+    'client' => 'Aws::CloudTrail::Client',
+    'collection' => 'trail_list',
+    'fields' => {
+      'is_multi_region_trail' => 'is_multi_region_trail',
+      'kms_key_id' => 'kms_key_id',
+      'log_file_validation_enabled' => 'log_file_validation_enabled',
+      'sns_topic_arn' => 'sns_topic_arn'
+    },
+    'gem' => 'aws-sdk-cloudtrail',
+    'id' => 'name',
+    'list' => 'describe_trails',
+    'scope' => 'regional'
+  },
   'aws_cloudwatch_log_group' => {
     'arn' => 'arn',
     'client' => 'Aws::CloudWatchLogs::Client',
@@ -97,6 +112,21 @@ API_SPECS = {
     'id' => 'replication_instance_identifier',
     'list' => 'describe_replication_instances'
   },
+  'aws_dms_s3_endpoint' => {
+    'arn' => 'endpoint_arn',
+    'client' => 'Aws::DatabaseMigrationService::Client',
+    'collection' => 'endpoints',
+    'fields' => {
+      'endpoint_type' => 'endpoint_type',
+      'engine_name' => 'engine_name',
+      's3_encryption_mode' => 's3_settings.encryption_mode',
+      's3_kms_key_arn' => 's3_settings.server_side_encryption_kms_key_id'
+    },
+    'gem' => 'aws-sdk-databasemigrationservice',
+    'id' => 'endpoint_identifier',
+    'list' => 'describe_endpoints',
+    'scope' => 'regional'
+  },
   'aws_ec2_transit_gateway' => {
     'arn' => 'transit_gateway_arn',
     'client' => 'Aws::EC2::Client',
@@ -125,6 +155,22 @@ API_SPECS = {
     'gem' => 'aws-sdk-ecr',
     'id' => 'repository_name',
     'list' => 'describe_repositories'
+  },
+  'aws_efs_access_point' => {
+    'arn' => 'access_point_arn',
+    'client' => 'Aws::EFS::Client',
+    'collection' => 'access_points',
+    'fields' => {
+      'file_system_id' => 'file_system_id',
+      'life_cycle_state' => 'life_cycle_state',
+      'posix_user_gid' => 'posix_user.gid',
+      'posix_user_uid' => 'posix_user.uid',
+      'root_directory_path' => 'root_directory.path'
+    },
+    'gem' => 'aws-sdk-efs',
+    'id' => 'access_point_id',
+    'list' => 'describe_access_points',
+    'scope' => 'regional'
   },
   'aws_efs_file_system' => {
     'arn' => 'file_system_arn',
@@ -275,6 +321,25 @@ API_SPECS = {
     'id' => 'name',
     'list' => 'list_secrets'
   },
+  'aws_security_group_rule' => {
+    'arn' => 'security_group_rule_arn',
+    'client' => 'Aws::EC2::Client',
+    'collection' => 'security_group_rules',
+    'fields' => {
+      'cidr_ipv4' => 'cidr_ipv4',
+      'cidr_ipv6' => 'cidr_ipv6',
+      'description' => 'description',
+      'from_port' => 'from_port',
+      'group_id' => 'group_id',
+      'ip_protocol' => 'ip_protocol',
+      'is_egress' => 'is_egress',
+      'to_port' => 'to_port'
+    },
+    'gem' => 'aws-sdk-ec2',
+    'id' => 'security_group_rule_id',
+    'list' => 'describe_security_group_rules',
+    'scope' => 'regional'
+  },
   'aws_sfn_state_machine' => {
     'arn' => 'state_machine_arn',
     'client' => 'Aws::States::Client',
@@ -306,6 +371,18 @@ API_SPECS = {
     'gem' => 'aws-sdk-transfer',
     'id' => 'server_id',
     'list' => 'list_servers'
+  },
+  'aws_vpc_endpoint_service' => {
+    'client' => 'Aws::EC2::Client',
+    'collection' => 'service_configurations',
+    'fields' => {
+      'acceptance_required' => 'acceptance_required',
+      'service_name' => 'service_name',
+      'service_state' => 'service_state'
+    },
+    'gem' => 'aws-sdk-ec2',
+    'id' => 'service_id',
+    'list' => 'describe_vpc_endpoint_service_configurations'
   },
   'aws_workspaces_workspace' => {
     'client' => 'Aws::WorkSpaces::Client',
