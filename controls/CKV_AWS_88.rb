@@ -104,7 +104,7 @@ control 'CKV_AWS_88' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:public_ip] }
-      it { should be false }
+      it { should eq false }
     end
   end
 end

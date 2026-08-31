@@ -127,7 +127,7 @@ control 'CKV_AWS_79' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:imds_tokens_or_disabled] }
-      it { should be true }
+      it { should eq true }
     end
   end
 end

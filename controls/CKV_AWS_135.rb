@@ -87,7 +87,7 @@ control 'CKV_AWS_135' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:ebs_optimized] }
-      it { should be true }
+      it { should eq true }
     end
   end
 end

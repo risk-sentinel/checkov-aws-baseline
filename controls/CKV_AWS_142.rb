@@ -54,33 +54,50 @@ control 'CKV_AWS_142' do
   # Every call carries aws_region: a stock resource otherwise reads only the
   # region the connection was built with, and every other region's resources
   # report as absent, which renders Not Applicable rather than unexamined.
+  #
+  # checkov_enumerate does the reading. It flattens a nested id column, tells an
+  # unregistered column apart from an account that simply has none of this
+  # resource, and hands back anything that stopped it as `problems` rather than
+  # as an empty list -- see libraries/_checkov_enumeration.rb.
+  problems = []
   found = checkov_scan_regions(scan_regions).flat_map do |region|
-    aws_redshift_clusters(aws_region: region).cluster_identifiers.to_a.map { |id| [id, region] }
+    ids, found_problems = checkov_enumerate(
+      aws_redshift_clusters(aws_region: region), :cluster_identifiers
+    )
+    problems.concat(found_problems.map { |p| "#{region}: #{p}" })
+    ids.map { |id| [id, region] }
   end
 
-  # A plural resource whose table is built from the API response returns nil for
-  # a column that does not exist, rather than raising. Passing that on gives
-  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
-  # and asserted on below, so a wrong `ids` column is a visible failure rather
-  # than a crash or a silent Not Applicable.
-  unusable = found.count { |id, _r| "#{id}".strip.empty? }
-  found = found.reject { |id, _r| "#{id}".strip.empty? }
+  # Blank ids are separated out and asserted on below rather than filtered away,
+  # so a wrong `ids` column is a visible failure and not a silent Not Applicable.
+  # `id.nil?` before the interpolation on purpose: a NullResponse answers true to
+  # nil? but interpolates to "#<NullResponse:0x...>", which is not blank. The
+  # survivors are interpolated rather than `.to_s`'d, because to_s on a
+  # NullResponse returns nil and the singular then rejects the argument.
+  unusable = found.count { |id, _r| id.nil? || "#{id}".strip.empty? }
+  found = found.reject { |id, _r| id.nil? || "#{id}".strip.empty? }
+               .map { |id, region| ["#{id}", region] }
   in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_redshift_cluster', rules: exempt) }
 
-  if unusable.positive?
+  if unusable.positive? || problems.any?
     describe "aws_redshift_cluster enumeration" do
       it 'produced usable identifiers' do
         expect(unusable).to eq(0),
-          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "\
+          'likely names a field this resource does not expose'
+      end
+
+      it 'read the assets it set out to read' do
+        expect(problems).to be_empty
       end
     end
   end
 
-  # `unusable.positive?` keeps the control APPLICABLE when every id came back
-  # blank. Without it only_if skips the control, and the wrong-column case this
-  # guard exists to catch is exactly the case it would suppress — a Not
-  # Applicable that means "the enumeration is broken".
-  applicable = !in_scope.empty? || unusable.positive?
+  # `unusable.positive? || problems.any?` keeps the control APPLICABLE when the
+  # enumeration broke. Without it only_if skips the control, and the broken cases
+  # these guards exist to catch are exactly the ones it would suppress — a Not
+  # Applicable that means "nobody looked".
+  applicable = !in_scope.empty? || unusable.positive? || problems.any?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_redshift_cluster in scope') { applicable }

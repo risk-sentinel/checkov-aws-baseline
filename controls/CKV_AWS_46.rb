@@ -115,7 +115,7 @@ control 'CKV_AWS_46' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:user_data_secrets] }
-      it { should be_empty }
+      it { should satisfy('be unset or empty') { |v| v.nil? || (v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

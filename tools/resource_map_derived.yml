@@ -2,15 +2,59 @@
 # DERIVED, NOT REVIEWED.
 #
 # Removed after a live exec proved them broken — a static lint sees none of these:
-#   CKV_AWS_238: aws_guardduty_detectors yields non-String ids.
 #   CKV_AWS_159: a nested probe chain raises instead of returning nil.
 #   CKV_AWS_189: enumerated aws_ebs_volumes.kms_key_ids as if they were volume ids.
-#   CKV_AWS_37: aws_eks_clusters.names yields nil rows in an account with no EKS clusters, and the singular then rejects a nil cluster_name
-#   CKV_AWS_39: same as CKV_AWS_37
-#   CKV_AWS_58: same as CKV_AWS_37
-#   CKV_AWS_339: same as CKV_AWS_37
+#   CKV_AWS_39: the property was wrong, not just the enumeration. It asserted
+#     `vpc_config == false`, and vpc_config is a structure, not a boolean; the
+#     deployed answer is resources_vpc_config.endpoint_public_access. The
+#     enumeration half is fixed, the assertion half is not, so it stays out.
+#   CKV_AWS_333: aws_ecs_service requires BOTH `service` and a cluster, and a
+#     service name alone is ambiguous across clusters — the stock shape's
+#     single-identifier enumeration cannot address it. The mapping also
+#     asserted `network_configuration == false` on a structure; the deployed
+#     answer is network_configuration.awsvpc_configuration.assign_public_ip.
+#     Found by tools/lint_resource_map.py the first time it read this file.
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
+#
+# Restored, with what fixed each:
+#   CKV_AWS_238: the ids column is a list-valued field registered without
+#     style: :simple, so FilterTable handed back [[id]] and the singular rejected
+#     the Array. checkov_enumerate flattens the column.
+#   CKV_AWS_37, CKV_AWS_58, CKV_AWS_339: aws_eks_clusters builds its table from
+#     the API response, so an account with no clusters registers no columns and
+#     the id column answered with a NullResponse, which survived the blank-id
+#     filter and reached the singular as a cluster name. checkov_enumerate
+#     separates "this resource exposes no such column while returning rows" —
+#     reported as a failure — from "nothing was enumerated", which is an honest
+#     empty. CKV_AWS_339 additionally named a column (eks_cluster_identifiers)
+#     that does not exist; that class of error is now visible rather than silent.
 checks:
+  CKV2_AWS_32:
+    aws_cloudfront_distribution:
+      field: response_headers_policy_id
+      note: 'Re-enabled by the dotted collection path in libraries/aws_api_assets.rb. CloudFront is the reason
+        that exists -- ListDistributions returns its items under DistributionList.Items, and a single page.public_send(collection)
+        could not reach one level down. The stock aws_cloudfront_distribution resource cannot answer this check:
+        unlike most of the pack it defines its attributes by hand rather than through create_resource_methods,
+        and ResponseHeadersPolicyId is not among them. Field path confirmed against the aws-sdk-cloudfront shape
+        model: DistributionSummary.DefaultCacheBehavior.ResponseHeadersPolicyId. PARTIAL, deliberately: this
+        asserts the DEFAULT cache behaviour. Checkov also accepts a policy attached to an additional cache behaviour,
+        which lives in a list that the api spec''s dotted `fields` path cannot index, so a distribution whose
+        default behaviour carries no policy is reported even when an additional behaviour has one.'
+      reader: api
+      satisfies: not_empty
+  CKV2_AWS_41:
+    aws_instance:
+      field: iam_roles
+      note: 'Answered through aws_compute_assets rather than the stock aws_ec2_instances plural, for two reasons.
+        DescribeInstances keeps returning TERMINATED instances for about an hour after they die, and a terminated
+        instance has no instance profile, so a control over that plural produces a guaranteed transient FAIL;
+        aws_compute_assets already drops terminated and shutting-down rows. And aws_ec2_instances registers no
+        state column at all, so no declarative population filter could have fixed it there either. Asserted on
+        the ROLES reachable through the instance profile rather than on the profile ARN: an instance profile
+        can exist with no role in it, which is exactly the credential-less posture the rule is about, and asserting
+        the ARN would pass it. Reaching the roles is one IAM GetInstanceProfile per distinct profile, memoised.'
+      satisfies: not_empty
   CKV_AWS_116:
     aws_lambda_function:
       assert:
@@ -408,6 +452,26 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      assert:
+        arg: detector_id
+        property: enabled?
+        resource: aws_guardduty_detector
+        satisfies: equals
+        value: true
+      enumerate:
+        ids: detector_ids
+        resource: aws_guardduty_detectors
+      note: 'Re-enabled by the flattening in checkov_enumerate. aws_guardduty_detectors stores ONE row holding
+        the whole detector_ids list, and registers that column WITHOUT style: :simple, so FilterTable does not
+        flatten it and the column reads [[id]]. The singular rejected the Array (expected params[:detector_id]
+        to be a String) and the check was removed. Asserted through the resource''s own enabled? predicate, which
+        reads GetDetector.status == ENABLED -- the deployed form of Terraform''s `enable`. LIMITATION: this is
+        deployed-asset parity with the Checkov check, which only fires on a declared detector. An account with
+        no detector has nothing to enumerate and renders Not Applicable; whether GuardDuty is on at all is an
+        account-level question and a different control.'
+      reader: stock
   CKV_AWS_248:
     aws_elasticsearch_domain: &id003
       assert:
@@ -593,18 +657,6 @@ checks:
       satisfies: in_list
       value:
       - disable
-  CKV_AWS_333:
-    aws_ecs_service:
-      assert:
-        arg: ecs_service_identifier
-        property: network_configuration
-        resource: aws_ecs_service
-        satisfies: equals
-        value: false
-      enumerate:
-        ids: service_names
-        resource: aws_ecs_services
-      reader: stock
   CKV_AWS_337:
     aws_ssm_parameter:
       assert:
@@ -627,6 +679,36 @@ checks:
       reader: api
       satisfies: greater_than
       value: 364
+  CKV_AWS_339:
+    aws_eks_cluster:
+      assert:
+        arg: cluster_name
+        property: version
+        resource: aws_eks_cluster
+        satisfies: in_list
+        value:
+        - '1.29'
+        - '1.30'
+        - '1.31'
+        - '1.32'
+        - '1.33'
+        - '1.34'
+        - '1.35'
+      enumerate:
+        exclude:
+          statuses:
+          - CREATING
+          - DELETING
+        ids: names
+        resource: aws_eks_clusters
+      note: 'Re-enabled by checkov_enumerate. TWO defects removed this one. The `ids` column was eks_cluster_identifiers,
+        which aws_eks_clusters does not register: its table is built from the API response, so the columns are
+        the pluralised response keys and the cluster name arrives as `names`. And an account with no clusters
+        registers no columns at all, so the wrong column and the empty account both answered with a NullResponse
+        that reached the singular as a cluster name. checkov_enumerate tells those two apart -- the first is
+        reported, the second is an honest empty. CREATING and DELETING clusters are excluded as mid-transition
+        rather than deployed; FAILED and UPDATING stay in scope. Status values are the EKS ClusterStatus enum.'
+      reader: stock
   CKV_AWS_34:
     aws_cloudfront_distribution:
       assert:
@@ -770,6 +852,34 @@ checks:
         ids: identity_pool_ids
         resource: aws_cognito_identity_pools
       reader: stock
+  CKV_AWS_37:
+    aws_eks_cluster:
+      assert:
+        arg: cluster_name
+        property: enabled_logging_types
+        resource: aws_eks_cluster
+        satisfies: includes_all
+        value:
+        - api
+        - audit
+        - authenticator
+        - controllerManager
+        - scheduler
+      enumerate:
+        exclude:
+          statuses:
+          - CREATING
+          - DELETING
+        ids: names
+        resource: aws_eks_clusters
+      note: 'Re-enabled by checkov_enumerate: aws_eks_clusters registers no columns in an account with no clusters,
+        and the resulting NullResponse reached the singular as a cluster name. Asserted POSITIVELY on enabled_logging_types
+        rather than as `disabled_logging_types is empty`, which is how it was written before. The complement
+        reads the same until DescribeCluster omits `logging` entirely: the attr_reader is then nil, nil satisfies
+        `empty`, and a cluster with no logging configuration at all PASSES. `includes_all` renders RSpec''s include
+        matcher with all five arguments, and nil fails it. The five names are the EKS LogType enum, confirmed
+        from the aws-sdk-eks documentation for cluster.logging.cluster_logging[].types.'
+      reader: stock
   CKV_AWS_377:
     aws_route53domains_registered_domain:
       field: transfer_lock
@@ -828,6 +938,27 @@ checks:
         output shape.
       reader: stock
     aws_opensearch_domain: *id004
+  CKV_AWS_58:
+    aws_eks_cluster:
+      assert:
+        arg: cluster_name
+        property: encryption_config
+        resource: aws_eks_cluster
+        satisfies: not_empty
+      enumerate:
+        exclude:
+          statuses:
+          - CREATING
+          - DELETING
+        ids: names
+        resource: aws_eks_clusters
+      note: Re-enabled by checkov_enumerate; the removal reason was the empty-account NullResponse, not the assertion.
+        Checkov's expected value is the stringified list "['secrets']", which cannot become a Ruby literal. Asserted
+        instead on the presence of encryptionConfig, which is faithful because secrets is the only resource EKS
+        envelope encryption supports, so a non-empty encryptionConfig IS secrets encryption. DescribeCluster
+        omits the member when it is unset, so the attribute is a NullResponse, whose nil? is true and which the
+        not_empty matcher fails.
+      reader: stock
   CKV_AWS_6:
     aws_elasticsearch_domain: &id005
       assert:

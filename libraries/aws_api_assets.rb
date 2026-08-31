@@ -129,7 +129,6 @@ class AwsApiAssets < AwsResourceBase
   end
 
   def rows_for(region)
-    args = region ? { region: region } : {}
     api = region ? regional_client(region) : client
     collect(api, region)
   rescue MissingGem
@@ -141,16 +140,47 @@ class AwsApiAssets < AwsResourceBase
     []
   end
 
+  # A `collection` naming a path this response does not have. Not an
+  # ArgumentError, deliberately: the region rescue below catches ArgumentError
+  # and would file a broken spec under unreadable_regions, where it reads as one
+  # region that could not be reached rather than as a spec that can never work.
+  class CollectionPathError < StandardError; end
+
   def collect(api, region)
     rows = []
     response = api.public_send(@spec["list"])
     pages = response.respond_to?(:each) ? response : [response]
     pages.each do |page|
-      Array(page.public_send(@spec["collection"])).each do |item|
+      Array(collection_in(page)).each do |item|
         rows << row_for(item.to_h, region)
       end
     end
     rows
+  end
+
+  # The list of items in a page, addressed by a dotted path.
+  #
+  # A single `page.public_send(collection)` cannot reach a nested one, and
+  # several services only have a nested one: CloudFront's ListDistributions puts
+  # its items under DistributionList.Items, so `collection: distribution_list.items`.
+  #
+  # A step that is nil stops the walk and yields no rows -- an optional structure
+  # the API omitted is a real, empty answer. A step the response has no member
+  # for is not: that is the spec naming something that does not exist, and it
+  # raises rather than enumerating nothing, because enumerating nothing renders
+  # Not Applicable.
+  def collection_in(page)
+    @spec["collection"].to_s.split(".").reduce(page) do |node, key|
+      break nil if node.nil?
+      unless node.respond_to?(key)
+        raise CollectionPathError,
+              "#{@type}: `collection: #{@spec['collection']}` — #{node.class} has no " \
+              "member `#{key}`. Nothing was enumerated, so do not read this control's " \
+              "result as a pass or a Not Applicable; fix the spec in tools/api_specs.yml."
+      end
+
+      node.public_send(key)
+    end
   end
 
   def row_for(item, region)

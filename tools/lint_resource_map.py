@@ -107,7 +107,15 @@ def main() -> int:
               "Without it this lint would pass by having nothing to check.")
         return 1
 
+    # Both files, exactly as render_controls.load() merges them. The derived map
+    # carries most of the mappings and used to go unchecked here, which is how
+    # `ids: eks_cluster_identifiers` — a column aws_eks_clusters does not
+    # register — survived long enough to be found by a live exec instead.
     mappings = yaml.safe_load((HERE / "resource_map.yml").read_text())["checks"]
+    derived = HERE / "resource_map_derived.yml"
+    if derived.is_file():
+        for cid, spec in (yaml.safe_load(derived.read_text()) or {}).get("checks", {}).items():
+            mappings.setdefault(cid, spec)
     problems, unverifiable, checked = [], [], 0
 
     for cid, per_type in sorted(mappings.items()):
@@ -134,6 +142,21 @@ def main() -> int:
                     have = ", ".join(sorted(resources[plural]["columns"])[:8]) or "(none)"
                     problems.append(
                         f"{cid}/{tf_type}: {plural} has no column '{column}'. It registers: {have}")
+
+            # `exclude:` narrows the enumerated population before the ids are
+            # read, and it does it through FilterTable's `where`. A column that
+            # is not registered raises ArgumentError there, which is at least
+            # loud — but at exec, on one control, in one region. Named here it
+            # is loud before anyone runs it.
+            for col in (enum.get("exclude") or {}):
+                if plural in resources and col not in resources[plural]["columns"]:
+                    if resources[plural]["dynamic"]:
+                        unverifiable.append(
+                            f"{cid}/{tf_type}: exclude on {plural}.{col} — table is populated "
+                            f"from the API response, so the column cannot be confirmed here")
+                    else:
+                        problems.append(
+                            f"{cid}/{tf_type}: {plural} has no column '{col}' to exclude on")
 
             # `resource(id, aws_region: region)` is two arguments and InSpec's
             # *args dispatch accepts one — "wrong number of arguments (given 2,

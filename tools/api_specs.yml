@@ -41,6 +41,21 @@ aws_backup_vault:
   gem: aws-sdk-backup
   id: backup_vault_name
   list: list_backup_vaults
+aws_cloudfront_distribution:
+  arn: arn
+  client: Aws::CloudFront::Client
+  # Dotted: ListDistributions nests its items under DistributionList.Items. A
+  # single public_send on the page cannot reach that, which is why
+  # aws_api_assets walks a dotted path.
+  collection: distribution_list.items
+  fields:
+    response_headers_policy_id: default_cache_behavior.response_headers_policy_id
+  gem: aws-sdk-cloudfront
+  id: id
+  list: list_distributions
+  # CloudFront is global: the same distributions come back whichever regional
+  # endpoint is asked, so a region walk would report each one once per region.
+  scope: global
 aws_cloudwatch_log_group:
   arn: arn
   client: Aws::CloudWatchLogs::Client

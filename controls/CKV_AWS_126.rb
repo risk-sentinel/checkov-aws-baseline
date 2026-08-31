@@ -82,7 +82,7 @@ control 'CKV_AWS_126' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:detailed_monitoring] }
-      it { should be true }
+      it { should eq true }
     end
   end
 end

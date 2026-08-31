@@ -1,3 +1,38 @@
+CKV2_AWS_32:
+  aws_cloudfront_distribution:
+    note: "There is no single CLI call for this. The distribution config is read-modify-written whole: `aws\
+      \ cloudfront get-distribution-config --id <id>` gives the config and an ETag, the ResponseHeadersPolicyId\
+      \ is added to DefaultCacheBehavior, and `aws cloudfront update-distribution --id <id> --if-match <etag>\
+      \ --distribution-config file://\u2026` puts it back. Every field must be resent; anything omitted is\
+      \ cleared."
+    terraform: "resource \"aws_cloudfront_response_headers_policy\" \"secure\" {\n  name = \"secure-defaults\"\
+      \n\n  security_headers_config {\n    strict_transport_security {\n      access_control_max_age_sec =\
+      \ 63072000\n      include_subdomains         = true\n      preload                    = true\n      override\
+      \                   = true\n    }\n    content_type_options { override = true }\n    frame_options {\n\
+      \      frame_option = \"DENY\"\n      override     = true\n    }\n    referrer_policy {\n      referrer_policy\
+      \ = \"same-origin\"\n      override        = true\n    }\n  }\n}\n\nresource \"aws_cloudfront_distribution\"\
+      \ \"site\" {\n  enabled = true\n\n  default_cache_behavior {\n    target_origin_id           = \"s3-origin\"\
+      \n    viewer_protocol_policy     = \"redirect-to-https\"\n    allowed_methods            = [\"GET\",\
+      \ \"HEAD\"]\n    cached_methods             = [\"GET\", \"HEAD\"]\n    cache_policy_id            = data.aws_cloudfront_cache_policy.optimized.id\n\
+      \    response_headers_policy_id = aws_cloudfront_response_headers_policy.secure.id\n  }\n\n  # ... origin,\
+      \ restrictions and viewer_certificate blocks omitted\n}\n"
+CKV2_AWS_41:
+  aws_instance:
+    cli: 'aws ec2 associate-iam-instance-profile --instance-id <id> --iam-instance-profile Name=<profile>
+
+      This attaches in place, with no restart. Attaching a profile that contains no role satisfies the association
+      call and not this control: the role is the point.
+
+      '
+    note: An instance profile holds at most one role, and AWS allows an empty one. This control asserts the
+      roles reachable through the attached profile, so creating the profile without `role = ...` still fails
+      it.
+    terraform: "resource \"aws_iam_role\" \"instance\" {\n  name               = \"app-instance\"\n  assume_role_policy\
+      \ = data.aws_iam_policy_document.ec2_assume.json\n}\n\nresource \"aws_iam_instance_profile\" \"instance\"\
+      \ {\n  name = \"app-instance\"\n  role = aws_iam_role.instance.name\n}\n\nresource \"aws_instance\" \"\
+      app\" {\n  ami                  = data.aws_ami.al2023.id\n  instance_type        = \"t3.small\"\n  iam_instance_profile\
+      \ = aws_iam_instance_profile.instance.name\n\n  metadata_options {\n    http_tokens   = \"required\"\n\
+      \    http_endpoint = \"enabled\"\n  }\n}\n"
 CKV2_AWS_6:
   aws_s3_bucket:
     cli: "aws s3api put-public-access-block --bucket <name> \\\n  --public-access-block-configuration\
@@ -662,6 +697,19 @@ CKV_AWS_338:
     terraform: "resource \"aws_cloudwatch_log_group\" \"app\" {\n  name              = \"/aws/app/api\"\
       \n  retention_in_days = 365        # 0 means never expire, also acceptable\n  kms_key_id       \
       \ = aws_kms_key.logs.arn\n}\n"
+CKV_AWS_339:
+  aws_eks_cluster:
+    cli: 'aws eks update-cluster-version --name <cluster> --kubernetes-version 1.31
+
+      One minor version at a time, and the control plane upgrade must be followed by the node groups and the
+      add-ons.
+
+      '
+    note: The supported range moves with every EKS release, so this control's expected list is pinned to the
+      Checkov version in tools/checkov_catalog.yml, not to what AWS supports today. A cluster on a version
+      AWS has dropped from standard support keeps running and stops receiving patches.
+    terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
+      \  version  = \"1.31\"\n\n  vpc_config {\n    subnet_ids = var.private_subnet_ids\n  }\n}\n"
 CKV_AWS_34:
   aws_cloudfront_distribution:
     cli: 'There is no single-field CloudFront update. Fetch the current config,

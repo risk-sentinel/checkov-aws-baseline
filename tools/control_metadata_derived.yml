@@ -1,4 +1,48 @@
 # DERIVED, NOT REVIEWED. nist_source records which pass produced each anchor.
+CKV2_AWS_32:
+  cci:
+  - CCI-002418
+  impact: 0.5
+  ksi:
+  - KSI-CNA-BND
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-18
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-18
+  nist_source: agent-drafted
+  rationale: A response headers policy is where HSTS, X-Content-Type-Options, a Content-Security-Policy and
+    the CORS headers are set for everything the distribution serves. Without one the origin has to set them
+    on every response, and any object served from a bucket or a static path that does not gets none. The policy
+    is the only place the header set can be asserted for the whole distribution at once.
+  severity: medium
+  what: a response headers policy is attached to the distribution's cache behaviour
+CKV2_AWS_41:
+  cci:
+  - CCI-000764
+  - CCI-000225
+  impact: 0.5
+  ksi:
+  - KSI-IAM-MFA
+  nist:
+  - IA-2
+  - AC-6
+  - IA-5 (2)
+  nist_r4:
+  - IA-2
+  - AC-6
+  - IA-5 (2)
+  nist_source: agent-drafted
+  rationale: 'An instance with no role has no way to obtain credentials except to carry them: an access key
+    in user data, in an AMI, or in a file on disk. Those do not rotate, do not expire, and leave no record
+    tying their use back to the instance. A role delivers short-lived credentials through IMDS instead, and
+    its use is attributable in CloudTrail. Terraform can only show that a profile was declared; this asserts
+    that the profile the running instance actually carries reaches a role at all.'
+  severity: medium
+  what: an IAM instance profile, containing a role, is attached to the instance
 CKV_AWS_102:
   cci:
   - CCI-001097

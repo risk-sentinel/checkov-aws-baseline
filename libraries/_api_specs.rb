@@ -46,6 +46,18 @@ API_SPECS = {
     'id' => 'backup_vault_name',
     'list' => 'list_backup_vaults'
   },
+  'aws_cloudfront_distribution' => {
+    'arn' => 'arn',
+    'client' => 'Aws::CloudFront::Client',
+    'collection' => 'distribution_list.items',
+    'fields' => {
+      'response_headers_policy_id' => 'default_cache_behavior.response_headers_policy_id'
+    },
+    'gem' => 'aws-sdk-cloudfront',
+    'id' => 'id',
+    'list' => 'list_distributions',
+    'scope' => 'global'
+  },
   'aws_cloudwatch_log_group' => {
     'arn' => 'arn',
     'client' => 'Aws::CloudWatchLogs::Client',

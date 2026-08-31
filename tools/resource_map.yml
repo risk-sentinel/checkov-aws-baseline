@@ -6,9 +6,48 @@
 # launch template. A map keyed only by check would inspect the wrong field for
 # one of them and still look right.
 #
-# reader    the InSpec resource that enumerates every deployed asset of this type
-# field     the row attribute answering this check
-# satisfies how the field is judged: equals / not_equals / empty / any_of
+# Four reader shapes, each with its own keys.
+#
+#   reader: stock       a plural inspec-aws resource enumerates, a singular asserts
+#     enumerate:
+#       resource:       the plural, e.g. aws_eks_clusters
+#       ids:            the COLUMN on it holding the identifier, e.g. names
+#       exclude:        optional. {column: [values]} — rows whose column holds one
+#                       of these values are dropped BEFORE the ids are read. For
+#                       objects the API keeps returning after they stopped being
+#                       deployed assets (a cluster mid-delete, a terminated
+#                       instance), never to narrow a check to what would pass it.
+#                       A row whose value is nil, or is anything not listed, is
+#                       KEPT: dropping an asset is silent, keeping one is visible.
+#                       Named by COLUMN, like ids; checkov_enumerate translates it
+#                       to the field `where` actually wants.
+#     assert:
+#       resource:       the singular
+#       arg:            the singular's parameter name — NEVER positional for a
+#                       regional resource, because `res(id, aws_region: r)` is two
+#                       positional arguments and InSpec's *args dispatch rejects it
+#       property:       the method on the singular
+#       satisfies:      see the verb list below
+#       value:          the expected value, where the verb takes one
+#     scope: global     optional; enumerate once instead of per region
+#
+#   reader: api         a type inspec-aws lacks, described in tools/api_specs.yml
+#     field:            the key in that spec's `fields:` map
+#     satisfies / value
+#
+#   reader: singleton   one account-level object, nothing to enumerate
+#     resource / property / satisfies / value, plus an optional `guard:` predicate
+#     that must be true before the property is safe to read
+#
+#   (no reader)         libraries/aws_compute_assets.rb, for cross-API joins
+#     field:            the row key on that resource
+#     satisfies / value
+#
+# satisfies, for every shape: equals, not_equals, empty, not_empty, in_list,
+#   not_in_list, includes, includes_all, excludes, matches, greater_than,
+#   less_than, at_least, at_most. One implementation, tools/render_controls.py
+#   matcher_for; adding a verb there is the cheap way to unlock a check.
+#
 # note      only where the deployed assertion is not a restatement of the IaC one
 #
 # Seeded with the aws_instance tranche. Everything else in the catalogue is
