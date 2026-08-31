@@ -400,3 +400,84 @@ checks:
         property: "snapshot_retention_limit"
         satisfies: greater_than
         value: 0
+
+  # --- types inspec-aws does not ship, read via tools/api_specs.yml ---
+  CKV_AWS_50:
+    aws_lambda_function:
+      reader: api
+      field: tracing_mode
+      satisfies: in_list
+      value: ['Active', 'PassThrough']
+  CKV_AWS_272:
+    aws_lambda_function:
+      reader: api
+      field: code_signing_config_arn
+      satisfies: not_empty
+  CKV_AWS_173:
+    aws_lambda_function:
+      reader: api
+      field: kms_key_arn
+      satisfies: not_empty
+  CKV_AWS_158:
+    aws_cloudwatch_log_group:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+  CKV_AWS_66:
+    aws_cloudwatch_log_group:
+      reader: api
+      field: retention_in_days
+      satisfies: not_empty
+  CKV_AWS_163:
+    aws_ecr_repository:
+      reader: api
+      field: scan_on_push
+      satisfies: equals
+      value: true
+  CKV_AWS_51:
+    aws_ecr_repository:
+      reader: api
+      field: image_tag_mutability
+      satisfies: equals
+      value: IMMUTABLE
+  CKV_AWS_136:
+    aws_ecr_repository:
+      reader: api
+      field: encryption_type
+      satisfies: equals
+      value: KMS
+  CKV_AWS_155:
+    aws_workspaces_workspace:
+      reader: api
+      field: user_volume_encryption_enabled
+      satisfies: equals
+      value: true
+  CKV_AWS_156:
+    aws_workspaces_workspace:
+      reader: api
+      field: root_volume_encryption_enabled
+      satisfies: equals
+      value: true
+  CKV_AWS_89:
+    aws_dms_replication_instance:
+      reader: api
+      field: publicly_accessible
+      satisfies: equals
+      value: false
+  CKV_AWS_222:
+    aws_dms_replication_instance:
+      reader: api
+      field: auto_minor_version_upgrade
+      satisfies: equals
+      value: true
+  CKV_AWS_202:
+    aws_memorydb_cluster:
+      reader: api
+      field: tls_enabled
+      satisfies: equals
+      value: true
+  CKV_AWS_201:
+    aws_memorydb_cluster:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty

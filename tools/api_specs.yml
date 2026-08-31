@@ -1,0 +1,152 @@
+# How to enumerate a resource type inspec-aws does not ship.
+#
+# Four facts per type: which SDK gem, which client, which list call, which field
+# is the identifier. Plus the fields a control needs, by dotted path into the
+# response item.
+#
+# gem        the require, not the gem name on disk — 'aws-sdk-lambda'
+# client     the client constant
+# list       the operation that enumerates. It must take NO required arguments:
+#            an operation needing a parent id cannot enumerate an account, and
+#            that is the defect class that produced 16 exec errors when the
+#            stock mappings were derived without checking.
+# collection the response field holding the items
+# id         the item field that identifies it
+# arn        the item field holding an ARN, where the API returns one
+# scope      regional (default) or global
+# fields     name -> dotted path, extracted onto every row
+#
+# Adding a type is four lines plus its fields. tools/lint_api_specs.py checks
+# the gem is present in the image before anything trusts it.
+
+aws_lambda_function:
+  gem: aws-sdk-lambda
+  client: Aws::Lambda::Client
+  list: list_functions
+  collection: functions
+  id: function_name
+  arn: function_arn
+  fields:
+    tracing_mode: tracing_config.mode
+    kms_key_arn: kms_key_arn
+    runtime: runtime
+    vpc_subnet_ids: vpc_config.subnet_ids
+    code_signing_config_arn: code_signing_config_arn
+
+aws_cloudwatch_log_group:
+  gem: aws-sdk-cloudwatchlogs
+  client: Aws::CloudWatchLogs::Client
+  list: describe_log_groups
+  collection: log_groups
+  id: log_group_name
+  arn: arn
+  fields:
+    kms_key_id: kms_key_id
+    retention_in_days: retention_in_days
+
+aws_ecr_repository:
+  gem: aws-sdk-ecr
+  client: Aws::ECR::Client
+  list: describe_repositories
+  collection: repositories
+  id: repository_name
+  arn: repository_arn
+  fields:
+    scan_on_push: image_scanning_configuration.scan_on_push
+    image_tag_mutability: image_tag_mutability
+    encryption_type: encryption_configuration.encryption_type
+    kms_key: encryption_configuration.kms_key
+
+aws_efs_file_system:
+  gem: aws-sdk-efs
+  client: Aws::EFS::Client
+  list: describe_file_systems
+  collection: file_systems
+  id: file_system_id
+  arn: file_system_arn
+  fields:
+    encrypted: encrypted
+    kms_key_id: kms_key_id
+
+aws_kinesis_stream:
+  gem: aws-sdk-kinesis
+  client: Aws::Kinesis::Client
+  list: list_streams
+  collection: stream_summaries
+  id: stream_name
+  arn: stream_arn
+  fields:
+    encryption_type: stream_mode_details.stream_mode
+
+aws_athena_workgroup:
+  gem: aws-sdk-athena
+  client: Aws::Athena::Client
+  list: list_work_groups
+  collection: work_groups
+  id: name
+  fields:
+    state: state
+
+aws_sfn_state_machine:
+  gem: aws-sdk-states
+  client: Aws::States::Client
+  list: list_state_machines
+  collection: state_machines
+  id: name
+  arn: state_machine_arn
+  fields:
+    type: type
+
+aws_acm_certificate:
+  gem: aws-sdk-acm
+  client: Aws::ACM::Client
+  list: list_certificates
+  collection: certificate_summary_list
+  id: domain_name
+  arn: certificate_arn
+  fields:
+    key_algorithm: key_algorithm
+    in_use: in_use
+
+aws_dms_replication_instance:
+  gem: aws-sdk-databasemigrationservice
+  client: Aws::DatabaseMigrationService::Client
+  list: describe_replication_instances
+  collection: replication_instances
+  id: replication_instance_identifier
+  arn: replication_instance_arn
+  fields:
+    publicly_accessible: publicly_accessible
+    auto_minor_version_upgrade: auto_minor_version_upgrade
+    multi_az: multi_az
+
+aws_memorydb_cluster:
+  gem: aws-sdk-memorydb
+  client: Aws::MemoryDB::Client
+  list: describe_clusters
+  collection: clusters
+  id: name
+  arn: arn
+  fields:
+    tls_enabled: tls_enabled
+    kms_key_id: kms_key_id
+    snapshot_retention_limit: snapshot_retention_limit
+
+aws_workspaces_workspace:
+  gem: aws-sdk-workspaces
+  client: Aws::WorkSpaces::Client
+  list: describe_workspaces
+  collection: workspaces
+  id: workspace_id
+  fields:
+    root_volume_encryption_enabled: root_volume_encryption_enabled
+    user_volume_encryption_enabled: user_volume_encryption_enabled
+
+aws_networkfirewall_firewall:
+  gem: aws-sdk-networkfirewall
+  client: Aws::NetworkFirewall::Client
+  list: list_firewalls
+  collection: firewalls
+  id: firewall_name
+  arn: firewall_arn
+  fields: {}

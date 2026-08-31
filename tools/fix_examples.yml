@@ -582,3 +582,139 @@ CKV_AWS_134:
     cli: |
       aws elasticache modify-replication-group --replication-group-id <id> \
         --snapshot-retention-limit 7 --apply-immediately
+
+CKV_AWS_50:
+  aws_lambda_function:
+    terraform: |
+      resource "aws_lambda_function" "example" {
+        tracing_config {
+          mode = "Active"
+        }
+      }
+    cli: |
+      aws lambda update-function-configuration --function-name <name> --tracing-config Mode=Active
+
+CKV_AWS_272:
+  aws_lambda_function:
+    terraform: |
+      resource "aws_lambda_function" "example" {
+        code_signing_config_arn = aws_lambda_code_signing_config.example.arn
+      }
+    cli: |
+      aws lambda put-function-code-signing-config --function-name <name> --code-signing-config-arn <arn>
+
+CKV_AWS_173:
+  aws_lambda_function:
+    terraform: |
+      resource "aws_lambda_function" "example" {
+        kms_key_arn = aws_kms_key.lambda.arn
+      }
+    cli: |
+      aws lambda update-function-configuration --function-name <name> --kms-key-arn <key-arn>
+
+CKV_AWS_158:
+  aws_cloudwatch_log_group:
+    terraform: |
+      resource "aws_cloudwatch_log_group" "example" {
+        kms_key_id = aws_kms_key.logs.arn
+      }
+    cli: |
+      aws logs associate-kms-key --log-group-name <name> --kms-key-id <key-arn>
+
+CKV_AWS_66:
+  aws_cloudwatch_log_group:
+    terraform: |
+      resource "aws_cloudwatch_log_group" "example" {
+        retention_in_days = 365
+      }
+    cli: |
+      aws logs put-retention-policy --log-group-name <name> --retention-in-days 365
+
+CKV_AWS_163:
+  aws_ecr_repository:
+    terraform: |
+      resource "aws_ecr_repository" "example" {
+        image_scanning_configuration {
+          scan_on_push = true
+        }
+      }
+    cli: |
+      aws ecr put-image-scanning-configuration --repository-name <name> \
+        --image-scanning-configuration scanOnPush=true
+
+CKV_AWS_51:
+  aws_ecr_repository:
+    terraform: |
+      resource "aws_ecr_repository" "example" {
+        image_tag_mutability = "IMMUTABLE"
+      }
+    cli: |
+      aws ecr put-image-tag-mutability --repository-name <name> --image-tag-mutability IMMUTABLE
+
+CKV_AWS_136:
+  aws_ecr_repository:
+    terraform: |
+      resource "aws_ecr_repository" "example" {
+        encryption_configuration {
+          encryption_type = "KMS"
+          kms_key         = aws_kms_key.ecr.arn
+        }
+      }
+    cli: |
+      Set at creation; encryption configuration cannot be changed on an existing repository.
+
+CKV_AWS_155:
+  aws_workspaces_workspace:
+    terraform: |
+      resource "aws_workspaces_workspace" "example" {
+        user_volume_encryption_enabled = true
+        volume_encryption_key          = aws_kms_key.workspaces.arn
+      }
+    cli: |
+      Set at creation; encryption cannot be enabled on an existing WorkSpace.
+
+CKV_AWS_156:
+  aws_workspaces_workspace:
+    terraform: |
+      resource "aws_workspaces_workspace" "example" {
+        root_volume_encryption_enabled = true
+        volume_encryption_key          = aws_kms_key.workspaces.arn
+      }
+    cli: |
+      Set at creation; encryption cannot be enabled on an existing WorkSpace.
+
+CKV_AWS_89:
+  aws_dms_replication_instance:
+    terraform: |
+      resource "aws_dms_replication_instance" "example" {
+        publicly_accessible = false
+      }
+    cli: |
+      aws dms modify-replication-instance --replication-instance-arn <arn> --no-publicly-accessible
+
+CKV_AWS_222:
+  aws_dms_replication_instance:
+    terraform: |
+      resource "aws_dms_replication_instance" "example" {
+        auto_minor_version_upgrade = true
+      }
+    cli: |
+      aws dms modify-replication-instance --replication-instance-arn <arn> --auto-minor-version-upgrade
+
+CKV_AWS_202:
+  aws_memorydb_cluster:
+    terraform: |
+      resource "aws_memorydb_cluster" "example" {
+        tls_enabled = true
+      }
+    cli: |
+      Set at creation; TLS cannot be enabled on an existing MemoryDB cluster.
+
+CKV_AWS_201:
+  aws_memorydb_cluster:
+    terraform: |
+      resource "aws_memorydb_cluster" "example" {
+        kms_key_arn = aws_kms_key.memorydb.arn
+      }
+    cli: |
+      Set at creation; the key cannot be changed on an existing cluster.

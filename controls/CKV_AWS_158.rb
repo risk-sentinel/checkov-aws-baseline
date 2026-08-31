@@ -2,30 +2,43 @@
 #
 # Rule:        CKV_AWS_158 (checkov 3.3.16)
 # Applies to:  aws_cloudwatch_log_group
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudwatch_log_group yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_158'] || []
 
 control 'CKV_AWS_158' do
-  impact 0.0
   title 'Ensure that CloudWatch Log Group is encrypted by KMS'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudwatch_log_group in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudwatch_log_group resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Log groups routinely contain request payloads and identifiers; with the
+    default key they are encrypted with a key the account cannot rotate or
+    revoke.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_cloudwatch_log_group: kms_key_id is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group#kms-key-id
+    Terraform — aws_cloudwatch_log_group:
+
+      resource "aws_cloudwatch_log_group" "example" {
+        kms_key_id = aws_kms_key.logs.arn
+      }
+
+    Out of band — aws_cloudwatch_log_group:
+
+      aws logs associate-kms-key --log-group-name <name> --kms-key-id <key-arn>
   FIX
 
   tag checkov_id:            'CKV_AWS_158'
@@ -34,9 +47,31 @@ control 'CKV_AWS_158' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_cloudwatch_log_group]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group#kms-key-id'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_158 — no deployed-asset reader for aws_cloudwatch_log_group" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_cloudwatch_log_group', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value: the
+  # asset does not express this setting, so it is out of scope for this check
+  # rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt).reject { |a| a[:kms_key_id].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudwatch_log_group in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_cloudwatch_log_group #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:kms_key_id] }
+      it { should_not be_empty }
+    end
   end
 end

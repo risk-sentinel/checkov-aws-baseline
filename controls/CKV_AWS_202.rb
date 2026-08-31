@@ -2,30 +2,42 @@
 #
 # Rule:        CKV_AWS_202 (checkov 3.3.16)
 # Applies to:  aws_memorydb_cluster
-# Status:      PLANNED — no deployed-asset reader exists for aws_memorydb_cluster yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_202'] || []
 
 control 'CKV_AWS_202' do
-  impact 0.0
   title 'Ensure MemoryDB data is encrypted in transit'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_memorydb_cluster in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_memorydb_cluster resources that actually exist, enumerated
+    through the declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Without TLS the cache protocol is plaintext on the wire, including the
+    values it returns.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_memorydb_cluster: tls_enabled is not False
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/memorydb_cluster#tls-enabled
+    Terraform — aws_memorydb_cluster:
+
+      resource "aws_memorydb_cluster" "example" {
+        tls_enabled = true
+      }
+
+    Out of band — aws_memorydb_cluster:
+
+      Set at creation; TLS cannot be enabled on an existing MemoryDB cluster.
   FIX
 
   tag checkov_id:            'CKV_AWS_202'
@@ -34,9 +46,31 @@ control 'CKV_AWS_202' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_memorydb_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/memorydb_cluster#tls-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_202 — no deployed-asset reader for aws_memorydb_cluster" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_memorydb_cluster', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value: the
+  # asset does not express this setting, so it is out of scope for this check
+  # rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt).reject { |a| a[:tls_enabled].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_memorydb_cluster in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_memorydb_cluster #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:tls_enabled] }
+      it { should eq true }
+    end
   end
 end

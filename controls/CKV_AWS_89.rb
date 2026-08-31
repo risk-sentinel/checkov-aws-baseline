@@ -2,30 +2,43 @@
 #
 # Rule:        CKV_AWS_89 (checkov 3.3.16)
 # Applies to:  aws_dms_replication_instance
-# Status:      PLANNED — no deployed-asset reader exists for aws_dms_replication_instance yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_89'] || []
 
 control 'CKV_AWS_89' do
-  impact 0.0
   title 'DMS replication instance should not be publicly accessible'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_dms_replication_instance in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_dms_replication_instance resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A replication instance reads from a source database and writes to a
+    target; publicly reachable, it is a route between both.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_dms_replication_instance: publicly_accessible is not True
+    Checkov looks for: aws_dms_replication_instance: publicly_accessible is
+    not True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dms_replication_instance#publicly-accessible
+    Terraform — aws_dms_replication_instance:
+
+      resource "aws_dms_replication_instance" "example" {
+        publicly_accessible = false
+      }
+
+    Out of band — aws_dms_replication_instance:
+
+      aws dms modify-replication-instance --replication-instance-arn <arn> --no-publicly-accessible
   FIX
 
   tag checkov_id:            'CKV_AWS_89'
@@ -34,9 +47,31 @@ control 'CKV_AWS_89' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_dms_replication_instance]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dms_replication_instance#publicly-accessible'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-7', 'SC-7 (5)']
+  tag nist_r4:               ['SC-7', 'SC-7 (5)']
+  tag cci:                   ['CCI-001097', 'CCI-002080']
+  tag ksi:                   ['KSI-CNA-NDS']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_89 — no deployed-asset reader for aws_dms_replication_instance" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_dms_replication_instance', regions: scan_regions)
+
+  # A field the API did not return is nil, and nil is not a failing value: the
+  # asset does not express this setting, so it is out of scope for this check
+  # rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt).reject { |a| a[:publicly_accessible].nil? }
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_dms_replication_instance in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_dms_replication_instance #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:publicly_accessible] }
+      it { should eq false }
+    end
   end
 end

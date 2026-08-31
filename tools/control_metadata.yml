@@ -442,3 +442,143 @@ CKV_AWS_134:
   ksi: ['KSI-RPL-ABO']
   rationale: >-
     A retention limit of zero disables backups entirely, so a cache holding the only copy of a computed result has no recovery point.
+
+CKV_AWS_50:
+  severity: low
+  impact: 0.3
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Without X-Ray tracing a latency or error question about a function has no per-invocation evidence, only aggregate metrics.
+
+CKV_AWS_272:
+  severity: medium
+  impact: 0.5
+  nist: ['SR-3', 'SI-7']
+  nist_r4: ['SR-3', 'SI-7']
+  cci: ['CCI-005080', 'CCI-002703']
+  ksi: ['KSI-SVC-VRI']
+  rationale: >-
+    Code signing is what makes an unauthorised deployment package fail to run rather than run unnoticed.
+
+CKV_AWS_173:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Environment variables hold configuration that is frequently credentials; with the default key they are encrypted with a key the account cannot rotate or revoke.
+
+CKV_AWS_158:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Log groups routinely contain request payloads and identifiers; with the default key they are encrypted with a key the account cannot rotate or revoke.
+
+CKV_AWS_66:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    A log group with no retention keeps everything forever, which is a cost problem and a discovery problem, and says nobody decided how long these logs matter.
+
+CKV_AWS_163:
+  severity: medium
+  impact: 0.5
+  nist: ['CM-6', 'SI-2']
+  nist_r4: ['CM-6', 'SI-2']
+  cci: ['CCI-000366', 'CCI-001227']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    Without scan-on-push, a vulnerable image is discovered when someone runs a scan, not when it is pushed.
+
+CKV_AWS_51:
+  severity: medium
+  impact: 0.5
+  nist: ['SR-3', 'SI-7']
+  nist_r4: ['SR-3', 'SI-7']
+  cci: ['CCI-005080', 'CCI-002703']
+  ksi: ['KSI-SVC-VRI']
+  rationale: >-
+    A mutable tag means the image running today may not be the image that was scanned and approved under that tag.
+
+CKV_AWS_136:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default AES256 encryption uses a key the account does not control; KMS makes the key auditable and revocable.
+
+CKV_AWS_155:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The user volume holds whatever the person saved; unencrypted it is readable from the storage layer without their session.
+
+CKV_AWS_156:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The root volume holds the profile and cached credentials of whoever uses the WorkSpace.
+
+CKV_AWS_89:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A replication instance reads from a source database and writes to a target; publicly reachable, it is a route between both.
+
+CKV_AWS_222:
+  severity: medium
+  impact: 0.5
+  nist: ['CM-6', 'SI-2']
+  nist_r4: ['CM-6', 'SI-2']
+  cci: ['CCI-000366', 'CCI-001227']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    Without automatic minor upgrades the replication engine is patched only when someone schedules it.
+
+CKV_AWS_202:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Without TLS the cache protocol is plaintext on the wire, including the values it returns.
+
+CKV_AWS_201:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data.
