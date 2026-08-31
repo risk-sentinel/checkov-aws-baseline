@@ -117,6 +117,29 @@ CKV_AWS_124:
   rationale: Ensure that CloudFormation stacks are sending event notifications to an SNS topic. Anchors
     derived from the check's logging category, not reviewed control by control.
   severity: medium
+CKV_AWS_127:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: 'A classic load balancer listener with no certificate terminates in the clear, so everything
+    it carries — session cookies, credentials, the payload itself — crosses the public network readable
+    and modifiable in transit. One such listener is enough; it does not matter that the load balancer also
+    offers HTTPS if the plaintext port is still answering.'
+  severity: high
+  stronger: 'Checkov reads the listener blocks in the Terraform. This reads the listeners the load balancer
+    is actually serving, so a listener added out of band, or one left behind after a certificate was moved
+    to a different port, is assessed too.'
+  what: 'aws_elb: every listener block declares an ssl_certificate_id'
 CKV_AWS_130:
   cci: *id003
   impact: 0.7
@@ -509,6 +532,34 @@ CKV_AWS_239:
   rationale: DAX sits in front of DynamoDB and returns the same items. With the cluster endpoint left
     unencrypted, those items and the requests for them cross the VPC in cleartext.
   severity: high
+CKV_AWS_24:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: 'A security group is the last boundary in front of the instance, and SSH on port 22
+    is an administrative channel. Opened to 0.0.0.0/0 it is reachable from every host on the internet, so
+    the only remaining control is the credential — and the exposure is continuous, indexed by scanners
+    within minutes, and identical whether the rule was written deliberately or left behind by a debugging
+    session.'
+  severity: high
+  stronger: 'Two deliberate divergences from Checkov. It reads Terraform, so a rule added in the console,
+    by another pipeline or by an incident responder is invisible to it; this reads the rules AWS is
+    actually enforcing, whatever created them. And Checkov exempts any ingress block carrying
+    prefix_list_ids, which on a deployed rule would let a permission that ALSO opens 0.0.0.0/0 pass
+    unexamined — that exemption is not reproduced here.'
+  what: 'aws_security_group / aws_security_group_rule / aws_vpc_security_group_ingress_rule: an INGRESS rule whose
+    from_port..to_port span covers 22 — or whose protocol is -1, which Checkov reads as 0-65535 — and whose cidr_blocks
+    contain 0.0.0.0/0 or whose ipv6_cidr_blocks contain ::/0'
 CKV_AWS_248:
   cci:
   - CCI-001097
@@ -529,6 +580,34 @@ CKV_AWS_248:
     which permits all traffic between anything else that also inherited it. The domain then has no ingress
     boundary of its own.
   severity: medium
+CKV_AWS_25:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: 'A security group is the last boundary in front of the instance, and RDP on port 3389
+    is an administrative channel. Opened to 0.0.0.0/0 it is reachable from every host on the internet, so
+    the only remaining control is the credential — and the exposure is continuous, indexed by scanners
+    within minutes, and identical whether the rule was written deliberately or left behind by a debugging
+    session.'
+  severity: high
+  stronger: 'Two deliberate divergences from Checkov. It reads Terraform, so a rule added in the console,
+    by another pipeline or by an incident responder is invisible to it; this reads the rules AWS is
+    actually enforcing, whatever created them. And Checkov exempts any ingress block carrying
+    prefix_list_ids, which on a deployed rule would let a permission that ALSO opens 0.0.0.0/0 pass
+    unexamined — that exemption is not reproduced here.'
+  what: 'aws_security_group / aws_security_group_rule / aws_vpc_security_group_ingress_rule: an INGRESS rule whose
+    from_port..to_port span covers 3389 — or whose protocol is -1, which Checkov reads as 0-65535 — and whose cidr_blocks
+    contain 0.0.0.0/0 or whose ipv6_cidr_blocks contain ::/0'
 CKV_AWS_251:
   cci:
   - CCI-000169

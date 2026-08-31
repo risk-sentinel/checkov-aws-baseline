@@ -78,6 +78,33 @@ CKV_AWS_126:
       '
     terraform: "resource \"aws_instance\" \"app\" {\n  ami           = var.ami_id\n  instance_type = \"\
       t3.micro\"\n  monitoring    = true\n}\n"
+CKV_AWS_127:
+  aws_elb:
+    terraform: |
+      resource "aws_elb" "example" {
+        name    = "example"
+        subnets = [aws_subnet.example.id]
+
+        # Every listener terminates TLS. A plaintext listener alongside these is
+        # what fails the check, so the HTTP-to-HTTPS redirect belongs in the
+        # application or on an ALB, not as a second listener here.
+        listener {
+          lb_port            = 443
+          lb_protocol        = "https"
+          instance_port      = 8443
+          instance_protocol  = "https"
+          ssl_certificate_id = aws_acm_certificate.example.arn
+        }
+      }
+    cli: |
+      aws elb delete-load-balancer-listeners --load-balancer-name <name> --load-balancer-ports 80
+      aws elb create-load-balancer-listeners --load-balancer-name <name> --listeners Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTPS,InstancePort=8443,SSLCertificateId=<acm-arn>
+    note: There is no in-place fix for a plaintext listener. set-load-balancer-listener-ssl-certificate
+      swaps the certificate on a listener that already speaks HTTPS or SSL and cannot promote an
+      HTTP one, so the listener is deleted and recreated — which drops connections on that port.
+      Classic ELB is also the legacy product; on anything still being developed the durable
+      answer is an application or network load balancer, where the redirect is a listener rule
+      rather than a second plaintext listener.
 CKV_AWS_129:
   aws_db_instance:
     cli: "aws rds modify-db-instance --db-instance-identifier <id> \\\n  --cloudwatch-logs-export-configuration\
@@ -434,6 +461,57 @@ CKV_AWS_239:
       \n  iam_role_arn                     = aws_iam_role.dax.arn\n  node_type                       \
       \ = \"dax.r5.large\"\n  replication_factor               = 3\n  cluster_endpoint_encryption_type\
       \ = \"TLS\"\n\n  server_side_encryption {\n    enabled = true\n  }\n}\n"
+CKV_AWS_24:
+  aws_security_group:
+    terraform: |
+      resource "aws_security_group" "example" {
+        name   = "example"
+        vpc_id = aws_vpc.example.id
+
+        # SSH arrives from the bastion's security group, never from a CIDR.
+        # There is no ingress block carrying cidr_blocks = ["0.0.0.0/0"] at all —
+        # narrowing it to a corporate range would still be a CIDR rule, and the
+        # range changes without the security group changing with it.
+        ingress {
+          description     = "SSH from the bastion"
+          from_port       = 22
+          to_port         = 22
+          protocol        = "tcp"
+          security_groups = [aws_security_group.bastion.id]
+        }
+      }
+    cli: |
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --protocol tcp --port 22 --cidr 0.0.0.0/0
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=22,ToPort=22,Ipv6Ranges=[{CidrIpv6=::/0}]
+    note: The revoke closes the exposure now and the next terraform apply reopens it if the
+      HCL still carries the rule, so the CLI is the containment step and the Terraform change
+      is the fix. A permission whose port range merely SPANS 22 — 0-65535, or an IpProtocol
+      of "-1", which AWS stores with no ports at all — has to be revoked with the range it was
+      created with, not with --port 22.
+  aws_security_group_rule:
+    terraform: |
+      resource "aws_security_group_rule" "ssh_from_bastion" {
+        type                     = "ingress"
+        security_group_id        = aws_security_group.example.id
+        source_security_group_id = aws_security_group.bastion.id
+        from_port                = 22
+        to_port                  = 22
+        protocol                 = "tcp"
+        description              = "SSH from the bastion"
+      }
+    note: aws_security_group_rule is deprecated in favour of
+      aws_vpc_security_group_ingress_rule; both land on the same API and both are assessed
+      here, because the deployed rule carries no record of which one wrote it.
+  aws_vpc_security_group_ingress_rule:
+    terraform: |
+      resource "aws_vpc_security_group_ingress_rule" "ssh_from_bastion" {
+        security_group_id            = aws_security_group.example.id
+        referenced_security_group_id = aws_security_group.bastion.id
+        from_port                    = 22
+        to_port                      = 22
+        ip_protocol                  = "tcp"
+        description                  = "SSH from the bastion"
+      }
 CKV_AWS_248:
   aws_elasticsearch_domain:
     cli: 'aws es update-elasticsearch-domain-config --domain-name <name> --vpc-options SecurityGroupIds=<sg-id>,SubnetIds=<subnet-ids>
@@ -452,6 +530,57 @@ CKV_AWS_248:
     terraform: "resource \"aws_opensearch_domain\" \"search\" {\n  domain_name    = \"search\"\n  engine_version\
       \ = \"OpenSearch_2.11\"\n\n  vpc_options {\n    subnet_ids         = var.private_subnet_ids\n  \
       \  security_group_ids = [aws_security_group.search.id]\n  }\n}\n"
+CKV_AWS_25:
+  aws_security_group:
+    terraform: |
+      resource "aws_security_group" "example" {
+        name   = "example"
+        vpc_id = aws_vpc.example.id
+
+        # RDP arrives from the bastion's security group, never from a CIDR.
+        # There is no ingress block carrying cidr_blocks = ["0.0.0.0/0"] at all —
+        # narrowing it to a corporate range would still be a CIDR rule, and the
+        # range changes without the security group changing with it.
+        ingress {
+          description     = "RDP from the bastion"
+          from_port       = 3389
+          to_port         = 3389
+          protocol        = "tcp"
+          security_groups = [aws_security_group.bastion.id]
+        }
+      }
+    cli: |
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --protocol tcp --port 3389 --cidr 0.0.0.0/0
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=3389,ToPort=3389,Ipv6Ranges=[{CidrIpv6=::/0}]
+    note: The revoke closes the exposure now and the next terraform apply reopens it if the
+      HCL still carries the rule, so the CLI is the containment step and the Terraform change
+      is the fix. A permission whose port range merely SPANS 3389 — 0-65535, or an IpProtocol
+      of "-1", which AWS stores with no ports at all — has to be revoked with the range it was
+      created with, not with --port 3389.
+  aws_security_group_rule:
+    terraform: |
+      resource "aws_security_group_rule" "rdp_from_bastion" {
+        type                     = "ingress"
+        security_group_id        = aws_security_group.example.id
+        source_security_group_id = aws_security_group.bastion.id
+        from_port                = 3389
+        to_port                  = 3389
+        protocol                 = "tcp"
+        description              = "RDP from the bastion"
+      }
+    note: aws_security_group_rule is deprecated in favour of
+      aws_vpc_security_group_ingress_rule; both land on the same API and both are assessed
+      here, because the deployed rule carries no record of which one wrote it.
+  aws_vpc_security_group_ingress_rule:
+    terraform: |
+      resource "aws_vpc_security_group_ingress_rule" "rdp_from_bastion" {
+        security_group_id            = aws_security_group.example.id
+        referenced_security_group_id = aws_security_group.bastion.id
+        from_port                    = 3389
+        to_port                      = 3389
+        ip_protocol                  = "tcp"
+        description                  = "RDP from the bastion"
+      }
 CKV_AWS_251:
   aws_cloudtrail:
     cli: 'aws cloudtrail start-logging --name org-trail

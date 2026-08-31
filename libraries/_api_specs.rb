@@ -138,6 +138,17 @@ API_SPECS = {
     'id' => 'file_system_id',
     'list' => 'describe_file_systems'
   },
+  'aws_elb' => {
+    'client' => 'Aws::ElasticLoadBalancing::Client',
+    'collection' => 'load_balancer_descriptions',
+    'fields' => {
+      'listener_descriptions' => 'listener_descriptions'
+    },
+    'gem' => 'aws-sdk-elasticloadbalancing',
+    'id' => 'load_balancer_name',
+    'list' => 'describe_load_balancers',
+    'scope' => 'regional'
+  },
   'aws_emr_cluster' => {
     'arn' => 'cluster_arn',
     'client' => 'Aws::EMR::Client',
@@ -274,6 +285,19 @@ API_SPECS = {
     'gem' => 'aws-sdk-secretsmanager',
     'id' => 'name',
     'list' => 'list_secrets'
+  },
+  'aws_security_group' => {
+    'arn' => 'security_group_arn',
+    'client' => 'Aws::EC2::Client',
+    'collection' => 'security_groups',
+    'fields' => {
+      'ip_permissions' => 'ip_permissions',
+      'ip_permissions_egress' => 'ip_permissions_egress'
+    },
+    'gem' => 'aws-sdk-ec2',
+    'id' => 'group_id',
+    'list' => 'describe_security_groups',
+    'scope' => 'regional'
   },
   'aws_sfn_state_machine' => {
     'arn' => 'state_machine_arn',

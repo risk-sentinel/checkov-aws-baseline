@@ -2,30 +2,85 @@
 #
 # Rule:        CKV_AWS_127 (checkov 3.3.16)
 # Applies to:  aws_elb
-# Status:      PLANNED — no deployed-asset reader exists for aws_elb yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_127'] || []
+
+# Conditions applied to each ELEMENT of the collection this check judges.
+# An element matches when EVERY condition holds; a condition holds when SOME
+# value reachable at ANY of its paths satisfies the test. `when_absent` is the
+# verdict when a path reaches nothing at all, which is how a member the API
+# omits is given its documented meaning. Generated from resource_map.yml by
+# tools/render_controls.py; the walk is libraries/_checkov_collection.rb.
+element_conditions = [
+  # listener.ssl_certificate_id is set
+  { paths: ['listener.ssl_certificate_id'],
+    test: ->(v) { !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } },
+].freeze
 
 control 'CKV_AWS_127' do
-  impact 0.0
   title 'Ensure that Elastic Load Balancer(s) uses SSL certificates provided by AWS Certificate Manager'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_elb in this profile, so there is nothing to assert against.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_elb resources that actually exist, enumerated through the
+    declarative API spec.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov reads the listener blocks in the Terraform. This reads the
+    listeners the load balancer is actually serving, so a listener added out
+    of band, or one left behind after a certificate was moved to a different
+    port, is assessed too.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A classic load balancer listener with no certificate terminates in the
+    clear, so everything it carries — session cookies, credentials, the
+    payload itself — crosses the public network readable and modifiable in
+    transit. One such listener is enough; it does not matter that the load
+    balancer also offers HTTPS if the plaintext port is still answering.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure that Elastic Load Balancer(s) uses SSL certificates provided by AWS Certificate Manager
+    Checkov looks for: aws_elb: every listener block declares an
+    ssl_certificate_id
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb
+    Terraform — aws_elb:
+
+      resource "aws_elb" "example" {
+        name    = "example"
+        subnets = [aws_subnet.example.id]
+
+        # Every listener terminates TLS. A plaintext listener alongside these is
+        # what fails the check, so the HTTP-to-HTTPS redirect belongs in the
+        # application or on an ALB, not as a second listener here.
+        listener {
+          lb_port            = 443
+          lb_protocol        = "https"
+          instance_port      = 8443
+          instance_protocol  = "https"
+          ssl_certificate_id = aws_acm_certificate.example.arn
+        }
+      }
+
+    Out of band — aws_elb:
+
+      aws elb delete-load-balancer-listeners --load-balancer-name <name> --load-balancer-ports 80
+      aws elb create-load-balancer-listeners --load-balancer-name <name> --listeners Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTPS,InstancePort=8443,SSLCertificateId=<acm-arn>
+
+    Note (aws_elb): There is no in-place fix for a plaintext listener.
+    set-load-balancer-listener-ssl-certificate swaps the certificate on a
+    listener that already speaks HTTPS or SSL and cannot promote an HTTP one, so
+    the listener is deleted and recreated — which drops connections on that
+    port. Classic ELB is also the legacy product; on anything still being
+    developed the durable answer is an application or network load balancer,
+    where the redirect is a listener rule rather than a second plaintext
+    listener.
   FIX
 
   tag checkov_id:            'CKV_AWS_127'
@@ -34,9 +89,60 @@ control 'CKV_AWS_127' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_elb]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/elb'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_127 — no deployed-asset reader for aws_elb" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_elb', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_elb enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A collection roll-up is not nil-filtered: an asset that does not
+  # express the field is part of the population the guard below counts,
+  # and for any_of it is precisely the failing case.
+  in_scope = assets.assets(exempt: exempt)
+
+  # all_of is vacuously TRUE over an empty collection, so an asset that did
+  # not carry this field passes without being examined. For one asset with no
+  # elements that is the right answer; when it is EVERY asset the control can no
+  # longer fail, and a control that cannot fail reads as compliant rather than as
+  # a mapping naming a field this API does not return.
+  exposing = in_scope.count { |a| !a[:listener_descriptions].nil? }
+  describe 'aws_elb listener_descriptions' do
+    it 'was returned for at least one asset in scope' do
+      expect(exposing).to be_positive,
+        'no asset in scope exposed listener_descriptions, so the roll-up below cannot fail: '\
+        'either resource_map.yml names a field this API does not return, or '\
+        'nothing in this boundary expresses it'
+    end
+  end
+
+  applicable = !in_scope.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if('no aws_elb in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_elb #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:listener_descriptions] }
+      it { should satisfy("have only elements where listener.ssl_certificate_id is set") { |v| ::CheckovCollection.all_of?(v, element_conditions) } }
+    end
   end
 end

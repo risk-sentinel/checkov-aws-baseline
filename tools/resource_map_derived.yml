@@ -92,6 +92,21 @@ checks:
         ids: names
         resource: aws_cloudformation_stacks
       reader: stock
+  CKV_AWS_127:
+    aws_elb:
+      conditions:
+      - path: listener.ssl_certificate_id
+        satisfies: not_empty
+      field: listener_descriptions
+      note: 'Confirmed against botocore elasticloadbalancing: DescribeLoadBalancers takes no required
+        arguments and returns LoadBalancerDescriptions[].ListenerDescriptions[].Listener.SSLCertificateId
+        (SDK: listener_descriptions.listener.ssl_certificate_id). Checkov fails the load balancer when ANY
+        listener block omits ssl_certificate_id, so the roll-up is all_of, not any_of — a listener without
+        a certificate is the finding even when a sibling has one. The vendored aws_elb keeps
+        load_balancer_description as a raw Aws struct, so the listener array is not reachable by dotted
+        path there; the api reader hands back plain nested hashes the walk can cross.'
+      reader: api
+      satisfies: all_of
   CKV_AWS_130:
     aws_subnet:
       assert:
@@ -408,6 +423,37 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
+  CKV_AWS_24:
+    aws_security_group:
+      conditions:
+      - path: from_port
+        satisfies: at_most
+        value: 22
+        when_absent: true
+      - path: to_port
+        satisfies: at_least
+        value: 22
+        when_absent: true
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - '0.0.0.0/0'
+        - '::/0'
+        - '0000:0000:0000:0000:0000:0000:0000:0000/0'
+      field: ip_permissions
+      note: 'Confirmed against botocore ec2: DescribeSecurityGroups takes no required arguments and returns
+        IpPermissions[] inline, with IpRanges[].CidrIp and Ipv6Ranges[].CidrIpv6 (SDK: ip_ranges.cidr_ip,
+        ipv_6_ranges.cidr_ipv_6). The reader is `api` rather than `stock` on purpose: the vendored
+        aws_security_group answers this as allow_in?(port:, ipv4_range:), which is a predicate TAKING
+        ARGUMENTS and so unreachable from a bare `property`, and it re-describes one group per call.
+        when_absent on both port conditions is the deployed equivalent of Checkov''s protocol -1 case:
+        Checkov reads TF''s from_port = 0 / to_port = 0 and widens it to 0-65535, while AWS stores an
+        IpProtocol "-1" rule with NO FromPort or ToPort at all, so "the member is absent" is exactly
+        "every port". Two deliberate divergences from Checkov, both stated in `stronger`.'
+      reader: api
+      satisfies: none_of
   CKV_AWS_248:
     aws_elasticsearch_domain: &id003
       assert:
@@ -423,6 +469,37 @@ checks:
         is real.
       reader: stock
     aws_opensearch_domain: *id003
+  CKV_AWS_25:
+    aws_security_group:
+      conditions:
+      - path: from_port
+        satisfies: at_most
+        value: 3389
+        when_absent: true
+      - path: to_port
+        satisfies: at_least
+        value: 3389
+        when_absent: true
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - '0.0.0.0/0'
+        - '::/0'
+        - '0000:0000:0000:0000:0000:0000:0000:0000/0'
+      field: ip_permissions
+      note: 'Confirmed against botocore ec2: DescribeSecurityGroups takes no required arguments and returns
+        IpPermissions[] inline, with IpRanges[].CidrIp and Ipv6Ranges[].CidrIpv6 (SDK: ip_ranges.cidr_ip,
+        ipv_6_ranges.cidr_ipv_6). The reader is `api` rather than `stock` on purpose: the vendored
+        aws_security_group answers this as allow_in?(port:, ipv4_range:), which is a predicate TAKING
+        ARGUMENTS and so unreachable from a bare `property`, and it re-describes one group per call.
+        when_absent on both port conditions is the deployed equivalent of Checkov''s protocol -1 case:
+        Checkov reads TF''s from_port = 0 / to_port = 0 and widens it to 0-65535, while AWS stores an
+        IpProtocol "-1" rule with NO FromPort or ToPort at all, so "the member is absent" is exactly
+        "every port". Two deliberate divergences from Checkov, both stated in `stronger`.'
+      reader: api
+      satisfies: none_of
   CKV_AWS_251:
     aws_cloudtrail:
       assert:

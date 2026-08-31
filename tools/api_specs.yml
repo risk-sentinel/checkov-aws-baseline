@@ -119,6 +119,20 @@ aws_efs_file_system:
   gem: aws-sdk-efs
   id: file_system_id
   list: describe_file_systems
+aws_elb:
+  # Classic ELB. inspec-aws ships aws_elb, but it keeps load_balancer_description
+  # as a raw Aws struct, so the listener array is not reachable by dotted path.
+  # Enumerated here instead because a collection roll-up needs the response as
+  # plain nested hashes, and elb:DescribeLoadBalancers takes no required
+  # arguments so one call per region answers the whole account.
+  client: Aws::ElasticLoadBalancing::Client
+  collection: load_balancer_descriptions
+  fields:
+    listener_descriptions: listener_descriptions
+  gem: aws-sdk-elasticloadbalancing
+  id: load_balancer_name
+  list: describe_load_balancers
+  scope: regional
 aws_emr_cluster:
   arn: cluster_arn
   client: Aws::EMR::Client
@@ -236,6 +250,25 @@ aws_secretsmanager_secret:
   gem: aws-sdk-secretsmanager
   id: name
   list: list_secrets
+aws_security_group:
+  # inspec-aws ships aws_security_group, and its allow_in?(port:, ipv4_range:)
+  # answers the unrestricted-ingress checks — but it is a predicate TAKING
+  # ARGUMENTS and the mapping schema's `property` is a bare method name, so it
+  # is unreachable from data. It also re-describes one group per call.
+  # ec2:DescribeSecurityGroups takes no required arguments and returns
+  # IpPermissions inline, so one paginated call per region enumerates every
+  # group WITH its rules, and the rules arrive as plain nested hashes a
+  # collection roll-up can walk.
+  arn: security_group_arn
+  client: Aws::EC2::Client
+  collection: security_groups
+  fields:
+    ip_permissions: ip_permissions
+    ip_permissions_egress: ip_permissions_egress
+  gem: aws-sdk-ec2
+  id: group_id
+  list: describe_security_groups
+  scope: regional
 aws_sfn_state_machine:
   arn: state_machine_arn
   client: Aws::States::Client
