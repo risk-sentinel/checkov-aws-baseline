@@ -1344,6 +1344,26 @@ CKV_AWS_71:
   rationale: Ensure Redshift Cluster logging is enabled. Anchors derived from the check's logging category,
     not reviewed control by control.
   severity: medium
+CKV_AWS_73:
+  cci:
+  - CCI-000130
+  - CCI-000169
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  - SI-4
+  nist_r4:
+  - AU-2
+  - AU-12
+  - SI-4
+  nist_source: agent-drafted
+  rationale: Without X-Ray tracing an API Gateway stage produces no per-request span, so a latency
+    anomaly or an abused route cannot be reconstructed after the fact. Access logs record that a call
+    happened; the trace is what shows where it went.
+  severity: medium
 CKV_AWS_74:
   cci:
   - CCI-001199

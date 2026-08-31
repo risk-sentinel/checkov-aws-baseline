@@ -10,6 +10,11 @@
 #   CKV_AWS_58: same as CKV_AWS_37
 #   CKV_AWS_339: same as CKV_AWS_37
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
+#
+# Restored on the two-step (parent -> child) api reader, which enumerates parents itself and so
+# never constructs the nil id the stock plural produced: CKV_AWS_39 and CKV_AWS_238. The other
+# EKS removals (CKV_AWS_37/58/339) are unblocked by the same aws_eks_cluster spec and are left
+# for the data pass. Not exec-validated -- no credentials were available when they were written.
 checks:
   CKV_AWS_116:
     aws_lambda_function:
@@ -408,6 +413,21 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      field: status
+      note: 'TWO-STEP READER. Terraform''s argument is `enable`, a boolean; the API has no boolean
+        at all -- GetDetector.Status is a string whose enum is [ENABLED, DISABLED], confirmed from
+        botocore guardduty 2017-11-28. This replaces the mapping resource_map_derived.yml deleted for
+        yielding non-String ids from the stock aws_guardduty_detectors. SCOPE, stated rather than
+        assumed: a region that has never had GuardDuty enabled has no detector, so it enumerates zero
+        parents and the control renders Not Applicable there, with the parent count in the skip
+        message. That matches the rest of this profile -- it asserts about resources that exist -- and
+        it is a WEAKER claim than Checkov''s, which fails a Terraform module that declares no detector
+        at all. Account-wide GuardDuty coverage is a different check and needs a different reader.'
+      reader: api
+      satisfies: equals
+      value: ENABLED
   CKV_AWS_248:
     aws_elasticsearch_domain: &id003
       assert:
@@ -788,6 +808,20 @@ checks:
         ids: names
         resource: aws_launch_configurations
       reader: stock
+  CKV_AWS_39:
+    aws_eks_cluster:
+      field: endpoint_public_access
+      note: 'TWO-STEP READER, and the repair for the stock mapping deleted above: aws_eks_clusters.names
+        yields nil rows in an account with no clusters and the singular resource then rejects a nil
+        cluster_name. A reader that enumerates parents itself never constructs that nil. Checkov reads
+        vpc_config[0].endpoint_public_access; the API member is
+        Cluster.ResourcesVpcConfig.EndpointPublicAccess, confirmed from botocore eks 2017-11-01. AWS
+        always populates it, so no cluster is filtered out of scope -- both true and false are asserted
+        on. That depends on dig_path distinguishing a `false` value from a missing key, which it did
+        NOT do until this change.'
+      reader: api
+      satisfies: equals
+      value: false
   CKV_AWS_42:
     aws_efs_file_system:
       assert:
@@ -904,6 +938,18 @@ checks:
         ids: cluster_identifiers
         resource: aws_redshift_clusters
       reader: stock
+  CKV_AWS_73:
+    aws_api_gateway_stage:
+      field: tracing_enabled
+      note: 'TWO-STEP READER. A stage cannot be enumerated account-wide at all: apigateway.GetStages
+        requires a restApiId, so the reader lists REST APIs first and calls GetStages once per API.
+        Terraform''s argument is xray_tracing_enabled; the API member is Stage.TracingEnabled,
+        confirmed from botocore apigateway 2015-07-09. AWS returns it for every stage, so nothing is
+        filtered out of scope. NOT mapped for aws_apigatewayv2_stage: API Gateway v2 has no X-Ray
+        member on Stage, so the rule is v1-only when assessed deployed.'
+      reader: api
+      satisfies: equals
+      value: true
   CKV_AWS_81:
     aws_msk_cluster:
       field: encryption_in_transit_client_broker

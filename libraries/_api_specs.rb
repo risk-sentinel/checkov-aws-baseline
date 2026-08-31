@@ -16,6 +16,27 @@ API_SPECS = {
     'id' => 'domain_name',
     'list' => 'list_certificates'
   },
+  'aws_api_gateway_stage' => {
+    'client' => 'Aws::APIGateway::Client',
+    'gem' => 'aws-sdk-apigateway',
+    'parent' => {
+      'collection' => 'items',
+      'id' => 'id',
+      'list' => 'get_rest_apis'
+    },
+    'arg' => 'rest_api_id',
+    'list' => 'get_stages',
+    'collection' => 'item',
+    'id' => 'stage_name',
+    'scope' => 'regional',
+    'fields' => {
+      'access_log_destination_arn' => 'access_log_settings.destination_arn',
+      'cache_cluster_enabled' => 'cache_cluster_enabled',
+      'client_certificate_id' => 'client_certificate_id',
+      'tracing_enabled' => 'tracing_enabled',
+      'web_acl_arn' => 'web_acl_arn'
+    }
+  },
   'aws_apprunner_service' => {
     'arn' => 'service_arn',
     'client' => 'Aws::AppRunner::Client',
@@ -138,6 +159,29 @@ API_SPECS = {
     'id' => 'file_system_id',
     'list' => 'describe_file_systems'
   },
+  'aws_eks_cluster' => {
+    'arn' => 'arn',
+    'client' => 'Aws::EKS::Client',
+    'gem' => 'aws-sdk-eks',
+    'parent' => {
+      'collection' => 'clusters',
+      'id' => '_self',
+      'list' => 'list_clusters'
+    },
+    'arg' => 'name',
+    'list' => 'describe_cluster',
+    'collection' => 'cluster',
+    'id' => 'name',
+    'scope' => 'regional',
+    'fields' => {
+      'encryption_config' => 'encryption_config',
+      'endpoint_private_access' => 'resources_vpc_config.endpoint_private_access',
+      'endpoint_public_access' => 'resources_vpc_config.endpoint_public_access',
+      'public_access_cidrs' => 'resources_vpc_config.public_access_cidrs',
+      'status' => 'status',
+      'version' => 'version'
+    }
+  },
   'aws_emr_cluster' => {
     'arn' => 'cluster_arn',
     'client' => 'Aws::EMR::Client',
@@ -158,6 +202,26 @@ API_SPECS = {
     'gem' => 'aws-sdk-glue',
     'id' => 'name',
     'list' => 'get_crawlers'
+  },
+  'aws_guardduty_detector' => {
+    'client' => 'Aws::GuardDuty::Client',
+    'gem' => 'aws-sdk-guardduty',
+    'parent' => {
+      'collection' => 'detector_ids',
+      'id' => '_self',
+      'list' => 'list_detectors'
+    },
+    'arg' => 'detector_id',
+    'list' => 'get_detector',
+    'collection' => '_response',
+    'id' => '_parent',
+    'scope' => 'regional',
+    'fields' => {
+      'cloudtrail_status' => 'data_sources.cloud_trail.status',
+      'finding_publishing_frequency' => 'finding_publishing_frequency',
+      's3_logs_status' => 'data_sources.s3_logs.status',
+      'status' => 'status'
+    }
   },
   'aws_kinesis_stream' => {
     'arn' => 'stream_arn',

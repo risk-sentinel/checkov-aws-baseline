@@ -2,30 +2,53 @@
 #
 # Rule:        CKV_AWS_73 (checkov 3.3.16)
 # Applies to:  aws_api_gateway_stage
-# Status:      PLANNED — no deployed-asset reader exists for aws_api_gateway_stage yet.
+# Read with:   aws_api_assets (two-step parent -> child spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_73'] || []
 
 control 'CKV_AWS_73' do
-  impact 0.0
   title 'Ensure API Gateway has X-Ray Tracing enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_api_gateway_stage in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_api_gateway_stage resources that actually exist, enumerated
+    through the two-step (parent -> child) declarative API spec.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    Without X-Ray tracing an API Gateway stage produces no per-request span,
+    so a latency anomaly or an abused route cannot be reconstructed after
+    the fact. Access logs record that a call happened; the trace is what
+    shows where it went.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_api_gateway_stage: xray_tracing_enabled is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage#xray-tracing-enabled
+    Terraform — aws_api_gateway_stage:
+
+      resource "aws_api_gateway_stage" "example" {
+        rest_api_id          = aws_api_gateway_rest_api.example.id
+        deployment_id        = aws_api_gateway_deployment.example.id
+        stage_name           = "prod"
+        xray_tracing_enabled = true
+      }
+
+    Out of band — aws_api_gateway_stage:
+
+      aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/tracingEnabled,value=true
+
+    Note (aws_api_gateway_stage): X-Ray sampling is billed per trace, so a
+    high-traffic stage wants a sampling rule rather than the default 1
+    request/second plus 5%. The setting lives on the STAGE, so a new stage
+    created by a deployment pipeline starts with tracing off unless the pipeline
+    sets it.
   FIX
 
   tag checkov_id:            'CKV_AWS_73'
@@ -34,9 +57,60 @@ control 'CKV_AWS_73' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_api_gateway_stage]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_stage#xray-tracing-enabled'
-  tag implementation_status: 'planned'
+  tag nist:                  ['AU-2', 'AU-12', 'SI-4']
+  tag nist_r4:               ['AU-2', 'AU-12', 'SI-4']
+  tag cci:                   ['CCI-000130', 'CCI-000169']
+  tag ksi:                   ['KSI-MLA-LOG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_73 — no deployed-asset reader for aws_api_gateway_stage" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_api_gateway_stage', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_api_gateway_stage enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A child list call that failed took a whole SUBTREE with it. That is not
+  # "this parent had nothing", and it must never render as one: it is reported
+  # per parent here, and it keeps the control APPLICABLE below so that only_if
+  # cannot turn a broken enumeration into "does not apply here".
+  parent_failures = assets.parent_failures
+  unless parent_failures.empty?
+    describe "aws_api_gateway_stage enumeration" do
+      it 'read the children of every parent it enumerated' do
+        expect(parent_failures.map { |f| "#{f[:region]}/#{f[:parent_id]}: #{f[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = assets.assets(exempt: exempt)
+                   .reject { |a| a[:tracing_enabled].nil? }
+
+  applicable = !in_scope.empty? || !parent_failures.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if("no aws_api_gateway_stage in scope expressing this setting "\
+          "(#{assets.parents_seen} parent(s) enumerated by get_rest_apis)") { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_api_gateway_stage #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:tracing_enabled] }
+      it { should eq true }
+    end
   end
 end

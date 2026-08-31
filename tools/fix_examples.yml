@@ -885,6 +885,26 @@ CKV_AWS_383:
       \n  instruction             = var.agent_instruction\n\n  guardrail_configuration {\n    guardrail_identifier\
       \ = aws_bedrock_guardrail.assistant.guardrail_id\n    guardrail_version    = aws_bedrock_guardrail.assistant.version\n\
       \  }\n}\n"
+CKV_AWS_39:
+  aws_eks_cluster:
+    note: >-
+      Turning the public endpoint off requires operators and any CI runner to reach the API
+      server from inside the VPC -- a VPN, Direct Connect, or an in-VPC runner. Arrange that
+      first or the cluster becomes unmanageable the moment this applies. Where public access
+      must stay, public_access_cidrs is the partial mitigation, and it is a different check.
+    terraform: |
+      resource "aws_eks_cluster" "example" {
+        name     = "app"
+        role_arn = aws_iam_role.eks.arn
+
+        vpc_config {
+          subnet_ids              = var.private_subnet_ids
+          endpoint_public_access  = false
+          endpoint_private_access = true
+        }
+      }
+    cli: |
+      aws eks update-cluster-config --name app --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true
 CKV_AWS_44:
   aws_neptune_cluster:
     cli: 'There is no in-place fix. Neptune storage encryption is set at creation
@@ -1017,6 +1037,21 @@ CKV_AWS_67:
     terraform: "resource \"aws_cloudtrail\" \"org\" {\n  name                          = \"org-trail\"\
       \n  s3_bucket_name                = aws_s3_bucket.trail.id\n  is_multi_region_trail         = true\n\
       \  include_global_service_events = true\n  enable_log_file_validation    = true\n}\n"
+CKV_AWS_73:
+  aws_api_gateway_stage:
+    note: >-
+      X-Ray sampling is billed per trace, so a high-traffic stage wants a sampling rule rather
+      than the default 1 request/second plus 5%. The setting lives on the STAGE, so a new stage
+      created by a deployment pipeline starts with tracing off unless the pipeline sets it.
+    terraform: |
+      resource "aws_api_gateway_stage" "example" {
+        rest_api_id          = aws_api_gateway_rest_api.example.id
+        deployment_id        = aws_api_gateway_deployment.example.id
+        stage_name           = "prod"
+        xray_tracing_enabled = true
+      }
+    cli: |
+      aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/tracingEnabled,value=true
 CKV_AWS_74:
   aws_docdb_cluster:
     cli: 'There is no in-place fix. DocumentDB storage encryption is set at
