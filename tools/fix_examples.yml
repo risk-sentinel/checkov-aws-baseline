@@ -1166,3 +1166,136 @@ CKV_AWS_96:
       '
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  storage_encrypted = true\n  kms_key_id \
       \       = aws_kms_key.rds.arn\n}\n"
+
+CKV_AWS_9:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_11:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_12:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_13:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_10:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_14:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
+
+CKV_AWS_15:
+  aws_iam_account_password_policy:
+    terraform: |
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+    cli: |
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24

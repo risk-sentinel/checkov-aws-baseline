@@ -2,30 +2,51 @@
 #
 # Rule:        CKV_AWS_15 (checkov 3.3.16)
 # Applies to:  aws_iam_account_password_policy
-# Status:      PLANNED — no deployed-asset reader exists for aws_iam_account_password_policy yet.
+# Read with:   aws_iam_password_policy — an account-level singleton, so there is nothing to enumerate
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
 
 control 'CKV_AWS_15' do
-  impact 0.0
   title 'Ensure IAM password policy requires at least one uppercase letter'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_iam_account_password_policy in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the account's own aws_iam_account_password_policy, which is a single
+    object rather than a collection.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Without reuse prevention a forced rotation can be satisfied by setting
+    the same password again. The guard is separate for the same reason as
+    the expiry one.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: aws_iam_account_password_policy: require_uppercase_characters is True
+    Checkov looks for: aws_iam_account_password_policy:
+    require_uppercase_characters is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_account_password_policy#require-uppercase-characters
+    Terraform — aws_iam_account_password_policy:
+
+      resource "aws_iam_account_password_policy" "strict" {
+        minimum_password_length        = 14
+        require_lowercase_characters   = true
+        require_uppercase_characters   = true
+        require_numbers                = true
+        require_symbols                = true
+        max_password_age               = 90
+        password_reuse_prevention      = 24
+        allow_users_to_change_password = true
+      }
+
+    Out of band — aws_iam_account_password_policy:
+
+      aws iam update-account-password-policy \
+        --minimum-password-length 14 --require-symbols --require-numbers \
+        --require-uppercase-characters --require-lowercase-characters \
+        --max-password-age 90 --password-reuse-prevention 24
   FIX
 
   tag checkov_id:            'CKV_AWS_15'
@@ -34,9 +55,39 @@ control 'CKV_AWS_15' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_iam_account_password_policy]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_account_password_policy#require-uppercase-characters'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-5', 'IA-5 (1)']
+  tag nist_r4:               ['IA-5', 'IA-5 (1)']
+  tag cci:                   ['CCI-000192', 'CCI-000205']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'reviewed'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_15 — no deployed-asset reader for aws_iam_account_password_policy" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  subject_resource = aws_iam_password_policy
+
+  # Always applicable. An account with no policy at all is the NON-COMPLIANT
+  # state for this rule, not an inapplicable one — rendering it Not Applicable
+  # would report the worst case as "does not apply here".
+  impact 0.5
+
+  describe 'aws_iam_account_password_policy' do
+    it 'is configured for this account' do
+      expect(subject_resource.exists?).to eq(true),
+        'no account-level policy is set, so nothing constrains this'
+    end
+  end
+
+  describe 'aws_iam_account_password_policy — prevent password reuse' do
+    it 'is enabled, so the value below is meaningful' do
+      expect(subject_resource.exists? && subject_resource.prevent_password_reuse?).to eq(true),
+        'the policy does not enable this, so the threshold it should satisfy is unenforced'
+    end
+  end
+
+  if subject_resource.exists? && subject_resource.prevent_password_reuse?
+    describe subject_resource do
+      its('number_of_passwords_to_remember') { should be >= 24 }
+    end
   end
 end

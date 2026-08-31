@@ -612,3 +612,73 @@ CKV_AWS_166:
   ksi: ['KSI-SVC-CER']
   rationale: >-
     A backup vault holds the copy that survives the incident; encrypting it with a customer-managed key keeps that copy under the same key control as the source.
+
+CKV_AWS_9:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    A policy that does not require lower-case characters permits a password drawn from a smaller alphabet, which shortens every offline cracking attempt against it.
+
+CKV_AWS_11:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Same as the lower-case requirement: each excluded character class shrinks the search space an attacker has to cover.
+
+CKV_AWS_12:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    A policy without a digit requirement permits all-alphabetic passwords, which are the first thing a wordlist attack tries.
+
+CKV_AWS_13:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Symbols are the character class most often omitted, and the one that most increases the cost of an offline attack.
+
+CKV_AWS_10:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Length dominates every other password property for resistance to offline attack. `at_least` rather than `greater_than`: a policy of exactly 14 satisfies a requirement of 14.
+
+CKV_AWS_14:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    An unexpiring password stays valid for as long as it stays undetected. The guard is separate because a policy that never expires passwords is itself the finding, and the reader raises rather than returning nil when expiry is off.
+
+CKV_AWS_15:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Without reuse prevention a forced rotation can be satisfied by setting the same password again. The guard is separate for the same reason as the expiry one.
