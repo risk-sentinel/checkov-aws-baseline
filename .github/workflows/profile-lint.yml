@@ -90,6 +90,14 @@ jobs:
             || { echo "::error::json produced no controls"; exit 1; }
           echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
 
+      - name: API specs name gems the image ships
+        # A spec whose gem is absent does not fail loudly: the reader rescues the
+        # LoadError, returns no rows, and the control renders Not Applicable.
+        # Four specs shipped in exactly that state.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_api_specs.py
+
       - name: Stock mappings match the resource pack
         # A control that reads a stock inspec-aws resource can only be
         # exec-validated in an account that HAS that resource type. A wrong

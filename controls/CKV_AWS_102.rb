@@ -2,48 +2,30 @@
 #
 # Rule:        CKV_AWS_102 (checkov 3.3.16)
 # Applies to:  aws_neptune_cluster_instance
-# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
+# Status:      PLANNED — no deployed-asset reader exists for aws_neptune_cluster_instance yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-scan_regions = input('scan_regions')
-exempt       = (input('exempt_assets') || {})['CKV_AWS_102'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_102' do
+  impact 0.0
   title 'Ensure Neptune Cluster instance is not publicly available'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_neptune_cluster_instance resources that actually exist,
-    enumerated through the declarative API spec.
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_neptune_cluster_instance in this profile, so there is nothing to assert against.
+
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
   DESC
 
-  desc 'rationale', <<~RATIONALE
-    A publicly accessible Neptune instance resolves to a public address, so
-    the only thing between the database and the internet is a security group
-    rule. Any widening of that rule, deliberate or accidental, exposes the
-    database directly rather than exposing it to the VPC.
-  RATIONALE
-
   desc 'check', <<~CHECK
-    Checkov looks for: aws_neptune_cluster_instance: publicly_accessible/[0]
-    is not True
+    Checkov looks for: aws_neptune_cluster_instance: publicly_accessible/[0] is not True
   CHECK
 
   desc 'fix', <<~'FIX'
-    Terraform — aws_neptune_cluster_instance:
-
-      resource "aws_neptune_cluster_instance" "graph" {
-        identifier          = "graph-1"
-        cluster_identifier  = aws_neptune_cluster.graph.id
-        instance_class      = "db.r5.large"
-        publicly_accessible = false
-      }
-
-    Out of band — aws_neptune_cluster_instance:
-
-      aws neptune modify-db-instance --db-instance-identifier graph-1 --no-publicly-accessible --apply-immediately
+    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster_instance#publicly-accessible
   FIX
 
   tag checkov_id:            'CKV_AWS_102'
@@ -52,32 +34,9 @@ control 'CKV_AWS_102' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_neptune_cluster_instance]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/neptune_cluster_instance#publicly-accessible'
-  tag nist:                  ['SC-7', 'SC-7 (5)']
-  tag nist_r4:               ['SC-7', 'SC-7 (5)']
-  tag cci:                   ['CCI-001097', 'CCI-002080']
-  tag ksi:                   ['KSI-CNA-NDS']
-  tag severity:              'high'
-  tag severity_source:       'assessed'
-  tag nist_source:           'agent-drafted'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  assets = aws_api_assets(type: 'aws_neptune_cluster_instance', regions: scan_regions)
-
-  # A field the API did not return is nil, and nil is not a failing value:
-  # the asset does not express this setting, so it is out of scope for this
-  # check rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt)
-                   .reject { |a| a[:publicly_accessible].nil? }
-
-  applicable = !in_scope.empty?
-  impact 0.7
-  impact 0.0 unless applicable
-  only_if('no aws_neptune_cluster_instance in scope expressing this setting') { applicable }
-
-  in_scope.each do |asset|
-    describe "aws_neptune_cluster_instance #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
-      subject { asset[:publicly_accessible] }
-      it { should eq false }
-    end
+  describe "CKV_AWS_102 — no deployed-asset reader for aws_neptune_cluster_instance" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end

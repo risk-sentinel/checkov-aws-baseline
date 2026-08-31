@@ -11,14 +11,6 @@
 #   CKV_AWS_339: same as CKV_AWS_37
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
 checks:
-  CKV_AWS_102:
-    aws_neptune_cluster_instance:
-      field: publicly_accessible
-      note: Checkov forbids publicly_accessible = true on the declared instance. DescribeDBInstances reports
-        what the instance actually resolves to, which also catches an instance modified outside Terraform.
-      reader: api
-      satisfies: equals
-      value: false
   CKV_AWS_116:
     aws_lambda_function:
       assert:
@@ -416,16 +408,6 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
-  CKV_AWS_239:
-    aws_dax_cluster:
-      field: cluster_endpoint_encryption_type
-      note: 'in_list with one element rather than `equals: TLS` on purpose: matcher_for renders equals
-        as `should eq {value.lower()}`, which for a string emits a bare Ruby identifier. in_list quotes
-        it.'
-      reader: api
-      satisfies: in_list
-      value:
-      - TLS
   CKV_AWS_248:
     aws_elasticsearch_domain: &id003
       assert:
@@ -501,14 +483,6 @@ checks:
         \ which is the same basis as the repo's existing CKV_AWS_191 ElastiCache mapping."
       reader: api
       satisfies: not_empty
-  CKV_AWS_279:
-    aws_neptune_cluster_snapshot:
-      field: storage_encrypted
-      note: 'Stronger than the IaC check: the check sees only snapshots Terraform declares, while DescribeDBClusterSnapshots
-        also returns automated and manually-taken snapshots, which are the ones that outlive the cluster.'
-      reader: api
-      satisfies: equals
-      value: true
   CKV_AWS_28:
     aws_dynamodb_table:
       assert:
@@ -555,12 +529,6 @@ checks:
       reader: api
       satisfies: equals
       value: DISABLED
-  CKV_AWS_292:
-    aws_docdb_global_cluster:
-      field: storage_encrypted
-      reader: api
-      satisfies: equals
-      value: true
   CKV_AWS_3:
     aws_ebs_volume:
       assert:
@@ -778,12 +746,6 @@ checks:
       note: 'Exact: the vendored field is EncryptionConfiguration.EnableInTransitEncryption, which is
         the key Checkov reads. Computed boolean, never nil.'
       reader: stock
-  CKV_AWS_359:
-    aws_neptune_cluster:
-      field: iam_database_authentication_enabled
-      reader: api
-      satisfies: equals
-      value: true
   CKV_AWS_36:
     aws_cloudtrail:
       assert:
@@ -796,29 +758,6 @@ checks:
         ids: names
         resource: aws_cloudtrail_trails
       reader: stock
-  CKV_AWS_360:
-    aws_docdb_cluster:
-      field: backup_retention_period
-      note: 'The catalogue records this check as kind `value` with expected `True`, which is a mis-derivation:
-        the check body is `conf.get("backup_retention_period", [1])[0] >= 7`. The threshold, not a boolean,
-        is what is asserted here.'
-      reader: api
-      satisfies: greater_than
-      value: 6
-  CKV_AWS_361:
-    aws_neptune_cluster:
-      field: backup_retention_period
-      note: 'Checkov''s threshold is `>= 7`; `greater_than: 6` is the same set over the integers the API
-        returns. BackupRetentionPeriod is always present.'
-      reader: api
-      satisfies: greater_than
-      value: 6
-  CKV_AWS_362:
-    aws_neptune_cluster:
-      field: copy_tags_to_snapshot
-      reader: api
-      satisfies: equals
-      value: true
   CKV_AWS_366:
     aws_cognito_identity_pool:
       assert:
@@ -837,17 +776,6 @@ checks:
       reader: api
       satisfies: equals
       value: true
-  CKV_AWS_383:
-    aws_bedrockagent_agent:
-      field: guardrail_identifier
-      note: "guardrailConfiguration.guardrailIdentifier is present in the ListAgents SUMMARY (confirmed\
-        \ against the botocore bedrock-agent model), so no per-agent GetAgent call is needed. Caveat:\
-        \ no existing api spec uses aws-sdk-bedrockagent, so gem presence in the sparc-auditor image is\
-        \ unverified here. A missing gem raises LoadError, which aws_api_assets converts to an unreadable\
-        \ region and an empty row set \u2014 the control then renders Not Applicable rather than erroring,\
-        \ so this must be confirmed on a live exec, not from `check`."
-      reader: api
-      satisfies: not_empty
   CKV_AWS_389:
     aws_launch_configuration:
       assert:
@@ -872,21 +800,6 @@ checks:
         ids: names
         resource: aws_efs_file_systems
       reader: stock
-  CKV_AWS_44:
-    aws_neptune_cluster:
-      field: storage_encrypted
-      note: DBCluster.StorageEncrypted is a boolean the API always returns, so the unencrypted population
-        is asserted on rather than filtered out.
-      reader: api
-      satisfies: equals
-      value: true
-  CKV_AWS_47:
-    aws_dax_cluster:
-      field: sse_status
-      reader: api
-      satisfies: in_list
-      value:
-      - ENABLED
   CKV_AWS_48:
     aws_mq_broker:
       assert:
@@ -991,12 +904,6 @@ checks:
         ids: cluster_identifiers
         resource: aws_redshift_clusters
       reader: stock
-  CKV_AWS_74:
-    aws_docdb_cluster:
-      field: storage_encrypted
-      reader: api
-      satisfies: equals
-      value: true
   CKV_AWS_81:
     aws_msk_cluster:
       field: encryption_in_transit_client_broker

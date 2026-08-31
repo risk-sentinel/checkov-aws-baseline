@@ -84,22 +84,33 @@ class AwsApiAssets < AwsResourceBase
     id
   end
 
-  def client
-    # Bundled in the image is not the same as loaded.
+  # A missing SDK gem is NOT an unreadable region. The control cannot perform the
+  # test as written at all, so it must surface as a profile error rather than as
+  # a finding, a skip, or an empty result set. Raised, deliberately uncaught by
+  # the region rescue below.
+  class MissingGem < StandardError; end
+
+  def load_sdk!
     require @spec["gem"] unless Object.const_defined?(@spec["client"])
+  rescue LoadError
+    raise MissingGem,
+          "#{@spec['gem']} is not installed in this runtime, so #{@type} cannot be " \
+          "enumerated. Add the gem to the auditor image (see tools/image_gems.txt " \
+          "and tools/lint_api_specs.py); do not read this control's result as a pass, " \
+          "a failure or a Not Applicable — nothing was assessed."
+  end
+
+  def client
+    load_sdk!
     @aws.aws_client(Object.const_get(@spec["client"]))
-  rescue LoadError => e
-    raise ArgumentError, "aws_api_assets: #{@spec['gem']} is not available in this image (#{e.message})"
   end
 
   # AwsConnection builds its clients for one region. A region walk needs one per
   # region, so the client class is instantiated directly rather than through the
   # connection's cached accessor.
   def regional_client(region)
-    require @spec["gem"] unless Object.const_defined?(@spec["client"])
+    load_sdk!
     Object.const_get(@spec["client"]).new(region: region)
-  rescue LoadError => e
-    raise ArgumentError, "aws_api_assets: #{@spec['gem']} unavailable (#{e.message})"
   end
 
   def regions
@@ -121,6 +132,10 @@ class AwsApiAssets < AwsResourceBase
     args = region ? { region: region } : {}
     api = region ? regional_client(region) : client
     collect(api, region)
+  rescue MissingGem
+    # Deliberately re-raised: filing this under unreadable_regions would turn
+    # "the profile cannot run this test" into "this region had nothing in it".
+    raise
   rescue ::Aws::Errors::ServiceError, ::Seahorse::Client::NetworkingError, ArgumentError => e
     @unreadable_regions << { region: region || "global", error: e.message }
     []

@@ -239,6 +239,20 @@ control '{cid}' do
 
   assets = aws_api_assets(type: '{tf_type}', regions: scan_regions)
 
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "{tf_type} enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map {{ |r| "#{{r[:region]}}: #{{r[:error]}}" }}).to be_empty
+      end
+    end
+  end
+
 {nil_filter_comment}
   in_scope = assets.assets(exempt: exempt){nil_filter}
 

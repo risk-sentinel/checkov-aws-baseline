@@ -1,0 +1,45 @@
+# Specs whose SDK gem is not in the auditor image yet.
+#
+# These are kept out of the shipped profile deliberately: a missing gem now
+# raises a profile error (the control cannot perform its test as written), so
+# shipping one would error the run rather than quietly skip. That is the right
+# failure mode, and it is still not something to ship.
+#
+# They live here so they can be validated BEFORE the image bump, against a local
+# runtime with the gems installed:
+#
+#   GEM_HOME=~/.cinc-gems GEM_PATH=~/.cinc-gems:/opt/cinc-auditor/embedded/lib/ruby/gems/3.1.0 \
+#     /opt/cinc-auditor/embedded/bin/gem install --no-document aws-sdk-neptune aws-sdk-docdb
+#   python3 tools/render_api_specs.py --include-pending
+#   GEM_PATH=... cinc-auditor exec . -t aws:// --input-file inputs.yml
+#
+# When the gems land in the image, move the entry into api_specs.yml and add the
+# gem to tools/image_gems.txt. tools/lint_api_specs.py enforces the split.
+
+aws_neptune_cluster:
+  gem: aws-sdk-neptune
+  client: Aws::Neptune::Client
+  list: describe_db_clusters
+  collection: db_clusters
+  id: db_cluster_identifier
+  arn: db_cluster_arn
+  scope: regional
+  fields:
+    storage_encrypted: storage_encrypted
+    iam_database_authentication_enabled: iam_database_authentication_enabled
+    backup_retention_period: backup_retention_period
+    copy_tags_to_snapshot: copy_tags_to_snapshot
+    engine: engine
+
+aws_docdb_cluster:
+  gem: aws-sdk-docdb
+  client: Aws::DocDB::Client
+  list: describe_db_clusters
+  collection: db_clusters
+  id: db_cluster_identifier
+  arn: db_cluster_arn
+  scope: regional
+  fields:
+    storage_encrypted: storage_encrypted
+    backup_retention_period: backup_retention_period
+    engine: engine

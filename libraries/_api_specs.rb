@@ -46,19 +46,6 @@ API_SPECS = {
     'id' => 'backup_vault_name',
     'list' => 'list_backup_vaults'
   },
-  'aws_bedrockagent_agent' => {
-    'client' => 'Aws::BedrockAgent::Client',
-    'collection' => 'agent_summaries',
-    'fields' => {
-      'agent_status' => 'agent_status',
-      'guardrail_identifier' => 'guardrail_configuration.guardrail_identifier',
-      'guardrail_version' => 'guardrail_configuration.guardrail_version'
-    },
-    'gem' => 'aws-sdk-bedrockagent',
-    'id' => 'agent_id',
-    'list' => 'list_agents',
-    'scope' => 'regional'
-  },
   'aws_cloudwatch_log_group' => {
     'arn' => 'arn',
     'client' => 'Aws::CloudWatchLogs::Client',
@@ -97,20 +84,6 @@ API_SPECS = {
     'list' => 'describe_configuration_aggregators',
     'scope' => 'regional'
   },
-  'aws_dax_cluster' => {
-    'arn' => 'cluster_arn',
-    'client' => 'Aws::DAX::Client',
-    'collection' => 'clusters',
-    'fields' => {
-      'cluster_endpoint_encryption_type' => 'cluster_endpoint_encryption_type',
-      'node_type' => 'node_type',
-      'sse_status' => 'sse_description.status'
-    },
-    'gem' => 'aws-sdk-dax',
-    'id' => 'cluster_name',
-    'list' => 'describe_clusters',
-    'scope' => 'regional'
-  },
   'aws_dms_replication_instance' => {
     'arn' => 'replication_instance_arn',
     'client' => 'Aws::DatabaseMigrationService::Client',
@@ -123,35 +96,6 @@ API_SPECS = {
     'gem' => 'aws-sdk-databasemigrationservice',
     'id' => 'replication_instance_identifier',
     'list' => 'describe_replication_instances'
-  },
-  'aws_docdb_cluster' => {
-    'arn' => 'db_cluster_arn',
-    'client' => 'Aws::DocDB::Client',
-    'collection' => 'db_clusters',
-    'fields' => {
-      'backup_retention_period' => 'backup_retention_period',
-      'deletion_protection' => 'deletion_protection',
-      'engine' => 'engine',
-      'kms_key_id' => 'kms_key_id',
-      'storage_encrypted' => 'storage_encrypted'
-    },
-    'gem' => 'aws-sdk-docdb',
-    'id' => 'db_cluster_identifier',
-    'list' => 'describe_db_clusters',
-    'scope' => 'regional'
-  },
-  'aws_docdb_global_cluster' => {
-    'arn' => 'global_cluster_arn',
-    'client' => 'Aws::DocDB::Client',
-    'collection' => 'global_clusters',
-    'fields' => {
-      'engine' => 'engine',
-      'storage_encrypted' => 'storage_encrypted'
-    },
-    'gem' => 'aws-sdk-docdb',
-    'id' => 'global_cluster_identifier',
-    'list' => 'describe_global_clusters',
-    'scope' => 'regional'
   },
   'aws_ec2_transit_gateway' => {
     'arn' => 'transit_gateway_arn',
@@ -282,52 +226,6 @@ API_SPECS = {
     'gem' => 'aws-sdk-kafka',
     'id' => 'cluster_name',
     'list' => 'list_clusters',
-    'scope' => 'regional'
-  },
-  'aws_neptune_cluster' => {
-    'arn' => 'db_cluster_arn',
-    'client' => 'Aws::Neptune::Client',
-    'collection' => 'db_clusters',
-    'fields' => {
-      'backup_retention_period' => 'backup_retention_period',
-      'copy_tags_to_snapshot' => 'copy_tags_to_snapshot',
-      'deletion_protection' => 'deletion_protection',
-      'engine' => 'engine',
-      'iam_database_authentication_enabled' => 'iam_database_authentication_enabled',
-      'kms_key_id' => 'kms_key_id',
-      'storage_encrypted' => 'storage_encrypted'
-    },
-    'gem' => 'aws-sdk-neptune',
-    'id' => 'db_cluster_identifier',
-    'list' => 'describe_db_clusters',
-    'scope' => 'regional'
-  },
-  'aws_neptune_cluster_instance' => {
-    'arn' => 'db_instance_arn',
-    'client' => 'Aws::Neptune::Client',
-    'collection' => 'db_instances',
-    'fields' => {
-      'engine' => 'engine',
-      'publicly_accessible' => 'publicly_accessible',
-      'storage_encrypted' => 'storage_encrypted'
-    },
-    'gem' => 'aws-sdk-neptune',
-    'id' => 'db_instance_identifier',
-    'list' => 'describe_db_instances',
-    'scope' => 'regional'
-  },
-  'aws_neptune_cluster_snapshot' => {
-    'arn' => 'db_cluster_snapshot_arn',
-    'client' => 'Aws::Neptune::Client',
-    'collection' => 'db_cluster_snapshots',
-    'fields' => {
-      'engine' => 'engine',
-      'kms_key_id' => 'kms_key_id',
-      'storage_encrypted' => 'storage_encrypted'
-    },
-    'gem' => 'aws-sdk-neptune',
-    'id' => 'db_cluster_snapshot_identifier',
-    'list' => 'describe_db_cluster_snapshots',
     'scope' => 'regional'
   },
   'aws_networkfirewall_firewall' => {

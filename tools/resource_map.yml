@@ -44,6 +44,20 @@ checks:
         ids: bucket_names
         resource: aws_s3_buckets
       reader: stock
+  CKV_AWS_10:
+    aws_iam_account_password_policy:
+      property: minimum_password_length
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: at_least
+      value: 14
+  CKV_AWS_11:
+    aws_iam_account_password_policy:
+      property: require_uppercase_characters?
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: equals
+      value: true
   CKV_AWS_118:
     aws_db_instance:
       assert:
@@ -56,6 +70,13 @@ checks:
         ids: db_instance_identifiers
         resource: aws_rds_instances
       reader: stock
+  CKV_AWS_12:
+    aws_iam_account_password_policy:
+      property: require_numbers?
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: equals
+      value: true
   CKV_AWS_126:
     aws_instance:
       field: detailed_monitoring
@@ -72,6 +93,13 @@ checks:
         ids: db_instance_identifiers
         resource: aws_rds_instances
       reader: stock
+  CKV_AWS_13:
+    aws_iam_account_password_policy:
+      property: require_symbols?
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: equals
+      value: true
   CKV_AWS_134:
     aws_elasticache_replication_group:
       assert:
@@ -107,6 +135,14 @@ checks:
         ids: cluster_identifier
         resource: aws_rds_clusters
       reader: stock
+  CKV_AWS_14:
+    aws_iam_account_password_policy:
+      guard: expire_passwords?
+      property: max_password_age_in_days
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: at_most
+      value: 90
   CKV_AWS_141:
     aws_redshift_cluster:
       assert:
@@ -124,6 +160,14 @@ checks:
       field: kms_key_id
       reader: api
       satisfies: not_empty
+  CKV_AWS_15:
+    aws_iam_account_password_policy:
+      guard: prevent_password_reuse?
+      property: number_of_passwords_to_remember
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: at_least
+      value: 24
   CKV_AWS_155:
     aws_workspaces_workspace:
       field: user_volume_encryption_enabled
@@ -572,6 +616,13 @@ checks:
       reader: api
       satisfies: equals
       value: false
+  CKV_AWS_9:
+    aws_iam_account_password_policy:
+      property: require_lowercase_characters?
+      reader: singleton
+      resource: aws_iam_password_policy
+      satisfies: equals
+      value: true
   CKV_AWS_96:
     aws_rds_cluster:
       assert:
@@ -584,56 +635,3 @@ checks:
         ids: cluster_identifier
         resource: aws_rds_clusters
       reader: stock
-
-  # --- account-level singletons: one object, nothing to enumerate ---
-  CKV_AWS_9:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "require_lowercase_characters?"
-      satisfies: equals
-      value: true
-  CKV_AWS_11:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "require_uppercase_characters?"
-      satisfies: equals
-      value: true
-  CKV_AWS_12:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "require_numbers?"
-      satisfies: equals
-      value: true
-  CKV_AWS_13:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "require_symbols?"
-      satisfies: equals
-      value: true
-  CKV_AWS_10:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "minimum_password_length"
-      satisfies: at_least
-      value: 14
-  CKV_AWS_14:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "max_password_age_in_days"
-      satisfies: at_most
-      value: 90
-      guard: expire_passwords?
-  CKV_AWS_15:
-    aws_iam_account_password_policy:
-      reader: singleton
-      resource: aws_iam_password_policy
-      property: "number_of_passwords_to_remember"
-      satisfies: at_least
-      value: 24
-      guard: prevent_password_reuse?

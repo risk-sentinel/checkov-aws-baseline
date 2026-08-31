@@ -60,6 +60,20 @@ control 'CKV_AWS_50' do
 
   assets = aws_api_assets(type: 'aws_lambda_function', regions: scan_regions)
 
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_lambda_function enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
   # A field the API did not return is nil, and nil is not a failing value:
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.

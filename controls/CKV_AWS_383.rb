@@ -2,57 +2,30 @@
 #
 # Rule:        CKV_AWS_383 (checkov 3.3.16)
 # Applies to:  aws_bedrockagent_agent
-# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
+# Status:      PLANNED — no deployed-asset reader exists for aws_bedrockagent_agent yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-scan_regions = input('scan_regions')
-exempt       = (input('exempt_assets') || {})['CKV_AWS_383'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_383' do
+  impact 0.0
   title 'Ensure AWS Bedrock agent is associated with Bedrock guardrails'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_bedrockagent_agent resources that actually exist, enumerated
-    through the declarative API spec.
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_bedrockagent_agent in this profile, so there is nothing to assert against.
+
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
   DESC
 
-  desc 'rationale', <<~RATIONALE
-    A guardrail is the only place the agent's input and output filtering is
-    enforced. Without one attached, prompt content and model responses pass
-    through unfiltered no matter what the application layer intends.
-  RATIONALE
-
   desc 'check', <<~CHECK
-    Checkov looks for: aws_bedrockagent_agent:
-    guardrail_configuration/[0]/guardrail_identifier is CKV_ANY
+    Checkov looks for: aws_bedrockagent_agent: guardrail_configuration/[0]/guardrail_identifier is CKV_ANY
   CHECK
 
   desc 'fix', <<~'FIX'
-    Terraform — aws_bedrockagent_agent:
-
-      resource "aws_bedrockagent_agent" "assistant" {
-        agent_name              = "assistant"
-        agent_resource_role_arn = aws_iam_role.bedrock_agent.arn
-        foundation_model        = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-        instruction             = var.agent_instruction
-
-        guardrail_configuration {
-          guardrail_identifier = aws_bedrock_guardrail.assistant.guardrail_id
-          guardrail_version    = aws_bedrock_guardrail.assistant.version
-        }
-      }
-
-    Out of band — aws_bedrockagent_agent:
-
-      aws bedrock-agent update-agent --agent-id <id> --guardrail-configuration guardrailIdentifier=<guardrail-id>,guardrailVersion=<version>
-
-    Note (aws_bedrockagent_agent): update-agent replaces the whole agent
-    configuration, so the call must repeat agent-name, agent-resource-role-arn
-    and foundation-model or they are cleared. The agent must also be re-prepared
-    before the change is live.
+    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/bedrockagent_agent#guardrail-configuration
   FIX
 
   tag checkov_id:            'CKV_AWS_383'
@@ -61,30 +34,9 @@ control 'CKV_AWS_383' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_bedrockagent_agent]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/bedrockagent_agent#guardrail-configuration'
-  tag nist:                  ['SI-4', 'AC-4', 'SC-7']
-  tag nist_r4:               ['SI-4', 'AC-4', 'SC-7']
-  tag cci:                   ['CCI-002664', 'CCI-001097']
-  tag ksi:                   ['KSI-SVC-VRI']
-  tag severity:              'medium'
-  tag severity_source:       'assessed'
-  tag nist_source:           'agent-drafted'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  assets = aws_api_assets(type: 'aws_bedrockagent_agent', regions: scan_regions)
-
-  # A nil field is the FAILING state for a presence check, so it is
-  # deliberately not filtered out here.
-  in_scope = assets.assets(exempt: exempt)
-
-  applicable = !in_scope.empty?
-  impact 0.5
-  impact 0.0 unless applicable
-  only_if('no aws_bedrockagent_agent in scope expressing this setting') { applicable }
-
-  in_scope.each do |asset|
-    describe "aws_bedrockagent_agent #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
-      subject { asset[:guardrail_identifier] }
-      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
-    end
+  describe "CKV_AWS_383 — no deployed-asset reader for aws_bedrockagent_agent" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end

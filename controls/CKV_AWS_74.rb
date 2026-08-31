@@ -2,55 +2,30 @@
 #
 # Rule:        CKV_AWS_74 (checkov 3.3.16)
 # Applies to:  aws_docdb_cluster
-# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
+# Status:      PLANNED — no deployed-asset reader exists for aws_docdb_cluster yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-scan_regions = input('scan_regions')
-exempt       = (input('exempt_assets') || {})['CKV_AWS_74'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_74' do
+  impact 0.0
   title 'Ensure DocumentDB is encrypted at rest (default is unencrypted)'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_docdb_cluster resources that actually exist, enumerated through
-    the declarative API spec.
-  DESC
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_docdb_cluster in this profile, so there is nothing to assert against.
 
-  desc 'rationale', <<~RATIONALE
-    DocumentDB storage is unencrypted by default and encryption cannot be
-    turned on after creation -- the cluster has to be restored into a new
-    encrypted one. Finding this on a deployed cluster is finding a
-    migration, which is why it matters that it is found early.
-  RATIONALE
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
+  DESC
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_docdb_cluster: storage_encrypted is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    Terraform — aws_docdb_cluster:
-
-      resource "aws_docdb_cluster" "docs" {
-        cluster_identifier      = "docs"
-        engine                  = "docdb"
-        master_username         = var.master_username
-        master_password         = var.master_password
-        storage_encrypted       = true
-        kms_key_id              = aws_kms_key.docdb.arn
-        backup_retention_period = 7
-        skip_final_snapshot     = false
-        final_snapshot_identifier = "docs-final"
-      }
-
-    Out of band — aws_docdb_cluster:
-
-      There is no in-place fix. DocumentDB storage encryption is set at
-      creation only. Snapshot, restore encrypted, cut over, delete the original:
-      aws docdb create-db-cluster-snapshot --db-cluster-identifier docs --db-cluster-snapshot-identifier docs-migrate
-      aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier docs-enc --snapshot-identifier docs-migrate --engine docdb --storage-encrypted --kms-key-id <key-arn>
+    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/docdb_cluster#storage-encrypted
   FIX
 
   tag checkov_id:            'CKV_AWS_74'
@@ -59,32 +34,9 @@ control 'CKV_AWS_74' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_docdb_cluster]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/docdb_cluster#storage-encrypted'
-  tag nist:                  ['SC-28', 'SC-28 (1)']
-  tag nist_r4:               ['SC-28', 'SC-28 (1)']
-  tag cci:                   ['CCI-001199', 'CCI-002475']
-  tag ksi:                   ['KSI-SVC-CER']
-  tag severity:              'high'
-  tag severity_source:       'assessed'
-  tag nist_source:           'agent-drafted'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  assets = aws_api_assets(type: 'aws_docdb_cluster', regions: scan_regions)
-
-  # A field the API did not return is nil, and nil is not a failing value:
-  # the asset does not express this setting, so it is out of scope for this
-  # check rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt)
-                   .reject { |a| a[:storage_encrypted].nil? }
-
-  applicable = !in_scope.empty?
-  impact 0.7
-  impact 0.0 unless applicable
-  only_if('no aws_docdb_cluster in scope expressing this setting') { applicable }
-
-  in_scope.each do |asset|
-    describe "aws_docdb_cluster #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
-      subject { asset[:storage_encrypted] }
-      it { should eq true }
-    end
+  describe "CKV_AWS_74 — no deployed-asset reader for aws_docdb_cluster" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end
