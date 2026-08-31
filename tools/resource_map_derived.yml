@@ -570,7 +570,7 @@ checks:
         satisfies: equals
         value: true
       enumerate:
-        ids: kms_key_ids
+        ids: volume_ids
         resource: aws_ebs_volumes
       reader: stock
   CKV_AWS_305:

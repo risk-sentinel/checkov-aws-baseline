@@ -99,7 +99,11 @@ control 'CKV2_AWS_61' do
     end
   end
 
-  applicable = !in_scope.empty?
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
   impact 0.3
   impact 0.0 unless applicable
   only_if('no aws_s3_bucket in scope') { applicable }

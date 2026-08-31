@@ -55,7 +55,7 @@ control 'CKV_AWS_3' do
   # region the connection was built with, and every other region's resources
   # report as absent, which renders Not Applicable rather than unexamined.
   found = checkov_scan_regions(scan_regions).flat_map do |region|
-    aws_ebs_volumes(aws_region: region).kms_key_ids.to_a.map { |id| [id, region] }
+    aws_ebs_volumes(aws_region: region).volume_ids.to_a.map { |id| [id, region] }
   end
 
   # A plural resource whose table is built from the API response returns nil for
@@ -76,7 +76,11 @@ control 'CKV_AWS_3' do
     end
   end
 
-  applicable = !in_scope.empty?
+  # `unusable.positive?` keeps the control APPLICABLE when every id came back
+  # blank. Without it only_if skips the control, and the wrong-column case this
+  # guard exists to catch is exactly the case it would suppress — a Not
+  # Applicable that means "the enumeration is broken".
+  applicable = !in_scope.empty? || unusable.positive?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_ebs_volume in scope') { applicable }
