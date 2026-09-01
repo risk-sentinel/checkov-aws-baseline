@@ -77,6 +77,15 @@
 # never as Not Applicable. Writing the sentence is how a data author is made to
 # decide that on purpose.
 #
+# The key set is CLOSED, and tools/lint_resource_map.py rejects anything outside
+# it. Not pedantry: an unrecognised key is a fact the author believes is being
+# enforced and that the generator silently drops, which is the same class of
+# defect as a mis-keyed join. The one to watch is `where`, which exists on the
+# RIGHT side only -- a `where` written under `left:` reads exactly like a scope
+# on the population, changes nothing, and leaves the control asserting over
+# assets the rule does not apply to. Scoping the left population is gap_3 in
+# tools/proposals/graph.yml and is its own piece of work. Prose goes in `note`.
+#
 # Three runtime guards are rendered automatically and must not be removed: the
 # left side produced usable keys; a declared `where` selected something out of a
 # non-empty population; and the two key spaces intersect at all.

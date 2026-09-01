@@ -122,6 +122,26 @@ def pack():
 MEMBERSHIP_KEY_FORMS = ("verbatim", "terminal_segment")
 MEMBERSHIP_ASSERTIONS = ("every_left_covered",)
 
+# Every key render_membership actually reads. A key outside these lists is not a
+# harmless annotation: it is a fact the author believes is being enforced and
+# that the generator silently drops, which lands the control in exactly the state
+# this shape exists to prevent -- one that reports something other than what its
+# mapping says. The specific one to fear is `where` on the LEFT side. Only the
+# right side is filtered, so a left-side `where` reads perfectly, changes
+# nothing, and leaves the control asserting over a population the rule does not
+# apply to. `note` is the escape hatch for prose.
+MEMBERSHIP_KEYS = frozenset((
+    "reader", "assert", "match_region", "left", "right",
+    "empty_right_means", "divergence", "uncovered_message", "note",
+))
+MEMBERSHIP_SIDE_KEYS = {
+    "left": frozenset(("type", "key", "key_form", "noun", "noun_plural")),
+    # `where` narrows the right side BEFORE keys are built. There is no left-side
+    # equivalent -- see tools/proposals/graph.yml shape_notes gap_3, which is its
+    # own piece of work.
+    "right": frozenset(("type", "key", "key_form", "noun", "noun_plural", "where")),
+}
+
 
 def api_specs():
     return yaml.safe_load((HERE / "api_specs.yml").read_text()) or {}
@@ -180,6 +200,13 @@ def check_membership(problems, unverifiable):
                     f"nothing is covered — and the control has to say so rather than let a "
                     f"reader assume absence of evidence")
 
+            # An unrecognised key is a claim the generator does not honour.
+            for key in sorted(set(mapping) - MEMBERSHIP_KEYS):
+                problems.append(
+                    f"{where}: `{key}` is not a key render_membership reads, so it would be "
+                    f"silently ignored. Recognised: {', '.join(sorted(MEMBERSHIP_KEYS))}. Put "
+                    f"prose in `note`")
+
             sides = {}
             for side in ("left", "right"):
                 decl = mapping.get(side) or {}
@@ -201,6 +228,14 @@ def check_membership(problems, unverifiable):
                         f"match, which renders as every asset uncovered")
                 if not str(decl.get("noun") or "").strip():
                     problems.append(f"{where}: {side} has no `noun` for the control's prose")
+                for key in sorted(set(decl) - MEMBERSHIP_SIDE_KEYS[side]):
+                    extra = (" Only the right side is filtered: a left-side `where` would read as "
+                             "scoping the population and would in fact do nothing."
+                             if key == "where" and side == "left" else "")
+                    problems.append(
+                        f"{where}: {side} declares `{key}`, which render_membership does not "
+                        f"read on that side, so it would be silently ignored. Recognised on "
+                        f"{side}: {', '.join(sorted(MEMBERSHIP_SIDE_KEYS[side]))}.{extra}")
                 if decl.get("key_form") == "terminal_segment":
                     unverifiable.append(
                         f"{where}: {side} reduces {decl['type']}.{decl['key']} to its terminal "
