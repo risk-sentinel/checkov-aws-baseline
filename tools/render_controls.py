@@ -670,7 +670,15 @@ def enumeration_for(spec, enum):
             f"    )\n"
             f"    problems.concat(found_problems.map {{ |p| \"#{{region}}: #{{p}}\" }})\n"
             f"    ids.map {{ |id| [id, region] }}\n"
-            f"  end")
+            f"  end\n"
+            f"\n"
+            f"  # The region LIST is upstream of every enumeration above, and its failure\n"
+            f"  # is the one that hides best: no regions means no rows, no rows means no\n"
+            f"  # problems, and the control renders Not Applicable across the whole account\n"
+            f"  # while a denied ec2:DescribeRegions goes unreported. checkov_scan_regions\n"
+            f"  # falls back to the connection's own region and records that here, so a\n"
+            f"  # partial scan fails loudly instead of passing quietly.\n"
+            f"  problems.concat(checkov_region_problems)")
 
 
 def nil_filter_for(satisfies, field):

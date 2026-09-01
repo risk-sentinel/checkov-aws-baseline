@@ -38,7 +38,32 @@ class AwsApiAssets < AwsResourceBase
     end
   "
 
-  attr_reader :unreadable_regions, :account_id
+  attr_reader :account_id
+
+  # Regions that could not be read -- INCLUDING the case where this resource
+  # never got as far as walking one.
+  #
+  # catch_aws_errors raises Inspec::Exceptions::ResourceFailed on a 403, and
+  # Inspec::Resource#supersuper_initialize rescues it around the whole
+  # constructor. So a denied sts:GetCallerIdentity or ec2:DescribeRegions hands
+  # the control a live object with @rows never assigned. Answering [] here would
+  # make `applicable` false and render the control Not Applicable having assessed
+  # nothing -- the exact failure this reader exists to prevent -- and answering
+  # nil from `assets` below would raise NoMethodError inside the control body,
+  # which reports as a source-code error rather than as "the read failed".
+  def unreadable_regions
+    failure = %i[resource_failed? failed_resource? resource_skipped?].find do |predicate|
+      respond_to?(predicate) && public_send(predicate)
+    end
+    return Array(@unreadable_regions) unless failure
+
+    Array(@unreadable_regions) + [{
+      region: "(every region)",
+      error: "#{@type} could not be read at all (#{failure}): "\
+             "#{(respond_to?(:resource_exception_message) && resource_exception_message) || 'the AWS call did not succeed'}. "\
+             "NOTHING was assessed here",
+    }]
+  end
 
   def initialize(opts = {})
     super(opts)
@@ -54,12 +79,15 @@ class AwsApiAssets < AwsResourceBase
 
   # Rows as plain hashes with symbol keys, exemptions already removed. Controls
   # iterate these; see the note in aws_compute_assets on why not FilterTable.
+  # Array(), not @rows: a constructor that failed above never assigned it, and a
+  # NoMethodError on nil reports as a control source-code error rather than as
+  # the read failure that unreadable_regions is already carrying.
   def assets(exempt: [])
-    @rows.reject { |row| exempt?(row, exempt) }
+    Array(@rows).reject { |row| exempt?(row, exempt) }
   end
 
   def exists?
-    !@rows.empty?
+    !Array(@rows).empty?
   end
 
   def to_s

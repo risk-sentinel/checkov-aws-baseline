@@ -29,7 +29,30 @@ class AwsComputeAssets < AwsResourceBase
     end
   "
 
-  attr_reader :table, :unreadable_regions
+  attr_reader :table
+
+  # Regions that could not be read -- INCLUDING the case where this resource
+  # never got as far as walking one.
+  #
+  # catch_aws_errors raises Inspec::Exceptions::ResourceFailed on a 403, and
+  # Inspec::Resource#supersuper_initialize rescues it around the whole
+  # constructor, so a denied sts:GetCallerIdentity or ec2:DescribeRegions hands
+  # the control a live object with @table never assigned. Answering [] here would
+  # make `applicable` false and render the control Not Applicable having assessed
+  # nothing, which is the failure this reader exists to prevent.
+  def unreadable_regions
+    failure = %i[resource_failed? failed_resource? resource_skipped?].find do |predicate|
+      respond_to?(predicate) && public_send(predicate)
+    end
+    return Array(@unreadable_regions) unless failure
+
+    Array(@unreadable_regions) + [{
+      region: "(every region)",
+      error: "the compute inventory could not be read at all (#{failure}): "\
+             "#{(respond_to?(:resource_exception_message) && resource_exception_message) || 'the AWS call did not succeed'}. "\
+             "NOTHING was assessed here",
+    }]
+  end
 
   FilterTable.create
              .register_column(:ids,                     field: :id)
@@ -68,8 +91,11 @@ class AwsComputeAssets < AwsResourceBase
 
   attr_reader :account_id
 
+  # Array(), not @table: a constructor that failed above never assigned it, and a
+  # NoMethodError on nil reports as a control source-code error rather than as
+  # the read failure that unreadable_regions is already carrying.
   def exists?
-    !@table.empty?
+    !Array(@table).empty?
   end
 
   # Rows for the given Terraform resource types, as plain hashes.
@@ -92,7 +118,7 @@ class AwsComputeAssets < AwsResourceBase
   # a control that reaches into it breaks quietly when that changes.
   def assets_of(types, exempt: [])
     wanted = Array(types)
-    @table.select { |row| wanted.include?(row[:type]) && !exempt?(row, exempt) }
+    Array(@table).select { |row| wanted.include?(row[:type]) && !exempt?(row, exempt) }
   end
 
   # Does a declared exemption cover this asset?

@@ -70,6 +70,14 @@ control 'CKV_AWS_174' do
     ids.map { |id| [id, region] }
   end
 
+  # The region LIST is upstream of every enumeration above, and its failure
+  # is the one that hides best: no regions means no rows, no rows means no
+  # problems, and the control renders Not Applicable across the whole account
+  # while a denied ec2:DescribeRegions goes unreported. checkov_scan_regions
+  # falls back to the connection's own region and records that here, so a
+  # partial scan fails loudly instead of passing quietly.
+  problems.concat(checkov_region_problems)
+
   # Blank ids are separated out and asserted on below rather than filtered away,
   # so a wrong `ids` column is a visible failure and not a silent Not Applicable.
   # `id.nil?` before the interpolation on purpose: a NullResponse answers true to
