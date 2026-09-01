@@ -11,7 +11,7 @@ scan_regions = input('scan_regions')
 exempt       = (input('exempt_assets') || {})['CKV_AWS_378'] || []
 
 control 'CKV_AWS_378' do
-  title 'Ensure AWS Load Balancer doesn''t use HTTP protocol'
+  title 'Ensure AWS Load Balancer doesn\'t use HTTP protocol'
 
   desc <<~DESC
     Checkov asserts this against Terraform. This profile asserts it against

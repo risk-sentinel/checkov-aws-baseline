@@ -64,3 +64,8 @@ inspec.lock
 # dependency of this profile and is deliberately not vendored — it hard-pins
 # boto3, which conflicts with the AWS CLI in a shared environment.
 .venv-checkov/
+
+# Python bytecode. The tracked copies were removed on this branch; without this
+# they come straight back on the next `git add -A`.
+__pycache__/
+*.pyc

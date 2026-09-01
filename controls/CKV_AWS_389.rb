@@ -11,7 +11,7 @@ scan_regions = input('scan_regions')
 exempt       = (input('exempt_assets') || {})['CKV_AWS_389'] || []
 
 control 'CKV_AWS_389' do
-  title 'Ensure AWS Auto Scaling group launch configuration doesn''t have public IP address assignment enabled'
+  title 'Ensure AWS Auto Scaling group launch configuration doesn\'t have public IP address assignment enabled'
 
   desc <<~DESC
     Checkov asserts this against Terraform. This profile asserts it against

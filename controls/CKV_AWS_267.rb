@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_267' do
   impact 0.0
-  title 'Ensure that Comprehend Entity Recognizer''s model is encrypted by KMS using a customer managed Key (CMK)'
+  title 'Ensure that Comprehend Entity Recognizer\'s model is encrypted by KMS using a customer managed Key (CMK)'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

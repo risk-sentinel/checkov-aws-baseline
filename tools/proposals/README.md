@@ -14,7 +14,7 @@ at the top of `tools/resource_map_derived.yml`.
 |---|---|---|
 | `batch1-4.yml` | the 264 non-graph checks, split by service | 55 merged, 2 later removed at exec |
 | `specs.yml` | value/negative checks with no stock reader | 8 proposed |
-| `parentchild.yml` | checks whose list call needs a parent id | 38 proposed, needs a two-step reader |
+| `parentchild.yml` | checks whose list call needs a parent id | 38 proposed; reader BUILT, 27 expressible, 3 merged |
 | `graph.yml` | the 74 relationship checks | 40 single-field / 19 join / 15 unreachable |
 | `custom.yml` | the 104 custom-logic checks | 6 ready, 88 need a named verb, 10 unreachable |
 
@@ -30,6 +30,29 @@ assessed deployed** (a field AWS always populates, so the control can never
 fail), and several places where Checkov's own logic is wrong — `CKV_AWS_334`
 reads a key called `privilege` where the API member is `privileged`, so it can
 never fire.
+
+## `parentchild.yml` — what the reader now supports
+
+`libraries/aws_api_assets.rb` reads a spec that declares `parent:` in two steps.
+27 of the 38 drafted mappings are expressible with it as built; 3 are merged
+(`CKV_AWS_39`, `CKV_AWS_73`, `CKV_AWS_238`) and the other 24 are a data pass.
+
+The remaining 11 are blocked on extensions the proposal's `schema_gaps` names,
+none of which are implemented and all of which `tools/lint_api_specs.py` now
+REFUSES rather than ignoring — copying one out of the proposal fails the lint
+instead of producing a spec that quietly does nothing:
+
+| blocked | needs |
+|---|---|
+| CKV_AWS_53/54/55/56, CKV_AWS_144 | `absent_errors:` **and** per-parent region routing (S3 answers 301 off-region) |
+| CKV_AWS_78, 311, 316 | `batch:` — CodeBuild `BatchGetProjects` takes a LIST |
+| CKV_AWS_223 | `args:` + `batch:` — ECS `DescribeClusters` |
+| CKV2_AWS_38 | `absent_errors:` — private zones reject `GetDNSSEC` |
+| CKV_AWS_335 | a bound on parent count; ECS task definition REVISIONS are unbounded |
+
+`absent_errors:` is the one to think about before building: a row of nils is
+removed again by a value check's nil filter, so it needs a verb rule with it or
+it re-creates the failure it was added to fix.
 
 ## Reading order for whoever picks this up
 

@@ -10,6 +10,7 @@
 #     asserted `network_configuration == false` on a structure; the deployed
 #     answer is network_configuration.awsvpc_configuration.assign_public_ip.
 #     Found by tools/lint_resource_map.py the first time it read this file.
+#   CKV_AWS_333: aws_ecs_service needs BOTH cluster and service (required: %i(service) plus explicit raises for each); the stock shape passes one argument, so it raises ArgumentError before any API call. Its assertion was also wrong -- network_configuration is a structure compared against false. Never fired in test because the scanned regions have no ECS services, so the singular was never constructed. Needs a two-argument shape.
 #   CKV_AWS_206: aws_api_gateway_domain_names enumerates rows whose domain_name does not reach the singular; needs an account with a custom domain to diagnose
 #
 # Restored, with what fixed each:
@@ -1784,6 +1785,18 @@ checks:
         ids: cluster_identifiers
         resource: aws_redshift_clusters
       reader: stock
+  CKV_AWS_73:
+    aws_api_gateway_stage:
+      field: tracing_enabled
+      note: 'TWO-STEP READER. A stage cannot be enumerated account-wide at all: apigateway.GetStages requires
+        a restApiId, so the reader lists REST APIs first and calls GetStages once per API. Terraform''s
+        argument is xray_tracing_enabled; the API member is Stage.TracingEnabled, confirmed from botocore
+        apigateway 2015-07-09. AWS returns it for every stage, so nothing is filtered out of scope. NOT
+        mapped for aws_apigatewayv2_stage: API Gateway v2 has no X-Ray member on Stage, so the rule is
+        v1-only when assessed deployed.'
+      reader: api
+      satisfies: equals
+      value: true
   CKV_AWS_81:
     aws_msk_cluster:
       field: encryption_in_transit_client_broker

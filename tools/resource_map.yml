@@ -408,11 +408,23 @@ checks:
         ids: db_instance_identifiers
         resource: aws_rds_instances
       reader: stock
-  CKV_AWS_272:
-    aws_lambda_function:
-      field: code_signing_config_arn
-      reader: api
-      satisfies: not_empty
+  # CKV_AWS_272 was mapped to aws_lambda_function.code_signing_config_arn with
+  # `satisfies: not_empty`. That member does not exist on the ListFunctions
+  # response: Lambda's FunctionConfiguration carries signing_job_arn and
+  # signing_profile_version_arn, and the code signing CONFIG arn is only returned
+  # by GetFunctionCodeSigningConfig, a per-function call. dig_path therefore
+  # answered nil for every function, and `not_empty` correctly has no nil filter,
+  # so the control failed EVERY Lambda function in every account regardless of
+  # its configuration — a finding manufactured by the mapping. Caught by
+  # tests/reader/api_spec_shapes_test.rb.
+  #
+  # Left unmapped rather than repointed. The two-step reader would fit
+  # (parent list_functions -> get_function_code_signing_config, arg
+  # function_name), but GetFunctionCodeSigningConfig declares CodeSigningConfigArn
+  # REQUIRED in its output shape, so what a function without code signing answers
+  # cannot be established from the model — and getting that wrong turns "not
+  # configured", the failing state, into a recorded parent failure or a nil. That
+  # needs `absent_errors:`, which is not implemented, and one live call to settle.
   CKV_AWS_29:
     aws_elasticache_replication_group:
       assert:

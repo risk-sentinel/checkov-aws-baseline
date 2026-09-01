@@ -6,6 +6,65 @@
 # aws-sdk-bedrockagent. Neptune and DocDB are reachable through aws-sdk-rds,
 # but DescribeDBClusters returns Aurora too and the schema cannot filter by
 # engine — that needs a spec-level filter or the gems added to the image.
+#
+# ONE-STEP SCHEMA (the original, and still the majority)
+#   gem:        the SDK gem to require. Must be in tools/image_gems.txt.
+#   client:     the client class name, resolved with const_get.
+#   list:       a no-argument list/describe call on that client.
+#   collection: the response member holding the items.
+#   id:         the member on each item that identifies it.
+#   arn:        optional; the member holding its ARN, used for exemptions.
+#   scope:      `global` to read once, anything else to walk regions.
+#   fields:     name -> dotted path into the item, read by dig_path.
+#
+# TWO-STEP SCHEMA (`parent:`) — for a child list call AWS refuses to run
+# without a parent id (GetStages needs a restApiId; DescribeCluster needs a
+# name). Adds:
+#   parent.list:       the no-argument call that enumerates parents.
+#   parent.collection: the response member holding the parents.
+#   parent.id:         the member on each parent that is its id, or the
+#                      sentinel `_self` when that collection is a list of
+#                      SCALARS and the item itself is the id.
+#   arg:               the parameter the child call takes the parent id in.
+#                      Required with `parent:`, meaningless without it.
+# and two sentinels on the existing keys:
+#   collection: _response  — the child response has no wrapper member; its
+#                            fields are top-level members of the response.
+#   id: _parent            — the child carries no identifier of its own, so
+#                            the parent id is the row's identity.
+# Rows from a two-step spec carry `parent_id` in addition to the usual keys.
+#
+# Cost: one child call per parent per region. A 200-parent account is 201 calls
+# per region and nothing bounds it — `scan_regions` is the only lever. Read
+# tools/proposals/parentchild.yml's `call_volume` before adding a spec whose
+# parent population is unbounded; ECS task definition REVISIONS are the case
+# that costs more than the rest of the profile combined.
+#
+# NOT IMPLEMENTED, and refused by tools/lint_api_specs.py rather than silently
+# ignored — each was drafted in tools/proposals/parentchild.yml and each one,
+# ignored, produces a field that is always nil, which the control's nil filter
+# removes, which renders Not Applicable:
+#   args:          literal extra params on the child call. Needed by ECS
+#                  DescribeClusters (include: [CONFIGURATIONS, SETTINGS]),
+#                  SQS GetQueueAttributes and SSM DescribeDocumentPermission.
+#   batch:         a child `arg` that takes up to N ids per call. Needed by ECS
+#                  DescribeClusters and CodeBuild BatchGetProjects; without it
+#                  they work, 100x more expensively.
+#   absent_errors: errors meaning "not configured", to yield a row of nils
+#                  rather than a recorded failure. Needed before any S3
+#                  sub-resource spec, and it needs a verb rule with it: a row
+#                  of nils is filtered straight back out by a value check.
+#   parent region routing: S3's per-bucket calls must be issued against the
+#                  bucket's own region or S3 answers 301. Until that exists an
+#                  S3 two-step spec will record a parent failure per bucket —
+#                  loud and wrong, which is the safe direction, but do not ship
+#                  it that way.
+#   a third level: rest api -> resource -> method. Deliberately not built: every
+#                  three-level check (CKV_AWS_59, CKV2_AWS_53, CKV2_AWS_70,
+#                  CKV_AWS_332, CKV_AWS_265) is ALSO blocked on a child call
+#                  taking two arguments, so depth alone unlocks nothing, and
+#                  depth-3 call volume multiplies a cost that already needs a
+#                  bound.
 aws_acm_certificate:
   arn: certificate_arn
   client: Aws::ACM::Client
@@ -16,6 +75,24 @@ aws_acm_certificate:
   gem: aws-sdk-acm
   id: domain_name
   list: list_certificates
+aws_api_gateway_stage:
+  arg: rest_api_id
+  client: Aws::APIGateway::Client
+  collection: item
+  fields:
+    access_log_destination_arn: access_log_settings.destination_arn
+    cache_cluster_enabled: cache_cluster_enabled
+    client_certificate_id: client_certificate_id
+    tracing_enabled: tracing_enabled
+    web_acl_arn: web_acl_arn
+  gem: aws-sdk-apigateway
+  id: stage_name
+  list: get_stages
+  parent:
+    collection: items
+    id: id
+    list: get_rest_apis
+  scope: regional
 aws_apprunner_service:
   arn: service_arn
   client: Aws::AppRunner::Client
@@ -169,6 +246,26 @@ aws_efs_file_system:
   gem: aws-sdk-efs
   id: file_system_id
   list: describe_file_systems
+aws_eks_cluster:
+  arg: name
+  arn: arn
+  client: Aws::EKS::Client
+  collection: cluster
+  fields:
+    encryption_config: encryption_config
+    endpoint_private_access: resources_vpc_config.endpoint_private_access
+    endpoint_public_access: resources_vpc_config.endpoint_public_access
+    public_access_cidrs: resources_vpc_config.public_access_cidrs
+    status: status
+    version: version
+  gem: aws-sdk-eks
+  id: name
+  list: describe_cluster
+  parent:
+    collection: clusters
+    id: _self
+    list: list_clusters
+  scope: regional
 aws_emr_cluster:
   arn: cluster_arn
   client: Aws::EMR::Client
@@ -186,6 +283,23 @@ aws_glue_crawler:
   gem: aws-sdk-glue
   id: name
   list: get_crawlers
+aws_guardduty_detector:
+  arg: detector_id
+  client: Aws::GuardDuty::Client
+  collection: _response
+  fields:
+    cloudtrail_status: data_sources.cloud_trail.status
+    finding_publishing_frequency: finding_publishing_frequency
+    s3_logs_status: data_sources.s3_logs.status
+    status: status
+  gem: aws-sdk-guardduty
+  id: _parent
+  list: get_detector
+  parent:
+    collection: detector_ids
+    id: _self
+    list: list_detectors
+  scope: regional
 aws_kinesis_stream:
   arn: stream_arn
   client: Aws::Kinesis::Client
@@ -199,7 +313,6 @@ aws_lambda_function:
   client: Aws::Lambda::Client
   collection: functions
   fields:
-    code_signing_config_arn: code_signing_config_arn
     kms_key_arn: kms_key_arn
     runtime: runtime
     tracing_mode: tracing_config.mode
@@ -308,7 +421,7 @@ aws_sfn_state_machine:
   client: Aws::States::Client
   collection: state_machines
   fields:
-    type: type
+    state_machine_type: type
   gem: aws-sdk-states
   id: name
   list: list_state_machines

@@ -16,6 +16,27 @@ API_SPECS = {
     'id' => 'domain_name',
     'list' => 'list_certificates'
   },
+  'aws_api_gateway_stage' => {
+    'arg' => 'rest_api_id',
+    'client' => 'Aws::APIGateway::Client',
+    'collection' => 'item',
+    'fields' => {
+      'access_log_destination_arn' => 'access_log_settings.destination_arn',
+      'cache_cluster_enabled' => 'cache_cluster_enabled',
+      'client_certificate_id' => 'client_certificate_id',
+      'tracing_enabled' => 'tracing_enabled',
+      'web_acl_arn' => 'web_acl_arn'
+    },
+    'gem' => 'aws-sdk-apigateway',
+    'id' => 'stage_name',
+    'list' => 'get_stages',
+    'parent' => {
+      'collection' => 'items',
+      'id' => 'id',
+      'list' => 'get_rest_apis'
+    },
+    'scope' => 'regional'
+  },
   'aws_apprunner_service' => {
     'arn' => 'service_arn',
     'client' => 'Aws::AppRunner::Client',
@@ -196,6 +217,29 @@ API_SPECS = {
     'id' => 'file_system_id',
     'list' => 'describe_file_systems'
   },
+  'aws_eks_cluster' => {
+    'arg' => 'name',
+    'arn' => 'arn',
+    'client' => 'Aws::EKS::Client',
+    'collection' => 'cluster',
+    'fields' => {
+      'encryption_config' => 'encryption_config',
+      'endpoint_private_access' => 'resources_vpc_config.endpoint_private_access',
+      'endpoint_public_access' => 'resources_vpc_config.endpoint_public_access',
+      'public_access_cidrs' => 'resources_vpc_config.public_access_cidrs',
+      'status' => 'status',
+      'version' => 'version'
+    },
+    'gem' => 'aws-sdk-eks',
+    'id' => 'name',
+    'list' => 'describe_cluster',
+    'parent' => {
+      'collection' => 'clusters',
+      'id' => '_self',
+      'list' => 'list_clusters'
+    },
+    'scope' => 'regional'
+  },
   'aws_emr_cluster' => {
     'arn' => 'cluster_arn',
     'client' => 'Aws::EMR::Client',
@@ -217,6 +261,26 @@ API_SPECS = {
     'id' => 'name',
     'list' => 'get_crawlers'
   },
+  'aws_guardduty_detector' => {
+    'arg' => 'detector_id',
+    'client' => 'Aws::GuardDuty::Client',
+    'collection' => '_response',
+    'fields' => {
+      'cloudtrail_status' => 'data_sources.cloud_trail.status',
+      'finding_publishing_frequency' => 'finding_publishing_frequency',
+      's3_logs_status' => 'data_sources.s3_logs.status',
+      'status' => 'status'
+    },
+    'gem' => 'aws-sdk-guardduty',
+    'id' => '_parent',
+    'list' => 'get_detector',
+    'parent' => {
+      'collection' => 'detector_ids',
+      'id' => '_self',
+      'list' => 'list_detectors'
+    },
+    'scope' => 'regional'
+  },
   'aws_kinesis_stream' => {
     'arn' => 'stream_arn',
     'client' => 'Aws::Kinesis::Client',
@@ -231,7 +295,6 @@ API_SPECS = {
     'client' => 'Aws::Lambda::Client',
     'collection' => 'functions',
     'fields' => {
-      'code_signing_config_arn' => 'code_signing_config_arn',
       'kms_key_arn' => 'kms_key_arn',
       'runtime' => 'runtime',
       'tracing_mode' => 'tracing_config.mode',
@@ -357,7 +420,7 @@ API_SPECS = {
     'client' => 'Aws::States::Client',
     'collection' => 'state_machines',
     'fields' => {
-      'type' => 'type'
+      'state_machine_type' => 'type'
     },
     'gem' => 'aws-sdk-states',
     'id' => 'name',

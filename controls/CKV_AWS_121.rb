@@ -89,12 +89,15 @@ control 'CKV_AWS_121' do
   in_scope = assets.assets(exempt: exempt)
                    .reject { |a| a[:organization_all_aws_regions].nil? }
 
-  # `|| !unreadable.empty?` is what makes the assertion above reachable. only_if
-  # suppresses every describe in the control, including that one, so with
-  # `applicable = !in_scope.empty?` alone the case it was written for — the read
-  # failed, therefore nothing was enumerated, therefore in_scope is empty —
-  # skipped the very test that reports it, and the control rendered Not
-  # Applicable with nothing assessed.
+  # `!unreadable.empty?` is load-bearing, and its absence was the bug this line
+  # was written to prevent. InSpec's only_if does not merely mark the control
+  # skipped: Inspec::Rule.prepare_checks DISCARDS every check and substitutes a
+  # single no-op, so the enumeration assertion above never runs. A denied
+  # ListX in every region therefore produced zero assets, zero assertions,
+  # impact 0.0 and a "skipped" result — which HDF rolls up as Not Applicable.
+  # The single most likely real failure of this profile reported as "this rule
+  # does not apply here". Same reasoning as `unusable.positive?` in the stock
+  # shape.
   applicable = !in_scope.empty? || !unreadable.empty?
   impact 0.5
   impact 0.0 unless applicable
