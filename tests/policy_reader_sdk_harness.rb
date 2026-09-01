@@ -33,12 +33,22 @@
 # tested.
 #
 # Run:  docker run --rm -v "$PWD:/work" -w /work \
-#         --entrypoint sh risksentinel/sparc-auditor:v1.2.0 \
+#         --entrypoint sh risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 \
 #         -c 'ruby tests/policy_reader_sdk_harness.rb'
 #
 # It needs aws-sdk-iam and aws-sdk-ecr, which ship in the auditor image and are
 # not installed on a laptop -- so unlike the other two test files this one runs
 # in the image only. That is the cost of testing against the real SDK.
+
+# The auditor image stopped shipping a UTF-8 locale at the v1.0.0 UBI rebase:
+# v0.5.0 set LANG=en_US.UTF-8, v1.2.0 sets nothing, so Ruby's default external
+# encoding is US-ASCII. Every source file in this repo is UTF-8 (em dashes
+# throughout), so File.read then yields invalid byte sequences -- which surfaces
+# as "invalid byte sequence in US-ASCII" from a regex, or, worse, as a SyntaxError
+# from instance_eval on a library that is perfectly valid Ruby. Pinned here so the
+# suite does not depend on the image's locale.
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
 
 require "json"
 require "aws-sdk-iam"

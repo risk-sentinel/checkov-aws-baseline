@@ -18,7 +18,7 @@
 #
 # Run:
 #   docker run --rm -v "$PWD:/work" -w /work \
-#     --entrypoint ruby risksentinel/sparc-auditor:v1.2.0 \
+#     --entrypoint ruby risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 \
 #     tests/reader/api_spec_shapes_test.rb
 ROOT = File.expand_path("../..", __dir__)
 load File.join(ROOT, "libraries", "_api_specs.rb")

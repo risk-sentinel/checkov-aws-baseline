@@ -4,7 +4,7 @@
 # Why this exists, measured rather than assumed
 # ---------------------------------------------
 # `cinc-auditor check` and `json` cover NOTHING in libraries/. Verified against
-# risksentinel/sparc-auditor:v1.2.0 by appending, in turn, a runtime NameError
+# risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 by appending, in turn, a runtime NameError
 # and then a syntax error to libraries/_policy_document.rb: both commands exited
 # 0 and printed "Valid: true — No errors, warnings, or offenses". (A syntax error
 # in a CONTROL file is barely better: `check` still says Valid: true and simply
@@ -42,6 +42,16 @@
 #
 # Run:  ruby tests/policy_reader_harness.rb
 # No gems, no network, no AWS credentials.
+
+# The auditor image stopped shipping a UTF-8 locale at the v1.0.0 UBI rebase:
+# v0.5.0 set LANG=en_US.UTF-8, v1.2.0 sets nothing, so Ruby's default external
+# encoding is US-ASCII. Every source file in this repo is UTF-8 (em dashes
+# throughout), so File.read then yields invalid byte sequences -- which surfaces
+# as "invalid byte sequence in US-ASCII" from a regex, or, worse, as a SyntaxError
+# from instance_eval on a library that is perfectly valid Ruby. Pinned here so the
+# suite does not depend on the image's locale.
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
 
 require "json"
 

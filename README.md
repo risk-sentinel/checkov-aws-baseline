@@ -28,13 +28,13 @@ says so in its own description.
 ```bash
 # 1. Pull the profile's dependencies (inspec-aws).
 docker run --rm -v "$PWD:/work" -w /work \
-  risksentinel/sparc-auditor:v1.2.0 vendor . --overwrite
+  risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 vendor . --overwrite
 
 # 2. Run it. Nothing in inputs.yml is required for a first run: the defaults
 #    enumerate every enabled region in the Commercial partition.
 docker run --rm -v "$PWD:/work" -w /work \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-  risksentinel/sparc-auditor:v1.2.0 \
+  risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 \
   exec . -t aws:// --input-file inputs.yml --reporter cli json:hdf.json
 ```
 

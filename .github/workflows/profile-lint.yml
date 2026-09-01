@@ -15,7 +15,11 @@ permissions:
   contents: read
 
 env:
-  AUDITOR_IMAGE: risksentinel/sparc-auditor:v1.2.0
+  # Pinned by DIGEST, not by tag: a tag can be re-cut onto a different image and
+  # every run after that silently assesses with something else. This digest is
+  # sparc-auditor v1.2.0, cosign-verified against the container-build-sign
+  # workflow identity before it was pinned here.
+  AUDITOR_IMAGE: risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8
 
 jobs:
   lint:
