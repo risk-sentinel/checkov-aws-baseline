@@ -10,7 +10,7 @@
 #
 # Run:
 #   docker run --rm -v "$PWD:/work" -w /work \
-#     --entrypoint ruby risksentinel/sparc-auditor:v0.5.0 \
+#     --entrypoint ruby risksentinel/sparc-auditor:v1.2.0 \
 #     tests/reader/two_step_reader_test.rb
 $LOAD_PATH.unshift(__dir__)
 require "aws_backend"

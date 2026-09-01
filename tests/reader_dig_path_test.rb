@@ -21,7 +21,7 @@
 # clean pass either way.
 #
 #     docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby \
-#       risksentinel/sparc-auditor:v0.5.0 tests/reader_dig_path_test.rb
+#       risksentinel/sparc-auditor:v1.2.0 tests/reader_dig_path_test.rb
 #
 # `--entrypoint ruby` is not optional: the image's entrypoint is cinc-auditor.
 #

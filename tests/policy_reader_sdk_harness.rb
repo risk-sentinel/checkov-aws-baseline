@@ -33,7 +33,7 @@
 # tested.
 #
 # Run:  docker run --rm -v "$PWD:/work" -w /work \
-#         --entrypoint sh risksentinel/sparc-auditor:v0.5.0 \
+#         --entrypoint sh risksentinel/sparc-auditor:v1.2.0 \
 #         -c 'ruby tests/policy_reader_sdk_harness.rb'
 #
 # It needs aws-sdk-iam and aws-sdk-ecr, which ship in the auditor image and are

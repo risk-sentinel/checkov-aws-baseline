@@ -5,7 +5,7 @@
 # condition path in the resource maps against the AWS SDK's own response model.
 #
 #     docker run --rm -v "$PWD:/work" -w /work \
-#       --entrypoint ruby risksentinel/sparc-auditor:v0.5.0 tools/lint_api_paths.rb
+#       --entrypoint ruby risksentinel/sparc-auditor:v1.2.0 tools/lint_api_paths.rb
 #
 # Why this is a lint and not a runtime guard
 # ------------------------------------------

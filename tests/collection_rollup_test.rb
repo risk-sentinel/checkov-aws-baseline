@@ -16,7 +16,7 @@
 # NO key at all for a member the response omitted.
 #
 #     docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby \
-#       risksentinel/sparc-auditor:v0.5.0 tests/collection_rollup_test.rb
+#       risksentinel/sparc-auditor:v1.2.0 tests/collection_rollup_test.rb
 #
 # `--entrypoint ruby` is not optional: the image's entrypoint is cinc-auditor, so
 # without it the command becomes `cinc-auditor ruby ...` and dies with "Could not

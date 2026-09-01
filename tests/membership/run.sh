@@ -25,7 +25,7 @@
 # backed up, and is Not Applicable ONLY when there are no volumes.
 set -euo pipefail
 
-IMAGE="${SPARC_AUDITOR_IMAGE:-risksentinel/sparc-auditor:v0.5.0}"
+IMAGE="${SPARC_AUDITOR_IMAGE:-risksentinel/sparc-auditor:v1.2.0}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
