@@ -1456,3 +1456,66 @@ CKV_AWS_92:
     which is exactly the traffic an investigation needs.
   severity: medium
   what: an access_logs block is present and not disabled
+
+# -----------------------------------------------------------------------------
+# Metadata for the policy-document mappings (reader: policy).
+# -----------------------------------------------------------------------------
+CKV_AWS_32:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A repository policy that allows a wildcard principal with no condition
+    makes every image in the repository readable by any AWS account, and by an anonymous
+    caller. Container images routinely carry configuration, embedded credentials and
+    the shape of the internal application, so the exposure is not limited to the code
+    that was intended to be public.
+  severity: high
+  what: "aws_ecr_repository_policy: the policy document has no Allow statement whose Principal is '*' or whose Principal.AWS contains '*' without a Condition constraining it (Checkov runs cloudsplaining's internet_accessible_actions, which is the same test with a curated condition allow-list)"
+CKV_AWS_60:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A trust policy naming a wildcard principal with no condition lets any AWS
+    account assume the role, so every permission attached to it is available to anyone
+    who knows the role ARN. Role ARNs are not secrets — they appear in logs, in error
+    messages and in support tickets — so the trust policy is the only control standing
+    between the account and the permissions the role carries.
+  severity: high
+  what: "aws_iam_role: the assume_role_policy has no Allow statement whose Principal is '*' or whose Principal.AWS contains '*' without a Condition — the role may be assumed only by named services or principals"
+CKV_AWS_62:
+  cci:
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-6
+  nist_r4:
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A customer-managed policy allowing every action on every resource grants
+    administrative access to whatever it is attached to, and defeats least privilege
+    for every identity that holds it. It also removes the ability to reason about blast
+    radius after a credential is compromised, because the answer is always everything.
+  severity: high
+  what: "aws_iam_policy and the inline-policy types: no policy document has an Allow statement carrying '*' in BOTH Action and Resource"

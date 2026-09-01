@@ -1299,3 +1299,104 @@ CKV_AWS_15:
         --minimum-password-length 14 --require-symbols --require-numbers \
         --require-uppercase-characters --require-lowercase-characters \
         --max-password-age 90 --password-reuse-prevention 24
+
+# -----------------------------------------------------------------------------
+# Remediation for the policy-document mappings (reader: policy).
+#
+# A policy finding has no single-argument fix: the remedy is the statement that
+# has to change, so each example shows the whole document in the shape that
+# satisfies the predicate rather than one toggled attribute.
+# -----------------------------------------------------------------------------
+CKV_AWS_32:
+  aws_ecr_repository_policy:
+    terraform: |
+      # Name the accounts and roles that may pull, and nothing else. Where the
+      # images really are public, use ECR Public (aws_ecrpublic_repository) —
+      # a wildcard principal on a private repository is an accident, not a
+      # publishing decision.
+      resource "aws_ecr_repository_policy" "example" {
+        repository = aws_ecr_repository.example.name
+
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Sid    = "PullFromThisOrganisation"
+            Effect = "Allow"
+            Principal = {
+              AWS = ["arn:aws:iam::111122223333:root"]
+            }
+            Action = [
+              "ecr:GetDownloadUrlForLayer",
+              "ecr:BatchGetImage",
+              "ecr:BatchCheckLayerAvailability",
+            ]
+            Condition = {
+              StringEquals = { "aws:PrincipalOrgID" = "o-abcd1234" }
+            }
+          }]
+        })
+      }
+    cli: |
+      aws ecr set-repository-policy --repository-name <name> --policy-text file://policy.json
+      # Or, where nothing outside the account should pull at all, remove it entirely:
+      aws ecr delete-repository-policy --repository-name <name>
+    note: A repository with NO policy is not a finding — access then falls back to
+      IAM, which is the safe default. Deleting the policy is a legitimate fix, not a
+      workaround.
+CKV_AWS_60:
+  aws_iam_role:
+    terraform: |
+      # A trust policy names WHO may assume the role. `"AWS" = "*"` names
+      # everyone with an AWS account, so scope it to the principals that need
+      # it — and where a wildcard is genuinely required, constrain it with a
+      # Condition (aws:PrincipalOrgID, aws:SourceAccount, sts:ExternalId).
+      resource "aws_iam_role" "example" {
+        name = "example"
+
+        assume_role_policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Effect = "Allow"
+            Principal = {
+              Service = "ecs-tasks.amazonaws.com"
+            }
+            Action = "sts:AssumeRole"
+            Condition = {
+              StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+            }
+          }]
+        })
+      }
+    cli: |
+      aws iam update-assume-role-policy --role-name <name> --policy-document file://trust.json
+    note: The deployed trust policy is what this control reads, so a role widened in
+      the console shows the finding even when the Terraform is correct. Re-applying
+      the Terraform is the fix in that case, and the control is what tells you it is
+      needed.
+CKV_AWS_62:
+  aws_iam_policy:
+    terraform: |
+      # Replace the wildcard with the actions the workload actually calls, and
+      # the ARNs it actually touches. Where the action list genuinely has to be
+      # broad, the resource list must not be — and vice versa; it is the
+      # combination of both stars that this rule is about.
+      resource "aws_iam_policy" "example" {
+        name = "example"
+
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Effect = "Allow"
+            Action = [
+              "s3:GetObject",
+              "s3:PutObject",
+            ]
+            Resource = ["${aws_s3_bucket.example.arn}/*"]
+          }]
+        })
+      }
+    cli: |
+      aws iam create-policy-version --policy-arn <arn> --policy-document file://policy.json --set-as-default
+    note: A policy is versioned, and this control reads the DEFAULT version. Creating
+      a scoped version without --set-as-default leaves the administrative version in
+      force, and the finding correctly persists.
