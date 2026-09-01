@@ -34,13 +34,21 @@ end
 def item_shape(output, member, label, type)
   return output if member == "_response"
 
-  ref = output.member(member.to_sym) if output.member?(member.to_sym)
-  if ref.nil?
-    problem("#{type}: #{label} '#{member}' is not a member of #{output.name}")
-    return nil
+  # A DOTTED path, because a collection is not always a top-level member:
+  # CloudFront's ListDistributions puts its items under DistributionList.Items,
+  # so `collection: distribution_list.items`. This walked a single member name
+  # and reported that spec as naming something the SDK does not return, which
+  # the reader has enumerated correctly since it learned dotted paths.
+  node = output
+  member.to_s.split(".").each do |key|
+    unless node.respond_to?(:member?) && node.member?(key.to_sym)
+      problem("#{type}: #{label} '#{member}' — '#{key}' is not a member of #{node.name}")
+      return nil
+    end
+    node = node.member(key.to_sym).shape
+    node = node.member.shape if node.is_a?(Seahorse::Model::Shapes::ListShape)
   end
-  shape = ref.shape
-  shape.respond_to?(:member) && shape.is_a?(Seahorse::Model::Shapes::ListShape) ? shape.member.shape : shape
+  node
 end
 
 def structure?(shape)

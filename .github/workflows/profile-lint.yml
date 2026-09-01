@@ -136,3 +136,58 @@ jobs:
         # a resource called in a describe body — it only raises on a real exec
         # against a live target, which this repo cannot run. Hence a linter.
         run: python3 tools/lint_resource_scope.py controls libraries
+
+      - name: Policy specs match the predicates Ruby implements
+        # The predicate list lives in libraries/_policy_document.rb and the prose
+        # for each lives in tools/render_controls.py. A predicate named in one and
+        # not the other renders a control asserting something nothing implements.
+        # Also asserts the policy-spec bake is current.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_policy_specs.py
+
+      - name: Declared API paths exist in the AWS SDK model
+        # The highest-value static check in this repo. A `fields:` path naming a
+        # member the API does not return does NOT raise: the reader answers nil,
+        # the control's nil filter drops the row, and the check renders Not
+        # Applicable — or, under a collection roll-up, passes vacuously. It found
+        # four real defects the first time it ran, including a spec that made
+        # every Lambda in an account fail a check nothing had assessed.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" \
+            tools/lint_api_paths.rb
+
+      - name: Reader and predicate test suites
+        # `check` and `json` load control files without evaluating a body, so
+        # nothing above this line can see a reader that returns the wrong rows.
+        # These run the real code against stubbed SDK clients and fabricated
+        # rows. Every one of them was written because a bug reached a live exec:
+        # a member returned as `false` read as nil, a lost subtree reported as a
+        # clean region, a policy that could not be parsed reported as compliant.
+        run: |
+          set -uo pipefail
+          fail=0
+          for t in tests/collection_rollup_test.rb \
+                   tests/policy_document_test.rb \
+                   tests/policy_reader_harness.rb \
+                   tests/policy_reader_sdk_harness.rb \
+                   tests/reader_dig_path_test.rb \
+                   tests/reader/api_spec_shapes_test.rb \
+                   tests/reader/two_step_reader_test.rb \
+                   tests/membership/reducer_test.rb; do
+            if docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" "$t"; then
+              echo "PASS $t"
+            else
+              echo "::error file=$t::test suite failed"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+
+      - name: Membership shape end-to-end
+        # Drives cinc-auditor itself against fabricated rows, so it runs on the
+        # host rather than inside the image. It is the only proof that a
+        # membership join can still FAIL: get the key reduction wrong and the
+        # control either fails everything or cannot fail at all, and both are
+        # valid Ruby that check and json accept.
+        run: bash tests/membership/run.sh

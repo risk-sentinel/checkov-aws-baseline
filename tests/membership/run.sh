@@ -32,6 +32,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 # The control under test is the GENERATED one, taken live.
 cp -R "$REPO/tests/membership/harness/." "$WORK/"
+# The harness ships libraries/ but no controls/, and the copies below name
+# them as destination DIRECTORIES -- without this, cp reports "Not a
+# directory" and the suite fails before it runs a single assertion.
+mkdir -p "$WORK/controls" "$WORK/libraries"
 cp "$REPO/libraries/_checkov_membership.rb" "$WORK/libraries/"
 cp "$REPO/controls/CKV2_AWS_9.rb"           "$WORK/controls/"
 

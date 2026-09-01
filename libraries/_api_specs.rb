@@ -243,6 +243,29 @@ API_SPECS = {
     'id' => 'file_system_id',
     'list' => 'describe_file_systems'
   },
+  'aws_eks_cluster' => {
+    'arg' => 'name',
+    'arn' => 'arn',
+    'client' => 'Aws::EKS::Client',
+    'collection' => 'cluster',
+    'fields' => {
+      'encryption_config' => 'encryption_config',
+      'endpoint_private_access' => 'resources_vpc_config.endpoint_private_access',
+      'endpoint_public_access' => 'resources_vpc_config.endpoint_public_access',
+      'public_access_cidrs' => 'resources_vpc_config.public_access_cidrs',
+      'status' => 'status',
+      'version' => 'version'
+    },
+    'gem' => 'aws-sdk-eks',
+    'id' => 'name',
+    'list' => 'describe_cluster',
+    'parent' => {
+      'collection' => 'clusters',
+      'id' => '_self',
+      'list' => 'list_clusters'
+    },
+    'scope' => 'regional'
+  },
   'aws_elb' => {
     'client' => 'Aws::ElasticLoadBalancing::Client',
     'collection' => 'load_balancer_descriptions',
@@ -274,6 +297,26 @@ API_SPECS = {
     'gem' => 'aws-sdk-glue',
     'id' => 'name',
     'list' => 'get_crawlers'
+  },
+  'aws_guardduty_detector' => {
+    'arg' => 'detector_id',
+    'client' => 'Aws::GuardDuty::Client',
+    'collection' => '_response',
+    'fields' => {
+      'cloudtrail_status' => 'data_sources.cloud_trail.status',
+      'finding_publishing_frequency' => 'finding_publishing_frequency',
+      's3_logs_status' => 'data_sources.s3_logs.status',
+      'status' => 'status'
+    },
+    'gem' => 'aws-sdk-guardduty',
+    'id' => '_parent',
+    'list' => 'get_detector',
+    'parent' => {
+      'collection' => 'detector_ids',
+      'id' => '_self',
+      'list' => 'list_detectors'
+    },
+    'scope' => 'regional'
   },
   'aws_kinesis_stream' => {
     'arn' => 'stream_arn',

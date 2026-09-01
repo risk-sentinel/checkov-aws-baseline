@@ -47,6 +47,11 @@ SPECS = File.join(HERE, "api_specs.yml")
 MAPS  = %w[resource_map.yml resource_map_derived.yml].map { |f| File.join(HERE, f) }
 COLLECTION_VERBS = %w[any_of all_of none_of].freeze
 
+# Values the reader resolves itself rather than looking up as a response member:
+# `_self` (the collection holds scalars), `_parent` (the child has no id of its
+# own) and `_response` (the response IS the asset).
+SENTINELS = %w[_self _parent _response].freeze
+
 Shapes = Seahorse::Model::Shapes
 
 def load_yaml(path)
@@ -149,26 +154,42 @@ specs.each do |type, spec|
     end
   end
 
-  begin
-    collection = resolve(operation.output.shape, spec["collection"])
-  rescue RuntimeError => e
-    errors << "#{type}: `collection: #{spec['collection']}` — #{e.message}"
-    next
+  # `_response` is a sentinel, not a member: the child response IS the asset
+  # (GuardDuty GetDetector, CloudTrail GetEventDataStore). Resolving it as a
+  # path reported "not a member of GetDetectorResponse" for a spec the reader
+  # handles by design.
+  if spec["collection"] == "_response"
+    collection = operation.output.shape
+  else
+    begin
+      collection = resolve(operation.output.shape, spec["collection"])
+    rescue RuntimeError => e
+      errors << "#{type}: `collection: #{spec['collection']}` — #{e.message}"
+      next
+    end
   end
   if collection == :map
     errors << "#{type}: `collection: #{spec['collection']}` lands in a map, not a list of assets"
     next
   end
-  unless collection.is_a?(Shapes::ListShape)
+  # A StructureShape is legal: items_from returns [value] for a non-Array, so a
+  # collection naming one structure is a single asset. This lint required a list
+  # and therefore rejected two specs the reader enumerates correctly.
+  unless collection.is_a?(Shapes::ListShape) || collection.is_a?(Shapes::StructureShape)
     errors << "#{type}: `collection: #{spec['collection']}` is a " \
-              "#{collection.class.name.split('::').last}, not a list — the reader iterates it"
+              "#{collection.class.name.split('::').last}, which the reader cannot iterate"
     next
   end
-  element = collection.member.shape
+  # A list yields its member; a structure IS the element already.
+  element = collection.is_a?(Shapes::ListShape) ? collection.member.shape : collection
   elements[type] = element
 
-  paths = { "id" => spec["id"] }
-  paths["arn"] = spec["arn"] if spec["arn"]
+  # `_self` (the collection holds scalars) and `_parent` (the child carries no
+  # id of its own, so the parent id is its identity) are sentinels the reader
+  # resolves itself -- they are not member paths and must not be resolved here.
+  paths = {}
+  paths["id"] = spec["id"] unless SENTINELS.include?(spec["id"])
+  paths["arn"] = spec["arn"] if spec["arn"] && !SENTINELS.include?(spec["arn"])
   (spec["fields"] || {}).each { |name, path| paths["fields.#{name}"] = path }
   paths.each do |label, path|
     checked += 1
