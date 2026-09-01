@@ -164,11 +164,21 @@ class AwsApiAssets < AwsResourceBase
   # "tracing_config.mode" -> item[:tracing_config][:mode], tolerating a missing
   # level. A field the API did not return is nil, and a control skips a nil
   # rather than reading it as a passing false.
+  #
+  # PRESENCE, not truthiness. This was `node[key.to_sym] || node[key]`, which
+  # collapses a field whose value is `false` to nil, because `false || nil` is
+  # nil. Every api-reader control rejects nil rows as "does not express this
+  # setting", so an ECR repository with scan_on_push FALSE -- the exact
+  # violation CKV_AWS_163 exists to catch -- was dropped from the population and
+  # the control reported Not Applicable or passed on the remaining compliant
+  # rows. Ten mappings assert a boolean, so ten controls could not see their own
+  # finding. `key?` distinguishes "returned false" from "did not return it",
+  # which is the whole distinction the nil-filter depends on.
   def dig_path(item, path)
     path.to_s.split(".").reduce(item) do |node, key|
-      break nil unless node.respond_to?(:[])
+      break nil unless node.is_a?(Hash)
 
-      node.is_a?(Hash) ? (node[key.to_sym] || node[key]) : nil
+      node.key?(key.to_sym) ? node[key.to_sym] : node[key]
     end
   end
 end
