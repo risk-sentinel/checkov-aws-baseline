@@ -105,6 +105,10 @@ module PolicyDocument
   # be present, which every GitHub token satisfies.
   CONSTRAINING_OPERATORS = %w[stringequals stringequalsignorecase stringlike].freeze
 
+  # Operators that pin a claim to an EXACT value. A StringLike can carry a
+  # wildcard and therefore cannot pin an immutable id.
+  EQUALITY_OPERATORS = %w[stringequals stringequalsignorecase].freeze
+
   # ---------------------------------------------------------------- parsing --
 
   # A raw policy string as a Hash, or nil when there is no policy at all.
@@ -257,8 +261,27 @@ module PolicyDocument
     unsafe = values.reject { |v| GH_SUB_SAFE.match?(v) }
     return nil if unsafe.empty?
 
+    # A wildcard `sub` is NOT a finding when the statement pins :repository_id
+    # to an exact value. GitHub presents a RENAMED repository as
+    # repo:<org>@<id>/<repo>@<id>, so a trust policy that pinned only the plain
+    # name breaks on rename -- and the documented fix is to pin the numeric
+    # repository_id, which is immutable, and to relax `sub` to match either
+    # spelling. That combination is STRICTLY STRONGER than a `sub` pin: the id
+    # identifies one repository for its whole life, where a name can be freed
+    # and re-registered by somebody else.
+    #
+    # Without this, every role following AWS's own rename-safe guidance failed:
+    # 24 of 24 failures on the first live run were this exact shape, and a
+    # control that is wrong every time it fires is one its reader learns to skip.
+    pinned = policy_document_claim_constraint(statement, 'repository_id',
+                                              operators: EQUALITY_OPERATORS)
+    if pinned && pinned.any? { |v| !v.to_s.strip.empty? && !v.to_s.include?('*') }
+      return nil
+    end
+
     "trusts #{GH_OIDC_ISSUER} with :sub constrained to #{unsafe.join(', ')} — that does not " \
-      'pin a concrete repo:<org>/<repo>, so repositories outside this one match'
+      'pin a concrete repo:<org>/<repo>, and no :repository_id Condition pins it either, ' \
+      'so repositories outside this one match'
   end
 
   # ------------------------------------------------------- shape tolerance ---
@@ -317,15 +340,23 @@ module PolicyDocument
   # nothing constrains it. An empty array is a real answer -- a constraint
   # present but valueless -- and is not the same as nil.
   def policy_document_sub_constraint(statement)
+    policy_document_claim_constraint(statement, 'sub')
+  end
+
+  # The values a Condition constrains one OIDC claim to, or nil when nothing
+  # constrains it. `operators:` narrows which Condition operators count --
+  # :repository_id is only a pin under an EQUALITY operator, because a
+  # StringLike on it could carry a wildcard and pin nothing.
+  def policy_document_claim_constraint(statement, claim, operators: CONSTRAINING_OPERATORS)
     condition = policy_document_element(statement, 'Condition')
     return nil unless condition.is_a?(Hash)
 
     found = nil
     condition.each do |operator, clause|
       next unless clause.is_a?(Hash)
-      next unless CONSTRAINING_OPERATORS.include?(policy_document_base_operator(operator))
+      next unless operators.include?(policy_document_base_operator(operator))
 
-      value = policy_document_element(clause, "#{GH_OIDC_ISSUER}:sub")
+      value = policy_document_element(clause, "#{GH_OIDC_ISSUER}:#{claim}")
       next if value.nil?
 
       found = (found || []) + policy_document_flatten(value, 'Condition')

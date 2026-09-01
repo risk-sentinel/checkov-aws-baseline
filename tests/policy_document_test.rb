@@ -325,6 +325,7 @@ def gh(condition)
 end
 
 SUB = 'token.actions.githubusercontent.com:sub'.freeze
+REPO_ID = 'token.actions.githubusercontent.com:repository_id'.freeze
 
 assert 'no condition at all is a finding',
        offenders(gh(nil), 'gh_oidc_sub_safe').length == 1
@@ -355,6 +356,30 @@ assert 'a role with no GitHub federated principal is clean, not skipped',
                         'Principal' => { 'Service' => 'ec2.amazonaws.com' },
                         'Action' => 'sts:AssumeRole' }]),
                  'gh_oidc_sub_safe').empty?
+
+# A renamed GitHub repository presents `repo:<org>@<id>/<repo>@<id>`, so a trust
+# policy pinning only the plain name breaks on rename. The documented fix pins
+# the immutable numeric repository_id and relaxes `sub` to match either
+# spelling. That is STRICTLY STRONGER than a `sub` pin -- an id names one
+# repository for its whole life, a freed name can be re-registered by anyone.
+# Every one of the 24 failures on the first live run of this predicate was this
+# shape, and a control wrong every time it fires is one its reader learns to skip.
+assert 'a wildcard sub pinned by an exact :repository_id is NOT a finding',
+       offenders(gh('StringLike' => { SUB => 'repo:acme*/widgets*:*' },
+                    'StringEquals' => { REPO_ID => '1262343112' }),
+                 'gh_oidc_sub_safe').empty?
+assert 'a :repository_id under StringLike does NOT pin -- it can carry a wildcard',
+       offenders(gh('StringLike' => { SUB => 'repo:acme*/widgets*:*',
+                                      REPO_ID => '126*' }),
+                 'gh_oidc_sub_safe').length == 1
+assert 'an empty :repository_id pins nothing',
+       offenders(gh('StringLike' => { SUB => 'repo:acme/*' },
+                    'StringEquals' => { REPO_ID => '' }),
+                 'gh_oidc_sub_safe').length == 1
+assert 'a wildcard :repository_id under StringEquals pins nothing',
+       offenders(gh('StringLike' => { SUB => 'repo:acme/*' },
+                    'StringEquals' => { REPO_ID => '*' }),
+                 'gh_oidc_sub_safe').length == 1
 
 # --------------------------------------------------- the anti-silence test --
 #
