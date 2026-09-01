@@ -167,9 +167,35 @@ class AwsApiAssets < AwsResourceBase
     declared = Array(@opts[:regions]).reject { |r| r.to_s.strip.empty? }
     return declared unless declared.empty?
 
-    found = []
-    catch_aws_errors { found = @aws.compute_client.describe_regions.regions.map(&:region_name) }
+    found = discovered_regions
     found.empty? ? [@aws.compute_client.config.region].compact : found
+  end
+
+  # Region discovery that FAILED is not "the account has one region".
+  #
+  # This was written as `catch_aws_errors { found = ... }`, and catch_aws_errors
+  # only raises for a permissions error: every other ServiceError (throttling,
+  # OptInRequired, a 5xx) is logged, swallowed, and answered with nil. `found`
+  # then stayed empty and the fallback narrowed the entire profile to the single
+  # target region — every other region enumerated nothing, reported nothing, and
+  # rendered Not Applicable. inspec.yml says exactly why that is unacceptable:
+  # "a single-region sweep reports absent for a workload that exists elsewhere,
+  # and absent renders as does not apply here, which is a claim."
+  #
+  # The fallback stays — one region read is better than none — but the failure is
+  # recorded, which makes the control applicable and fails it. Nothing here can
+  # tell how many regions it did not visit, so the only honest answer is to say
+  # the sweep was not the sweep it claims to be.
+  def discovered_regions
+    @aws.compute_client.describe_regions.regions.map(&:region_name)
+  rescue ::Aws::Errors::ServiceError, ::Seahorse::Client::NetworkingError => e
+    @unreadable_regions << {
+      region: "(region discovery)",
+      error: "#{e.class.name.split('::').last}: #{e.message}. Falling back to the " \
+             "target region alone — every other region enabled for this account was " \
+             "NOT enumerated, so nothing below is an account-wide answer.",
+    }
+    []
   end
 
   def fetch_rows

@@ -41,9 +41,18 @@ import sys
 import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 SPECS = HERE / "api_specs.yml"
 MANIFEST = HERE / "image_gems.txt"
 RESOURCE_MAPS = (HERE / "resource_map.yml", HERE / "resource_map_derived.yml")
+BAKE = HERE.parent / "libraries" / "_api_specs.rb"
+
+# Keys libraries/aws_api_assets.rb#row_for writes before it writes `fields`. A
+# field with one of these names OVERWRITES the row's identity rather than adding
+# to it: `type` breaks the exemption match, `region` and `account_id` mislabel
+# every describe title, `id` and `parent_id` replace what the row is. Nothing
+# raises -- the row is still a row.
+RESERVED_FIELDS = {"id", "region", "account_id", "type", "parent_id", "arn"}
 
 SPEC_KEYS = {"gem", "client", "list", "collection", "id", "arn", "fields", "scope",
              "parent", "arg"}
@@ -125,10 +134,46 @@ def spec_problems(specs):
             out.append(f"{name}: `collection: _response` describes a child response with no "
                        f"wrapper member; a one-step list call has one")
 
+        fields = spec.get("fields")
+        if fields is not None and not isinstance(fields, dict):
+            out.append(f"{name}: `fields` must be a mapping of name -> dotted path, got "
+                       f"{type(fields).__name__}. The reader iterates it as pairs, so a list "
+                       f"yields a nil path for every entry and every field reads nil.")
+            fields = {}
+        for fname, path in sorted((fields or {}).items()):
+            if not isinstance(path, (str, int, float)) or not str(path).strip():
+                out.append(f"{name}: field '{fname}' has no usable path ({path!r}); dig_path "
+                           f"answers nil and the control's nil filter removes every row")
+            if str(fname) in RESERVED_FIELDS:
+                out.append(f"{name}: field '{fname}' collides with a row key the reader "
+                           f"already writes, and overwrites it silently")
+
         if spec.get("scope") not in (None, "global", "regional"):
             out.append(f"{name}: scope '{spec['scope']}' is neither global nor regional; "
                        f"anything but `global` walks regions, so a typo silently does")
     return out
+
+
+def bake_drift():
+    """Whether libraries/_api_specs.rb matches tools/api_specs.yml.
+
+    The bake is what the READER reads; the YAML is what render_controls.py reads
+    for the control shape and what every other lint here checks. Nothing asserted
+    they agree. An edit that was never re-baked therefore passes every gate in
+    profile-lint.yml while the two halves of the profile disagree -- and the
+    quiet direction is the likely one: rename a `fields:` key, and the control
+    asserts on a key the reader never writes, which is nil, which the nil filter
+    removes, which renders Not Applicable.
+    """
+    import render_api_specs
+
+    if not BAKE.is_file():
+        return [f"{BAKE.name} does not exist; run tools/render_api_specs.py"]
+    specs = yaml.safe_load(SPECS.read_text()) or {}
+    if render_api_specs.render(specs) == BAKE.read_text():
+        return []
+    return [f"libraries/{BAKE.name} does not match tools/api_specs.yml — "
+            f"run `python3 tools/render_api_specs.py` and commit the result"]
 
 
 def unmapped_specs():
@@ -174,13 +219,15 @@ def main() -> int:
     two_step = sum(1 for s in specs.values() if isinstance(s, dict) and s.get("parent"))
     schema = spec_problems(specs)
     unmapped = unmapped_specs()
+    drift = bake_drift()
 
     print(f"api specs: {len(specs)} ({two_step} two-step)   "
           f"gems in the image: {len(available)}")
     if missing:
         print("::error::an api spec names a gem the image does not ship. The reader "
-              "rescues the LoadError and the control renders Not Applicable, so this "
-              "cannot be caught by reading results.")
+              "raises AwsApiAssets::MissingGem, so the control errors rather than "
+              "reporting a result — but it does so only at exec, in an account that "
+              "has the resource type.")
         for t, gem in missing:
             print(f"  {t}: {gem}")
     if schema:
@@ -193,10 +240,16 @@ def main() -> int:
         print("::error::a mapping declares `reader: api` for a type with no api spec.")
         for problem in unmapped:
             print(f"  {problem}")
-    if missing or schema or unmapped:
+    if drift:
+        print("::error::the baked spec table the READER reads has drifted from the YAML "
+              "every other check reads. The halves disagree and nothing else can see it.")
+        for problem in drift:
+            print(f"  {problem}")
+    if missing or schema or unmapped or drift:
         return 1
     print("OK — every api spec names a gem the image ships, matches the reader's schema, "
-          "and every `reader: api` mapping has one.")
+          "is baked into libraries/_api_specs.rb as committed, and every `reader: api` "
+          "mapping has one.")
     return 0
 
 

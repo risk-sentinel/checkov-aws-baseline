@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_378' do
   impact 0.0
-  title 'Ensure AWS Load Balancer doesn''t use HTTP protocol'
+  title 'Ensure AWS Load Balancer doesn\'t use HTTP protocol'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

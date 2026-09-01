@@ -17,10 +17,16 @@ class FakeConnection
     end
   end
 
-  # Only reached when a test declines to declare `regions:`. The tests all declare
-  # them, so an unexpected call here is a test bug and should say so.
+  # Only reached when a test declines to declare `regions:`. Most tests declare
+  # them, so an unexpected call here is a test bug and should say so — unless the
+  # test is deliberately exercising region DISCOVERY, which sets the stub.
+  class << self
+    attr_accessor :compute_client_stub
+  end
+
   def compute_client
-    raise "compute_client: a test reached the region walk; declare regions: instead"
+    FakeConnection.compute_client_stub ||
+      raise("compute_client: a test reached the region walk; declare regions: instead")
   end
 
   def aws_client(_klass)

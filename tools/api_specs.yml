@@ -382,12 +382,18 @@ aws_secretsmanager_secret:
   gem: aws-sdk-secretsmanager
   id: name
   list: list_secrets
+# The field is `state_machine_type`, not `type`, and the rename is not cosmetic:
+# row_for writes id/region/account_id/type/parent_id/arn BEFORE it writes fields,
+# so a field named `type` overwrote the row's own type label with STANDARD or
+# EXPRESS. Nothing raised and nothing read it, which is exactly why it survived.
+# tools/lint_api_specs.py now refuses a field named after a row key; a `fields:`
+# name is a local label, so the escape is to rename it, as here.
 aws_sfn_state_machine:
   arn: state_machine_arn
   client: Aws::States::Client
   collection: state_machines
   fields:
-    type: type
+    state_machine_type: type
   gem: aws-sdk-states
   id: name
   list: list_state_machines

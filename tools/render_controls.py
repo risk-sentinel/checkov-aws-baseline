@@ -478,7 +478,7 @@ exempt       = (input('exempt_assets') || {{}})['{cid}'] || []
 applies_to   = {types_rb}
 
 control '{cid}' do
-  title '{entry["name"].rstrip(".").replace("'", "''")}'
+  title '{ruby_single_quoted(entry["name"].rstrip("."))}'
 
   desc <<~DESC
 {wrap(f"Checkov asserts this against Terraform. This profile asserts it against the {prose} that actually exist.", 4)}{stronger}
@@ -560,7 +560,7 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
 
     return STOCK_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_single_quoted(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the {tf_type} resources that actually exist, read through the stock "
                   f"inspec-aws {assertion['resource']} resource.", 4),
@@ -585,6 +585,24 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
         prop=assertion["property"], matcher=matcher)
 
 
+def ruby_single_quoted(text):
+    """The body of a Ruby single-quoted literal.
+
+    `''` is the SQL escape, not the Ruby one, and Ruby does not error on it: it
+    concatenates adjacent string literals, so `'a''b'` is 'a' and 'b' juxtaposed
+    and evaluates to "ab". Every apostrophe was therefore DELETED from the
+    rendered source — silently, because the result still parses. Ten shipped
+    titles read "has restrict_public_buckets enabled" where the rule says "has
+    'restrict_public_buckets' enabled"; and had an expected `value:` ever carried
+    one, the control would have compared against a string the API cannot return —
+    a control that cannot pass, with nothing in the output to say why.
+
+    Ruby escapes a backslash as \\\\ and an apostrophe as \\', in that order.
+    tools/render_api_specs.py already did this correctly.
+    """
+    return str(text).replace("\\", "\\\\").replace("'", "\\'")
+
+
 def ruby_literal(value):
     """A value as Ruby source.
 
@@ -597,7 +615,7 @@ def ruby_literal(value):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+    return "'" + ruby_single_quoted(value) + "'"
 
 
 def enumeration_for(spec, enum):
@@ -742,7 +760,7 @@ def render_api(cid, version, entry, mapping, meta, fixes, api_specs):
         parent_guard=parent_guard_for(tf_type, api_spec),
         parent_applicable=" || !parent_failures.empty?" if two_step else "",
         only_if_line=only_if_for(tf_type, api_spec),
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_single_quoted(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the {tf_type} resources that actually exist, enumerated through the "
                   f"{'two-step (parent -> child) ' if two_step else ''}declarative API spec.", 4),
@@ -787,7 +805,7 @@ def render_singleton(cid, version, entry, mapping, meta, fixes):
         condition = f"subject_resource.exists? && subject_resource.{guard}"
     return SINGLETON_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type, resource=spec["resource"],
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_single_quoted(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the account's own {tf_type}, which is a single object rather than a "
                   f"collection.", 4),
@@ -821,7 +839,7 @@ def render_planned(cid, version, entry, meta):
     docs = entry["tf_docs"][types[0]] if types else PROVIDER_DOCS
     return PLANNED_TEMPLATE.format(
         cid=cid, version=version,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_single_quoted(entry["name"].rstrip(".")),
         types=", ".join(types) or "(not derivable from the graph definition)",
         types_rb="%w[" + " ".join(types) + "]",
         needs=needs,

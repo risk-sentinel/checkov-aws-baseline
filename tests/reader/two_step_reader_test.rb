@@ -271,6 +271,48 @@ check("a scalar child collection raises rather than yielding empty rows") do
 end
 
 # --------------------------------------------------------------------------
+puts "region DISCOVERY that failed is not an account with one region"
+
+# `regions` was `catch_aws_errors { found = describe_regions... }`, and
+# catch_aws_errors answers nil for every ServiceError that is not a permissions
+# error. `found` stayed empty, the fallback took the target region alone, and the
+# profile swept ONE region while reporting on the account — every region it never
+# visited enumerated nothing and rendered Not Applicable. inspec.yml's own
+# description of scan_regions says why that is not acceptable.
+require "aws-sdk-ec2"
+
+ec2 = stubbed(Aws::EC2::Client)
+ec2.stub_responses(:describe_regions,
+                   Aws::EC2::Errors::RequestLimitExceeded.new(nil, "Request limit exceeded"))
+FakeConnection.compute_client_stub = ec2
+
+throttled = stubbed(Aws::EKS::Client)
+throttled.stub_responses(:list_clusters, clusters: [])
+
+Object.send(:remove_const, :API_SPECS)
+load File.join(ROOT, "libraries", "_api_specs.rb")
+
+walked = StubbedAssets.new(type: "aws_eks_cluster", stub_client: throttled)
+check("a failed region discovery is recorded, not swallowed") do
+  eq(walked.unreadable_regions.map { |r| r[:region] }, ["(region discovery)"])
+end
+check("the record says the sweep was not account-wide") do
+  [walked.unreadable_regions.first[:error].include?("NOT enumerated"),
+   walked.unreadable_regions.first[:error]]
+end
+check("it still reads the one region it can, rather than nothing") do
+  eq(walked.assets, [])
+end
+
+ec2.stub_responses(:describe_regions,
+                   regions: [{ region_name: "us-east-1" }, { region_name: "eu-west-1" }])
+found = stubbed(Aws::EKS::Client)
+found.stub_responses(:list_clusters, clusters: [])
+discovered = StubbedAssets.new(type: "aws_eks_cluster", stub_client: found)
+check("a successful discovery records nothing") { eq(discovered.unreadable_regions, []) }
+FakeConnection.compute_client_stub = nil
+
+# --------------------------------------------------------------------------
 puts ""
 if FAILURES.empty?
   puts "OK — all reader assertions passed"

@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_335' do
   impact 0.0
-  title 'Ensure ECS task definitions should not share the host''s process namespace'
+  title 'Ensure ECS task definitions should not share the host\'s process namespace'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

@@ -343,7 +343,7 @@ API_SPECS = {
     'client' => 'Aws::States::Client',
     'collection' => 'state_machines',
     'fields' => {
-      'type' => 'type'
+      'state_machine_type' => 'type'
     },
     'gem' => 'aws-sdk-states',
     'id' => 'name',

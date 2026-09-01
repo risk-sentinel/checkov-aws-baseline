@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_56' do
   impact 0.0
-  title 'Ensure S3 bucket has ''restrict_public_buckets'' enabled'
+  title 'Ensure S3 bucket has \'restrict_public_buckets\' enabled'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader
