@@ -257,7 +257,16 @@ control '{cid}' do
 {nil_filter_comment}
   in_scope = assets.assets(exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?{parent_applicable}
+  # `!unreadable.empty?` is load-bearing, and its absence was the bug this line
+  # was written to prevent. InSpec's only_if does not merely mark the control
+  # skipped: Inspec::Rule.prepare_checks DISCARDS every check and substitutes a
+  # single no-op, so the enumeration assertion above never runs. A denied
+  # ListX in every region therefore produced zero assets, zero assertions,
+  # impact 0.0 and a "skipped" result — which HDF rolls up as Not Applicable.
+  # The single most likely real failure of this profile reported as "this rule
+  # does not apply here". Same reasoning as `unusable.positive?` in the stock
+  # shape.
+  applicable = !in_scope.empty? || !unreadable.empty?{parent_applicable}
   impact {impact}
   impact 0.0 unless applicable
 {only_if_line}

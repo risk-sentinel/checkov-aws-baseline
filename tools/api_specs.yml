@@ -291,7 +291,11 @@ aws_lambda_function:
   client: Aws::Lambda::Client
   collection: functions
   fields:
-    code_signing_config_arn: code_signing_config_arn
+    # No code_signing_config_arn here. It is NOT a member of ListFunctions'
+    # FunctionConfiguration -- that carries signing_job_arn and
+    # signing_profile_version_arn -- so the field read nil for every function and
+    # CKV_AWS_272's `not_empty` failed every Lambda in the account. See the note
+    # where that mapping used to live in tools/resource_map.yml.
     kms_key_arn: kms_key_arn
     runtime: runtime
     tracing_mode: tracing_config.mode

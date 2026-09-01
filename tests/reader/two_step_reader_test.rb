@@ -187,6 +187,48 @@ check("a failed PARENT leg is an unreadable region") { eq(blind.unreadable_regio
 check("a failed parent leg enumerates nothing") { eq(blind.parents_seen, 0) }
 
 # --------------------------------------------------------------------------
+puts "a parent whose id came back blank is a LOST SUBTREE, not a skipped one"
+
+# `parent.id: id` against a RestApi with no id. Left as a bare `unless`, this
+# parent is dropped, its children are never requested, the region reads as empty
+# and the control renders Not Applicable — the enumeration broken, reported as
+# "this rule does not apply here". It has to be a recorded failure.
+blankid = stubbed(Aws::APIGateway::Client)
+blankid.stub_responses(:get_rest_apis, items: [{ name: "no-id" }, { id: "a2" }])
+blankid.stub_responses(:get_stages, item: [{ stage_name: "prod" }])
+partial = StubbedAssets.new(type: "aws_api_gateway_stage", regions: ["us-east-1"],
+                            stub_client: blankid)
+
+check("a blank parent id is recorded, not silently dropped") do
+  eq(partial.parent_failures.length, 1)
+end
+check("the record says which spec key produced it") do
+  [partial.parent_failures.first[:error].include?("parent.id 'id'"),
+   "unexpected message: #{partial.parent_failures.first[:error]}"]
+end
+check("parents_seen counts every parent returned, not the usable ones") do
+  eq(partial.parents_seen, 2)
+end
+check("the usable parent is still walked") { eq(partial.assets.map { |r| r[:id] }, %w[prod]) }
+
+# --------------------------------------------------------------------------
+puts "a nil inside a collection is a PROFILE ERROR, not a row of nils"
+
+# nil.respond_to?(:to_h) is TRUE and nil.to_h is {}, so a nil item would pass the
+# duck-type test and become a row whose every field is nil — removed again by the
+# control's nil filter, leaving Not Applicable.
+check("hash_of refuses a nil item") do
+  probe = AwsApiAssets.allocate
+  probe.instance_variable_set(:@type, "probe")
+  begin
+    probe.send(:hash_of, nil)
+    [false, "no exception raised — nil.to_h would have produced an empty row"]
+  rescue AwsApiAssets::SpecError => e
+    [e.message.include?("nil item"), "unexpected message: #{e.message}"]
+  end
+end
+
+# --------------------------------------------------------------------------
 puts "one-step specs are unchanged by the shared item/hash handling"
 
 sns = stubbed(Aws::SNS::Client)

@@ -47,6 +47,13 @@ require "aws_backend"
 # service the account has never used answers with an empty list and that is a
 # real answer; a denied call is not.
 #
+# Recording is only half of it. InSpec's only_if does not just mark a control
+# skipped -- Inspec::Rule.prepare_checks DISCARDS every check and substitutes a
+# no-op -- so an assertion written above the only_if never runs when the control
+# turns out to be inapplicable. Every one of these three signals must therefore
+# ALSO make the control applicable, and the generated control does that:
+# `unreadable_regions`, `parent_failures`, and the rows themselves.
+#
 # The two-step shape adds a second way to lose data quietly, and it is worse: a
 # child call that fails takes a whole SUBTREE with it, and returning [] for that
 # parent is indistinguishable from "this parent has no children". Those failures
@@ -56,7 +63,9 @@ require "aws_backend"
 # `parents_seen` exists for the other half of that distinction. Zero rows because
 # the account has no parents at all is a truthful Not Applicable; zero rows with
 # parents present is not the same claim, and a control that cannot tell them
-# apart reports both as "does not apply here".
+# apart reports both as "does not apply here". It counts every parent the list
+# call returned, including one whose id came back blank -- a count taken after
+# that filter answers a different question while looking like this one.
 class AwsApiAssets < AwsResourceBase
   name "aws_api_assets"
   desc "Enumerates a resource type described in the baked API spec table."
@@ -197,12 +206,34 @@ class AwsApiAssets < AwsResourceBase
     ids = []
     each_page(api.public_send(parent["list"])) do |page|
       items_from(page, parent["collection"]).each do |item|
+        # Counted BEFORE the usability test. The census in the control's skip
+        # message answers "did the account have any parents at all", and a count
+        # taken after the filter answers a different question while looking like
+        # that one.
+        @parents_seen += 1
         id = parent_id_of(item, parent)
-        ids << id unless "#{id}".strip.empty?
+        next if record_unusable_parent(region, parent, id)
+
+        ids << id
       end
     end
-    @parents_seen += ids.length
     ids.flat_map { |parent_id| children_of(api, region, parent_id) }
+  end
+
+  # A parent whose id member came back blank is a LOST SUBTREE and a silent one:
+  # its children are never requested at all, so the region reads as empty. Left
+  # as a bare `unless`, a `parent.id` naming the wrong member drops every parent,
+  # enumerates zero rows and renders Not Applicable — the enumeration is broken
+  # and the result says the rule does not apply here. It is recorded as a failure
+  # instead, which the generated control asserts on and counts towards
+  # applicability. Same guard as `unusable` in the stock control shape.
+  def record_unusable_parent(region, parent, id)
+    return false unless "#{id}".strip.empty?
+
+    @parent_failures << { region: region || "global", parent_id: "(blank)",
+                          error: "SpecError: parent.id '#{parent['id']}' yielded a blank id, " \
+                                 "so this parent's children were never requested" }
+    true
   end
 
   # `parent.id: _self` — the parent collection is a list of SCALARS (ARNs, names,
@@ -279,6 +310,16 @@ class AwsApiAssets < AwsResourceBase
 
   def hash_of(item)
     return item if item.is_a?(Hash)
+    # `nil.respond_to?(:to_h)` is true and `nil.to_h` is `{}`, so a nil inside a
+    # collection would pass the duck-type test below and become a row whose every
+    # field is nil — which the control's nil filter removes again, leaving Not
+    # Applicable. Refused explicitly rather than left to the duck type.
+    if item.nil?
+      raise SpecError,
+            "#{@type}: `collection` yielded a nil item. A response member holding nils " \
+            "cannot be read as assets; the row would carry no fields and disappear into " \
+            "Not Applicable."
+    end
     unless item.respond_to?(:to_h)
       raise SpecError,
             "#{@type}: `collection` names a member holding #{item.class} values, which " \

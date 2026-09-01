@@ -237,7 +237,6 @@ API_SPECS = {
     'client' => 'Aws::Lambda::Client',
     'collection' => 'functions',
     'fields' => {
-      'code_signing_config_arn' => 'code_signing_config_arn',
       'kms_key_arn' => 'kms_key_arn',
       'runtime' => 'runtime',
       'tracing_mode' => 'tracing_config.mode',

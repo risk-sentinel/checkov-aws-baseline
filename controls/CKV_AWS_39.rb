@@ -104,7 +104,16 @@ control 'CKV_AWS_39' do
   in_scope = assets.assets(exempt: exempt)
                    .reject { |a| a[:endpoint_public_access].nil? }
 
-  applicable = !in_scope.empty? || !parent_failures.empty?
+  # `!unreadable.empty?` is load-bearing, and its absence was the bug this line
+  # was written to prevent. InSpec's only_if does not merely mark the control
+  # skipped: Inspec::Rule.prepare_checks DISCARDS every check and substitutes a
+  # single no-op, so the enumeration assertion above never runs. A denied
+  # ListX in every region therefore produced zero assets, zero assertions,
+  # impact 0.0 and a "skipped" result — which HDF rolls up as Not Applicable.
+  # The single most likely real failure of this profile reported as "this rule
+  # does not apply here". Same reasoning as `unusable.positive?` in the stock
+  # shape.
+  applicable = !in_scope.empty? || !unreadable.empty? || !parent_failures.empty?
   impact 0.5
   impact 0.0 unless applicable
   only_if("no aws_eks_cluster in scope expressing this setting "\
