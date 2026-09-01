@@ -90,6 +90,11 @@ class AwsPolicyDocuments < AwsResourceBase
   # profile error rather than as a finding, a skip, or an empty result set.
   class MissingGem < StandardError; end
 
+  # A spec that cannot describe this API. Raised, never rescued into
+  # unreadable_regions: filing it there would turn "this spec is wrong" into
+  # "this region had nothing in it", which renders Not Applicable.
+  class SpecError < StandardError; end
+
   # An EMPTY `regions:` is dropped before the base class ever sees it.
   #
   # The vendored AwsResourceBase#validate_parameters ends with
@@ -232,7 +237,7 @@ class AwsPolicyDocuments < AwsResourceBase
   def rows_for(region)
     api = client_for(region)
     list_items(api).filter_map { |item| row_for(api, item, region) }
-  rescue MissingGem
+  rescue MissingGem, SpecError
     # Deliberately re-raised: filing this under unreadable_regions would turn
     # "the profile cannot run this test" into "this region had nothing in it".
     raise
@@ -246,9 +251,38 @@ class AwsPolicyDocuments < AwsResourceBase
     response = api.public_send(@spec["list"], list_args)
     pages = response.respond_to?(:each) ? response : [response]
     pages.each do |page|
-      Array(page.public_send(@spec["collection"])).each { |item| items << item.to_h }
+      Array(page.public_send(@spec["collection"])).each { |item| items << item_of(item) }
     end
     items
+  end
+
+  # An element of `collection`, as either a Hash or a bare scalar.
+  #
+  # Several list calls return a list of STRINGS rather than structures --
+  # sqs:ListQueues answers `queue_urls`, a list of URLs. `item.to_h` on a String
+  # raises NoMethodError, which is outside every class rescued in rows_for, so
+  # it escaped as a control-source error and took the whole control with it. A
+  # scalar element is legal; the spec says so with `id: _self`.
+  def item_of(item)
+    return item if item.is_a?(Hash)
+    return item if scalar?(item)
+
+    if item.nil?
+      raise SpecError,
+            "#{@type}: `collection: #{@spec['collection']}` yielded a nil element. The row " \
+            "would carry no fields and disappear into Not Applicable."
+    end
+    unless item.respond_to?(:to_h)
+      raise SpecError,
+            "#{@type}: `collection: #{@spec['collection']}` holds #{item.class} values, " \
+            "which cannot be read as an asset."
+    end
+
+    item.to_h
+  end
+
+  def scalar?(value)
+    value.is_a?(String) || value.is_a?(Symbol) || value.is_a?(Numeric)
   end
 
   def list_args
@@ -260,7 +294,15 @@ class AwsPolicyDocuments < AwsResourceBase
   def row_for(api, item, region)
     # `.to_s` on a null response can itself answer nil (inspec-aws null objects
     # answer everything through method_missing), so the id is interpolated.
-    id = "#{dig_path(item, @spec['id'])}"
+    # `_self`: the collection holds scalars, so the element IS the identifier
+    # (sqs:ListQueues -> a queue URL). Anything else is a member path, and a
+    # scalar element cannot answer one -- that is a spec error, not an empty row.
+    if scalar?(item) && @spec["id"] != "_self"
+      raise SpecError,
+            "#{@type}: `collection: #{@spec['collection']}` holds scalars, so `id: " \
+            "#{@spec['id']}` cannot be read from an element. Use `id: _self`."
+    end
+    id = @spec["id"] == "_self" ? "#{item}" : "#{dig_path(item, @spec['id'])}"
     row = {
       id: id,
       arn: @spec["arn"] ? "#{dig_path(item, @spec['arn'])}" : nil,
@@ -391,7 +433,12 @@ class AwsPolicyDocuments < AwsResourceBase
     path.to_s.split(".").reduce(item) do |node, key|
       break nil unless node.respond_to?(:[])
 
-      node.is_a?(Hash) ? (node[key.to_sym] || node[key]) : nil
+      # PRESENCE, not truthiness. `node[key.to_sym] || node[key]` collapses a
+      # member the API returned as `false` to nil, because `false || nil` is nil.
+      # The other two readers were fixed for this; this copy was missed.
+      next nil unless node.is_a?(Hash)
+
+      node.key?(key.to_sym) ? node[key.to_sym] : node[key]
     end
   end
 end

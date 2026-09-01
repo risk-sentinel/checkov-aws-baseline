@@ -451,6 +451,91 @@ rescue ArgumentError
   nil
 end
 
+# ------------------------------------------- a collection that holds SCALARS --
+#
+# sqs:ListQueues answers `queue_urls`, a list of Strings, not structures. The
+# reader called `item.to_h` on every element, and String has no to_h, so it
+# raised NoMethodError -- which is outside every class rescued in rows_for, so
+# it escaped as a control-source error and took the WHOLE control with it. Two
+# checks were skipped for it. A scalar element is legal; the spec declares it
+# with `id: _self`.
+
+class FakeSqs
+  def initialize(region: nil) = @region = region
+
+  def list_queues(_args = {})
+    [Page.new(:queue_urls, [
+      "https://sqs.#{@region}.amazonaws.com/111122223333/open-queue",
+      "https://sqs.#{@region}.amazonaws.com/111122223333/closed-queue",
+    ])]
+  end
+
+  def get_queue_attributes(args)
+    CALLS << [:get_queue_attributes, args]
+    open = args[:queue_url].to_s.end_with?("open-queue")
+    Response.new(attributes: {
+      "Policy" => JSON.generate(
+        "Version" => "2012-10-17",
+        "Statement" => [{ "Sid" => "S", "Effect" => "Allow",
+                          "Principal" => (open ? "*" : { "AWS" => "arn:aws:iam::111122223333:root" }),
+                          "Action" => "sqs:SendMessage" }]
+      ),
+    })
+  end
+end
+
+Aws::SQS = Module.new unless defined?(Aws::SQS)
+Aws::SQS.const_set(:Client, FakeSqs)
+
+SCALAR_SPEC = {
+  "gem" => "aws-sdk-sqs", "client" => "Aws::SQS::Client", "scope" => "regional",
+  "list" => "list_queues", "collection" => "queue_urls", "id" => "_self",
+  "fetch" => { "call" => "get_queue_attributes",
+               "args" => { "queue_url" => { "from" => "id" } },
+               "document" => "attributes.Policy" },
+}.freeze
+
+# POLICY_SPECS is frozen -- it is a baked table, and freezing it is right. So the
+# fixture specs are added by rebuilding the constant inside the same eval context
+# the reader resolves it from, rather than by mutating the table.
+def register_spec(name, spec)
+  CTX.instance_variable_set(:@fixture_spec, spec)
+  warn_level = $VERBOSE
+  $VERBOSE = nil
+  CTX.instance_eval(
+    "POLICY_SPECS = POLICY_SPECS.merge(#{name.inspect} => @fixture_spec).freeze"
+  )
+  $VERBOSE = warn_level
+end
+
+register_spec("aws_sqs_queue_policy", SCALAR_SPEC)
+CALLS.clear
+queues = Reader.new(type: "aws_sqs_queue_policy", predicate: "no_wildcard_principal")
+qrows = queues.assets
+assert "a scalar collection enumerates instead of raising NoMethodError",
+       qrows.length == STUB_REGIONS.length * 2, "got #{qrows.length} row(s)"
+assert "`id: _self` takes the element itself as the identifier",
+       qrows.all? { |r| r[:id].to_s.start_with?("https://sqs.") }, qrows.first.inspect
+assert "the fetch argument resolves from the scalar id",
+       CALLS.any? { |c| c.first == :get_queue_attributes && c[1][:queue_url].to_s.include?("open-queue") }
+assert "the wildcard-principal queue is still judged a finding",
+       qrows.any? { |r| (r[:offenders] || []).length == 1 }, qrows.map { |r| r[:offenders] }.inspect
+assert "the scoped queue is clean, not absent",
+       qrows.any? { |r| (r[:offenders] || []).empty? && r[:policy_present] == true }
+assert "no region was reported unreadable for the scalar source",
+       queues.unreadable_regions.empty?, queues.unreadable_regions.inspect
+
+# A scalar element cannot answer a member path. That is a SPEC error and must be
+# loud -- silently yielding a row of nils is how a population disappears into
+# Not Applicable.
+register_spec("aws_sqs_bad", SCALAR_SPEC.merge("id" => "queue_name"))
+begin
+  Reader.new(type: "aws_sqs_bad", predicate: "no_wildcard_principal").assets
+  FAILURES << "a member-path id over a scalar collection was accepted silently"
+rescue StandardError => e
+  assert "the refusal names the fix", e.message.include?("_self"), e.message
+end
+
 # ------------------------------------------------------------------ report ----
 
 if FAILURES.empty?
