@@ -104,6 +104,15 @@ class AwsApiAssets < AwsResourceBase
   end
 
   def initialize(opts = {})
+    # An empty `regions:` is this profile's spelling of "every enabled region",
+    # and inputs.yml ships scan_regions: [] as the default. But the vendored
+    # AwsResourceBase#validate_parameters ends with "Provided parameter should not
+    # be empty" over @opts.values, and an empty Array IS empty -- so the default
+    # run raised out of the constructor on every control that passes it. Reproduced
+    # against a live account: 41 controls reported "Control Source Code Error".
+    # Dropped here so "every region" reaches the walk as the absence of a filter.
+    opts = opts.dup if opts.is_a?(Hash)
+    opts.delete(:regions) if opts.is_a?(Hash) && Array(opts[:regions]).reject { |r| r.to_s.strip.empty? }.empty?
     super(opts)
     validate_parameters(required: %i[type], allow: %i[type regions])
     @type = opts[:type].to_s
