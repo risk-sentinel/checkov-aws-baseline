@@ -64,7 +64,7 @@ control 'CKV_AWS_209' do
   problems = []
   found = checkov_scan_regions(scan_regions).flat_map do |region|
     ids, found_problems = checkov_enumerate(
-      aws_mq_brokers(aws_region: region), :broker_ids
+      aws_mq_brokers(aws_region: region), :broker_ids, exclude: { broker_states: ['CREATION_FAILED', 'DELETION_IN_PROGRESS'] }
     )
     problems.concat(found_problems.map { |p| "#{region}: #{p}" })
     ids.map { |id| [id, region] }

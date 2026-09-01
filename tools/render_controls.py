@@ -268,7 +268,13 @@ control '{cid}' do
 {nil_filter_comment}
   in_scope = assets.assets(exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` is what makes the assertion above reachable. only_if
+  # suppresses every describe in the control, including that one, so with
+  # `applicable = !in_scope.empty?` alone the case it was written for — the read
+  # failed, therefore nothing was enumerated, therefore in_scope is empty —
+  # skipped the very test that reports it, and the control rendered Not
+  # Applicable with nothing assessed.
+  applicable = !in_scope.empty? || !unreadable.empty?
   impact {impact}
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope expressing this setting') {{ applicable }}
@@ -515,13 +521,30 @@ control '{cid}' do
 
   assets = aws_compute_assets(regions: scan_regions)
 
+  # A region that could not be READ is not a region with nothing in it. A denied
+  # DescribeInstances, a throttled call or an unreachable endpoint is recorded in
+  # unreadable_regions and contributes no rows, so without this the assets that
+  # region holds are simply absent from the assessment — a PASS over the regions
+  # that answered, or a Not Applicable if none did.
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "{types[0]} enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map {{ |r| "#{{r[:region]}}: #{{r[:error]}}" }}).to be_empty
+      end
+    end
+  end
+
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
 {nil_filter_comment}
   in_scope = assets.assets_of(applies_to, exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
+  # the assertion above is reachable: only_if suppresses every describe in the
+  # control, the one reporting the failure included.
+  applicable = !in_scope.empty? || !unreadable.empty?
 
   # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
   # on the argument node, and a ternary is an IfNode with none — it aborts
@@ -668,8 +691,19 @@ def nil_filter_for(satisfies, field):
             "  # check rather than in breach of it.")
 
 
+LIST_VERBS = ("in_list", "not_in_list", "includes_all")
+
+
 def matcher_for(cid, satisfies, value):
     """The RSpec matcher a `satisfies` maps to, shared by the stock and API shapes."""
+    if satisfies in LIST_VERBS and not isinstance(value, (list, tuple)):
+        # `", ".join(ruby_literal(v) for v in value)` iterates a str CHARACTER BY
+        # CHARACTER, so `value: api` under includes_all renders
+        # `should include 'a', 'p', 'i'` — a control that parses, checks, renders
+        # and asserts something nobody wrote. Caught here rather than at exec,
+        # where it reads as a genuine finding.
+        raise SystemExit(f"{cid}: '{satisfies}' needs a list value, got "
+                         f"{type(value).__name__} {value!r} — write it as a YAML list")
     if satisfies == "equals":
         return f"should eq {ruby_literal(value)}"
     if satisfies == "not_empty":

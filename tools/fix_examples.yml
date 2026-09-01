@@ -933,6 +933,19 @@ CKV_AWS_383:
       \n  instruction             = var.agent_instruction\n\n  guardrail_configuration {\n    guardrail_identifier\
       \ = aws_bedrock_guardrail.assistant.guardrail_id\n    guardrail_version    = aws_bedrock_guardrail.assistant.version\n\
       \  }\n}\n"
+CKV_AWS_39:
+  aws_eks_cluster:
+    cli: 'aws eks update-cluster-config --name <cluster> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true
+
+      '
+    note: Turning the public endpoint off without turning the private one on leaves the API server unreachable,
+      so both are set together. Reaching a private-only endpoint needs a path into the VPC — a bastion,
+      a VPN or Direct Connect — and anything that talks to the cluster from outside it, CI included, breaks
+      the moment this lands unless that path exists first. Where the public endpoint has to stay, public_access_cidrs
+      narrows it to known ranges; that is a mitigation and not a pass, and this check still reports it.
+    terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
+      \  version  = \"1.31\"\n\n  vpc_config {\n    subnet_ids              = var.private_subnet_ids\n\
+      \    endpoint_public_access  = false\n    endpoint_private_access = true\n  }\n}\n"
 CKV_AWS_44:
   aws_neptune_cluster:
     cli: 'There is no in-place fix. Neptune storage encryption is set at creation

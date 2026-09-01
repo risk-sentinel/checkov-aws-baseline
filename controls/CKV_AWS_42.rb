@@ -62,7 +62,7 @@ control 'CKV_AWS_42' do
   problems = []
   found = checkov_scan_regions(scan_regions).flat_map do |region|
     ids, found_problems = checkov_enumerate(
-      aws_efs_file_systems(aws_region: region), :names
+      aws_efs_file_systems(aws_region: region), :file_system_ids
     )
     problems.concat(found_problems.map { |p| "#{region}: #{p}" })
     ids.map { |id| [id, region] }
@@ -103,7 +103,7 @@ control 'CKV_AWS_42' do
   only_if('no aws_efs_file_system in scope') { applicable }
 
   in_scope.each do |id, region|
-    describe aws_efs_file_system(efs_file_system_identifier: id, aws_region: region) do
+    describe aws_efs_file_system(file_system_id: id, aws_region: region) do
       its('encrypted') { should eq true }
     end
   end

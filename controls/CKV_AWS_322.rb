@@ -105,7 +105,7 @@ control 'CKV_AWS_322' do
   only_if('no aws_elasticache_cluster in scope') { applicable }
 
   in_scope.each do |id, region|
-    describe aws_elasticache_cluster(elasticache_cluster_identifier: id, aws_region: region) do
+    describe aws_elasticache_cluster(cache_cluster_id: id, aws_region: region) do
       its('auto_minor_version_upgrade') { should eq true }
     end
   end

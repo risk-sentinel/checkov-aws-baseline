@@ -104,7 +104,7 @@ control 'CKV_AWS_323' do
   only_if('no aws_elasticache_cluster in scope') { applicable }
 
   in_scope.each do |id, region|
-    describe aws_elasticache_cluster(elasticache_cluster_identifier: id, aws_region: region) do
+    describe aws_elasticache_cluster(cache_cluster_id: id, aws_region: region) do
       its('cache_subnet_group_name') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end

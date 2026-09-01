@@ -4,10 +4,6 @@
 # Removed after a live exec proved them broken — a static lint sees none of these:
 #   CKV_AWS_159: a nested probe chain raises instead of returning nil.
 #   CKV_AWS_189: enumerated aws_ebs_volumes.kms_key_ids as if they were volume ids.
-#   CKV_AWS_39: the property was wrong, not just the enumeration. It asserted
-#     `vpc_config == false`, and vpc_config is a structure, not a boolean; the
-#     deployed answer is resources_vpc_config.endpoint_public_access. The
-#     enumeration half is fixed, the assertion half is not, so it stays out.
 #   CKV_AWS_333: aws_ecs_service requires BOTH `service` and a cluster, and a
 #     service name alone is ambiguous across clusters — the stock shape's
 #     single-identifier enumeration cannot address it. The mapping also
@@ -28,6 +24,23 @@
 #     reported as a failure — from "nothing was enumerated", which is an honest
 #     empty. CKV_AWS_339 additionally named a column (eks_cluster_identifiers)
 #     that does not exist; that class of error is now visible rather than silent.
+#   CKV_AWS_39: both halves of its removal are now answered. checkov_enumerate
+#     fixed the enumeration, and the assertion was repointed from `vpc_config`
+#     -- a structure, asserted as if it were a boolean, so it could never pass --
+#     to resources_vpc_config.endpoint_public_access, confirmed against the
+#     aws-sdk-eks the auditor image ships. It excludes only DELETING, not
+#     CREATING like its three siblings on the same plural: endpoint access is
+#     fixed at create time, so a cluster mid-create is a real finding there.
+#
+# Known-broken and NOT fixed here, because the fix is a reader and not a column
+# (each asserts a boolean against something that is not one, so every asset
+# FAILS -- a control that cannot pass, which reads as a real finding):
+#   CKV_AWS_71: aws_redshift_cluster has no `logging`. DescribeClusters' Cluster
+#     shape has no such member -- Redshift logging is DescribeLoggingStatus, a
+#     separate call. Needs an api spec, not a property name.
+#   CKV_AWS_48, CKV_AWS_197: aws_mq_broker's `logs` is a LogsSummary structure
+#     (audit, audit_log_group, general, general_log_group, pending), asserted as
+#     `logs == true`. The deployed answer is one of its boolean members.
 checks:
   CKV2_AWS_32:
     aws_cloudfront_distribution:
@@ -354,13 +367,21 @@ checks:
   CKV_AWS_184:
     aws_efs_file_system:
       assert:
-        arg: efs_file_system_identifier
+        arg: file_system_id
         property: kms_key_id
         resource: aws_efs_file_system
         satisfies: not_empty
       enumerate:
-        ids: names
+        ids: file_system_ids
         resource: aws_efs_file_systems
+      note: 'Two corrections found by tools/lint_resource_map.py once it learned to read an identifier
+        declared in a raise message rather than in validate_parameters. The singular identifies a file
+        system by `file_system_id` or `creation_token` and raises ArgumentError on anything else, so
+        `efs_file_system_identifier` never reached an API call -- and InSpec does not rescue ArgumentError
+        out of a resource constructor, so every asset reported as a FAILED test. And `names` is
+        FileSystemDescription.Name, the optional Name tag: it is not required by the EFS API shape, so an
+        unnamed file system enumerated as a blank id. `file_system_ids` reads file_system_id, which the
+        shape marks required.'
       reader: stock
   CKV_AWS_195:
     aws_glue_crawler:
@@ -405,8 +426,24 @@ checks:
         resource: aws_mq_broker
         satisfies: not_empty
       enumerate:
+        exclude:
+          broker_states:
+          - CREATION_FAILED
+          - DELETION_IN_PROGRESS
         ids: broker_ids
         resource: aws_mq_brokers
+      note: 'The second user of the declarative population filter, and the reason it is per-mapping rather
+        than per-plural. ListBrokers keeps returning a broker that never came up (CREATION_FAILED) and one
+        on its way out (DELETION_IN_PROGRESS); neither is a deployed asset and neither can be remediated,
+        because UpdateBroker only accepts a broker in RUNNING or CRITICAL_ACTION_REQUIRED. A finding against
+        one is unactionable and disappears on its own. CREATION_IN_PROGRESS is deliberately NOT excluded:
+        EncryptionOptions is fixed at create time, so the answer is already the real one and a broker coming
+        up with the wrong encryption is a finding worth keeping. State names are the BrokerState enum as the
+        aws-sdk-mq 1.40.0 the image ships documents it (client.rb, describe_broker). broker_state is written
+        into every row by the vendored aws_mq_brokers, so the key is always present. encryption_options is a
+        structure (kms_key_id, use_aws_owned_key) confirmed against the same gem''s DescribeBroker shape:
+        present it is an AwsResourceProbe, which answers false to respond_to?(:empty?) and passes; absent it
+        is a NullResponse, which answers true to nil? and fails.'
       reader: stock
   CKV_AWS_216:
     aws_cloudfront_distribution:
@@ -625,7 +662,7 @@ checks:
   CKV_AWS_322:
     aws_elasticache_cluster:
       assert:
-        arg: elasticache_cluster_identifier
+        arg: cache_cluster_id
         property: auto_minor_version_upgrade
         resource: aws_elasticache_cluster
         satisfies: equals
@@ -633,17 +670,27 @@ checks:
       enumerate:
         ids: ids
         resource: aws_elasticache_clusters
+      note: 'Argument corrected from elasticache_cluster_identifier, which the singular rejects: it raises
+        ArgumentError unless opts carries `cache_cluster_id`, before any API call. InSpec does not rescue
+        ArgumentError out of a resource constructor, so the mapping produced a FAILED test per cluster --
+        a broken control reading as a real finding. Caught by tools/lint_resource_map.py once it learned
+        to read an identifier declared in a raise message rather than in validate_parameters.'
       reader: stock
   CKV_AWS_323:
     aws_elasticache_cluster:
       assert:
-        arg: elasticache_cluster_identifier
+        arg: cache_cluster_id
         property: cache_subnet_group_name
         resource: aws_elasticache_cluster
         satisfies: not_empty
       enumerate:
         ids: ids
         resource: aws_elasticache_clusters
+      note: 'Argument corrected from elasticache_cluster_identifier, which the singular rejects: it raises
+        ArgumentError unless opts carries `cache_cluster_id`, before any API call. InSpec does not rescue
+        ArgumentError out of a resource constructor, so the mapping produced a FAILED test per cluster --
+        a broken control reading as a real finding. Caught by tools/lint_resource_map.py once it learned
+        to read an identifier declared in a raise message rather than in validate_parameters.'
       reader: stock
   CKV_AWS_331:
     aws_ec2_transit_gateway:
@@ -898,17 +945,56 @@ checks:
         ids: names
         resource: aws_launch_configurations
       reader: stock
+  CKV_AWS_39:
+    aws_eks_cluster:
+      assert:
+        arg: cluster_name
+        property: resources_vpc_config.endpoint_public_access
+        resource: aws_eks_cluster
+        satisfies: equals
+        value: false
+      enumerate:
+        exclude:
+          statuses:
+          - DELETING
+        ids: names
+        resource: aws_eks_clusters
+      note: 'Restored. Both halves of its removal are now answered. The enumeration half was
+        checkov_enumerate: in an account with no EKS clusters aws_eks_clusters registers no columns, and the
+        NullResponse that answered `names` survived the blank-id filter and reached the singular as a cluster
+        name. The assertion half was a wrong property -- it asserted `vpc_config == false`, and vpc_config is
+        a structure, not a boolean, so it could never pass. The deployed answer is
+        resources_vpc_config.endpoint_public_access, confirmed against the aws-sdk-eks 1.167.0 the image
+        ships: DescribeCluster.cluster.resourcesVpcConfig has an endpoint_public_access boolean member. The
+        vendored singular runs create_resource_methods over cluster.to_h, which turns the
+        resources_vpc_config hash into an AwsResourceProbe carrying that boolean, and its own initialize
+        already dereferences resources_vpc_config unconditionally, so a cluster that reached this control has
+        one. Where the member is absent the probe answers with a NullResponse, and NullResponse == false is
+        false, so it FAILS rather than passing vacuously. `exclude` names only DELETING, unlike CKV_AWS_37,
+        CKV_AWS_58 and CKV_AWS_339 on the same plural: those exclude CREATING because logging is not
+        configured yet on a cluster mid-create, whereas endpoint access is fixed at create time and never
+        settles later, so excluding CREATING here would drop a real finding rather than a transient one. That
+        is why exclude: is declared per mapping and not per plural.'
+      reader: stock
   CKV_AWS_42:
     aws_efs_file_system:
       assert:
-        arg: efs_file_system_identifier
+        arg: file_system_id
         property: encrypted
         resource: aws_efs_file_system
         satisfies: equals
         value: true
       enumerate:
-        ids: names
+        ids: file_system_ids
         resource: aws_efs_file_systems
+      note: 'Two corrections found by tools/lint_resource_map.py once it learned to read an identifier
+        declared in a raise message rather than in validate_parameters. The singular identifies a file
+        system by `file_system_id` or `creation_token` and raises ArgumentError on anything else, so
+        `efs_file_system_identifier` never reached an API call -- and InSpec does not rescue ArgumentError
+        out of a resource constructor, so every asset reported as a FAILED test. And `names` is
+        FileSystemDescription.Name, the optional Name tag: it is not required by the EFS API shape, so an
+        unnamed file system enumerated as a blank id. `file_system_ids` reads file_system_id, which the
+        shape marks required.'
       reader: stock
   CKV_AWS_48:
     aws_mq_broker:

@@ -64,6 +64,21 @@ ANY_OF_FORMS = [
     re.compile(r"require_any_of:\s*%w\[([^\]]*)\]"),
 ]
 MUST_PROVIDE = re.compile(r"`\[([^\]`]*)\]`\s*must be provided")
+# Several resources in the pack do not declare their identifier to
+# `validate_parameters` at all -- they hand it a computed list
+# (`required: [query_arguments.keys.first]`), which reads as no requirement here,
+# and then raise their own ArgumentError naming the parameter in prose:
+#
+#   raise ArgumentError, "...: `cache_cluster_id` must be provided." unless ...
+#   raise ArgumentError, "...: `file_system_id` or `creation_token` must be provided."
+#
+# Without this the resource looked like it accepted anything, the `arg:` check
+# below was skipped for it, and four mappings passed a keyword the resource
+# rejects. That is an ArgumentError at exec, which InSpec does NOT rescue: it
+# escapes the control and reports as a failed test, so a mapping that never ran
+# reads as a real finding.
+MUST_PROVIDE_LINE = re.compile(r"^.*must be provided.*$", re.M)
+BACKTICKED = re.compile(r"`([a-z_][a-z0-9_]*)`")
 PARAM_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -86,6 +101,8 @@ def required_params(text):
                 found.add(alts[0])
     for m in MUST_PROVIDE.finditer(text):
         found |= {p.strip().lstrip(":") for p in m.group(1).split(",")}
+    for line in MUST_PROVIDE_LINE.findall(text):
+        found |= set(BACKTICKED.findall(line))
     return sorted(p for p in found if PARAM_NAME.fullmatch(p))
 
 
@@ -171,8 +188,10 @@ def main() -> int:
                 problems.append(f"{cid}/{tf_type}: no resource named '{singular}' in the pack")
             elif (req := resources[singular]["required"]) and assertion.get("arg") not in req + ["positional"]:
                 problems.append(
-                    f"{cid}/{tf_type}: {singular} requires {req}, control passes "
-                    f"'{assertion.get('arg')}'")
+                    f"{cid}/{tf_type}: {singular} identifies its subject by {req} "
+                    f"(any one of them where there is more than one); the mapping passes "
+                    f"'{assertion.get('arg')}', which the resource rejects with an "
+                    f"ArgumentError before it makes a single API call")
             elif prop:
                 unverifiable.append(
                     f"{cid}/{tf_type}: {singular}.{prop} — provided by create_resource_methods "
