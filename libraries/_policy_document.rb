@@ -373,14 +373,35 @@ module PolicyDocument
   # A string, or a list of them, as a list of them. A nested list is flattened
   # because a hand-written document occasionally carries one, and a number or a
   # boolean is stringified rather than dropped.
+  #
+  # A `null` ELEMENT raises rather than being compacted away. `{"AWS": [null]}`
+  # compacted to `[]`, and `[]` is indistinguishable from "this statement names
+  # no principal", so the statement passed every predicate having been read by
+  # nobody. An element this file cannot judge is the ParseError case, exactly as
+  # a non-object Statement element is.
   def policy_document_flatten(value, name)
     case value
     when nil    then []
     when String then [value]
-    when Array  then value.flatten.compact.map(&:to_s)
+    when Array  then policy_document_flat_elements(value, name)
     when Numeric, TrueClass, FalseClass then [value.to_s]
     else
       raise ParseError, "#{name} is a #{value.class}; expected a string or an array of strings"
+    end
+  end
+
+  # An element that is not a scalar raises for the same reason: `to_s` on a Hash
+  # produces a string that is a valid principal to nobody and matches no
+  # wildcard, so it reads as a clean statement.
+  def policy_document_flat_elements(value, name)
+    value.flatten.each_with_index.map do |element, index|
+      unless element.is_a?(String) || element.is_a?(Numeric) ||
+             [TrueClass, FalseClass].include?(element.class)
+        raise ParseError, "#{name}[#{index}] is #{element.nil? ? 'null' : "a #{element.class}"}; " \
+                          'expected a string'
+      end
+
+      element.to_s
     end
   end
 

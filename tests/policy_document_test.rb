@@ -122,6 +122,34 @@ check 'Statement of the wrong type raises ParseError' do
   end
 end
 
+# A null inside a value list used to be compacted away, and `[]` is
+# indistinguishable from "this statement names no principal at all" -- so the
+# statement passed every predicate having been read by nobody. The whole point of
+# ParseError is that a shape this file cannot judge is never a clean answer.
+check 'a null element in a value list raises rather than being dropped' do
+  begin
+    offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => [nil] },
+                     'Action' => 's3:GetObject' }]), 'no_wildcard_principal')
+    FAILURES << 'a null principal was compacted into a clean statement'
+  rescue PolicyDocument::ParseError
+    nil
+  end
+end
+
+check 'a non-scalar element in a value list raises rather than being stringified' do
+  begin
+    offenders(doc([{ 'Effect' => 'Allow', 'Action' => [{ 'oops' => true }],
+                     'Resource' => '*' }]), 'no_admin_star_star')
+    FAILURES << 'an object Action element was stringified into a clean statement'
+  rescue PolicyDocument::ParseError
+    nil
+  end
+end
+
+assert 'a nested list of strings still flattens',
+       offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => [['*']] },
+                        'Action' => 's3:GetObject' }]), 'no_wildcard_principal').length == 1
+
 # ----------------------------------------------------------- shape variety --
 
 single = { 'Effect' => 'Allow', 'Principal' => '*', 'Action' => 's3:*' }

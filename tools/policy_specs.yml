@@ -35,6 +35,17 @@
 #
 #   document    a dotted path into the item.
 #
+#   document_absent_is_no_policy
+#               false unless declared. An ABSENT document member (the path
+#               resolves to nil) makes the asset UNDECIDABLE, because `#{nil}`
+#               is `""` and `""` is the spelling of "no policy", which passes:
+#               a mistyped path would otherwise render every asset compliant
+#               having read nothing. Set it true ONLY where the API genuinely
+#               omits the member when there is no policy —
+#               sqs:GetQueueAttributes omits `Policy` on a queue with none.
+#               iam:ListRoles always returns AssumeRolePolicyDocument, so
+#               aws_iam_role must NOT set it.
+#
 # OR it needs a second call per asset:
 #
 #   fetch:

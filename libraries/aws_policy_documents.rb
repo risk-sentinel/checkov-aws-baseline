@@ -64,6 +64,17 @@ require "aws_backend"
 # `absent_when`, by error class name. Everything else -- AccessDenied above all
 # -- is undecidable. A denied GetBucketPolicy that read as "no policy" would
 # turn the least-visible estate into the cleanest-looking one.
+#
+# The same rule applies to a document member that is simply NOT THERE. `#{nil}`
+# is `""` and `""` is the spelling of "no policy", so a `document:` path naming a
+# member the API did not return handed every asset an empty offender list and
+# rendered the control 100% compliant having read nothing. An absent member is
+# UNDECIDABLE unless the source declares `document_absent_is_no_policy: true`,
+# which is for the APIs that really do omit the member (sqs:GetQueueAttributes)
+# and for nothing else. See resolve_document.
+#
+# And a region list that could not be DISCOVERED is not a one-region account:
+# see `regions`.
 class AwsPolicyDocuments < AwsResourceBase
   name "aws_policy_documents"
   desc "Fetches a policy document per asset and evaluates a named predicate over it."
@@ -193,7 +204,25 @@ class AwsPolicyDocuments < AwsResourceBase
 
     found = []
     catch_aws_errors { found = @aws.compute_client.describe_regions.regions.map(&:region_name) }
-    found.empty? ? [@aws.compute_client.config.region].compact : found
+    return found unless found.empty?
+
+    # Region DISCOVERY failing is not the same as the account having one region.
+    #
+    # catch_aws_errors swallows a throttle or a transient 5xx on
+    # ec2:DescribeRegions and leaves `found` empty, and the fallback then scans
+    # ONE region. Without this record the control walks a single region, finds it
+    # clean and reports a PASS over an estate it never looked at -- or finds it
+    # empty and reports Not Applicable. The row makes the narrowed scope an
+    # assertion the generated control already fails on.
+    fallback = [@aws.compute_client.config.region].compact
+    @unreadable_regions << {
+      region: "region discovery",
+      error: "ec2:DescribeRegions returned no regions, so only " \
+             "#{fallback.empty? ? 'no region at all' : fallback.join(', ')} was scanned — " \
+             "this control's scope is not the account. Pass `scan_regions` explicitly, or " \
+             "grant ec2:DescribeRegions.",
+    }
+    fallback
   end
 
   def fetch_rows
@@ -246,19 +275,29 @@ class AwsPolicyDocuments < AwsResourceBase
     return undecided(row, failure) if failure
 
     row[:policy_present] = !raw.to_s.strip.empty?
+
+    # The rescue spans the EVALUATION as well as the parse. A shape the
+    # predicates do not expect -- `"Statement": "nonsense"`, a Principal that is
+    # a number -- is raised by policy_document_statements/_principals/_flatten,
+    # which run here and not in policy_document_parse. With the rescue around
+    # the parse alone, one malformed document in one asset escaped the
+    # constructor and errored the WHOLE control, taking every other asset's
+    # verdict with it -- the opposite of the per-asset undecidable this class
+    # documents. Reproduced before it was fixed; asserted in
+    # tests/policy_reader_harness.rb.
     begin
       document = PolicyDocument.policy_document_parse(raw)
+      row[:offenders] = if document.nil?
+                          []
+                        else
+                          PolicyDocument.policy_document_offenders(
+                            document, @predicate, account_id: @account_id
+                          )
+                        end
     rescue PolicyDocument::ParseError => e
       return undecided(row, "policy document did not parse: #{e.message}")
     end
 
-    row[:offenders] = if document.nil?
-                        []
-                      else
-                        PolicyDocument.policy_document_offenders(
-                          document, @predicate, account_id: @account_id
-                        )
-                      end
     row
   end
 
@@ -270,7 +309,9 @@ class AwsPolicyDocuments < AwsResourceBase
   # [raw document, failure reason]. A document already on the list item needs no
   # second call at all -- iam:ListRoles returns the trust policy inline.
   def document_for(api, item, row)
-    return ["#{dig_path(item, @spec['document'])}", nil] if @spec["document"]
+    if @spec["document"]
+      return resolve_document(dig_path(item, @spec["document"]), @spec["document"], @spec["list"])
+    end
 
     spec_fetch = @spec["fetch"]
     if spec_fetch.nil?
@@ -280,9 +321,35 @@ class AwsPolicyDocuments < AwsResourceBase
     call_fetch(api, item, row, spec_fetch)
   end
 
+  # An ABSENT document member is not "there is no policy here".
+  #
+  # `#{nil}` is `""`, and `""` is the spelling of "no policy", which is a PASS.
+  # So a `document:` path that names a member the API did not return -- a typo, a
+  # renamed member, a shape that changed under us -- used to hand every asset an
+  # empty offender list and render the control 100% compliant while assessing
+  # nothing. iam:ListRoles ALWAYS returns AssumeRolePolicyDocument, so its
+  # absence means the read was wrong, not that the role trusts nobody.
+  #
+  # Where a member really is optional and its absence really does mean "no
+  # policy" -- sqs:GetQueueAttributes omits `Policy` entirely on a queue that has
+  # none -- the source says so with `document_absent_is_no_policy: true`. It has
+  # to be declared, because the default has to be the one that cannot pass by
+  # accident. An EMPTY member (`""`) is a present answer and still passes.
+  def resolve_document(value, path, call)
+    return ["#{value}", nil] unless value.nil?
+    return ["", nil] if @spec["document_absent_is_no_policy"]
+
+    [nil,
+     "#{call} returned no `#{path}` member, so no policy was read. That is not " \
+     "evidence of an absent policy: check the `document` path in tools/policy_specs.yml " \
+     "for #{@source}, or declare `document_absent_is_no_policy: true` if this API really " \
+     "omits the member when there is no policy."]
+  end
+
   def call_fetch(api, item, row, spec_fetch)
     response = api.public_send(spec_fetch["call"], fetch_args(spec_fetch["args"], item, row))
-    ["#{dig_path(response.to_h, spec_fetch['document'])}", nil]
+    resolve_document(dig_path(response.to_h, spec_fetch["document"]),
+                     spec_fetch["document"], spec_fetch["call"])
   rescue ::Aws::Errors::ServiceError, ::Seahorse::Client::NetworkingError => e
     error = e.class.name.to_s.split("::").last
     # A declared "there is no policy here" error is a real answer and a passing

@@ -113,6 +113,18 @@ class FakeIam
         ) },
       { role_name: "broken-trust", arn: "arn:aws:iam::111122223333:role/broken-trust",
         assume_role_policy_document: "not a policy at all" },
+      # Parses as JSON, but the predicates cannot judge the shape. The ParseError
+      # comes out of policy_document_statements, which runs during EVALUATION and
+      # not during the parse -- it used to escape the constructor and error the
+      # whole control, taking every other role's verdict with it.
+      { role_name: "statement-is-a-string", arn: "arn:aws:iam::111122223333:role/sis",
+        assume_role_policy_document: JSON.generate("Version" => "2012-10-17",
+                                                   "Statement" => "nonsense") },
+      # `to_h` OMITS a member the API did not return, so the document digs out as
+      # nil, `#{nil}` is "" and "" is the spelling of "no policy" -- a PASS.
+      # iam:ListRoles always returns AssumeRolePolicyDocument, so its absence is a
+      # broken read, never a role that trusts nobody.
+      { role_name: "no-document-member", arn: "arn:aws:iam::111122223333:role/ndm" },
     ])]
   end
 
@@ -182,9 +194,13 @@ class FakeRegions
   def regions = @regions.map { |r| Struct.new(:region_name).new(r) }
 end
 
+# EMPTY_DISCOVERY stands in for ec2:DescribeRegions being throttled or denied:
+# catch_aws_errors swallows the error and leaves the region list empty.
+EMPTY_DISCOVERY = [false]
+
 class FakeEc2
   def initialize(regions) = @regions = regions
-  def describe_regions = FakeRegions.new(@regions)
+  def describe_regions = FakeRegions.new(EMPTY_DISCOVERY[0] ? [] : @regions)
   def config = Struct.new(:region).new(@regions.first)
 end
 
@@ -270,6 +286,9 @@ CTX = LibraryEvalContext.new
   CTX.instance_eval(File.read(path), "libraries/#{f}", 1)
 end
 Reader = CTX.instance_eval("AwsPolicyDocuments")
+# The baked spec table. Reached through the eval context for the same reason the
+# reader is: library constants live on the shared cref, not on Object.
+SPECS_TABLE = CTX.instance_eval("POLICY_SPECS")
 
 assert "the reader class loaded", !Reader.nil?
 assert "PolicyDocument resolves across files", CTX.instance_eval("PolicyDocument::PREDICATES").length == 6
@@ -291,8 +310,21 @@ assert "the service-principal role is clean, not absent",
        by_id["service-trust"] && by_id["service-trust"][:offenders] == []
 assert "a URL-encoded document was decoded", by_id["service-trust"][:policy_present] == true
 assert "an unparsable document is UNDECIDABLE, not clean",
-       roles.undecidable.length == 1 && roles.undecidable.first.include?("broken-trust")
+       roles.undecidable.any? { |u| u.include?("broken-trust") }
 assert "an undecidable asset is NOT in assets", by_id["broken-trust"].nil?
+assert "a shape the predicates cannot judge is UNDECIDABLE, not a control-wide error",
+       roles.undecidable.any? { |u| u.include?("statement-is-a-string") },
+       roles.undecidable.inspect
+assert "one unjudgeable asset does not cost the others their verdict",
+       by_id["public-trust"] && by_id["service-trust"]
+assert "an ABSENT document member is UNDECIDABLE, never an empty offender list",
+       roles.undecidable.any? { |u| u.include?("no-document-member") } &&
+       by_id["no-document-member"].nil?, roles.undecidable.inspect
+assert "the absent-member reason names the spec key to check",
+       roles.undecidable.find { |u| u.include?("no-document-member") }
+            .to_s.include?("assume_role_policy_document")
+assert "exactly three roles are undecidable and two have verdicts",
+       roles.undecidable.length == 3 && rows.length == 2, roles.undecidable.inspect
 assert "a global source reports region 'global'", by_id["public-trust"][:region] == "global"
 assert "the account id is carried", by_id["public-trust"][:account_id] == "111122223333"
 assert "no region was reported unreadable", roles.unreadable_regions.empty?
@@ -365,6 +397,38 @@ assert "an empty regions array does not raise, and still walks every region",
 assert "a regions array of blanks is treated as empty too",
        Reader.new(type: "aws_ecr_repository_policy", predicate: "no_wildcard_principal",
                   regions: ["", "  "]).assets.length == 2
+
+# ------------------------------------------- region discovery that failed -----
+#
+# catch_aws_errors swallows a throttle or a transient 5xx on DescribeRegions and
+# leaves the list empty. The fallback then scans ONE region — so without a record
+# the control walks a single region, finds it clean and reports a PASS over an
+# estate it never looked at. The record is what the generated control's
+# `unreadable_regions` assertion fails on.
+EMPTY_DISCOVERY[0] = true
+narrowed = Reader.new(type: "aws_ecr_repository_policy", predicate: "no_wildcard_principal")
+EMPTY_DISCOVERY[0] = false
+assert "a failed region discovery is recorded, not silently narrowed to one region",
+       narrowed.unreadable_regions.any? { |r| r[:region] == "region discovery" },
+       narrowed.unreadable_regions.inspect
+assert "the narrowing record names the region that WAS scanned",
+       narrowed.unreadable_regions.find { |r| r[:region] == "region discovery" }
+               .to_h[:error].to_s.include?("us-east-1")
+
+# --------------------------------- an absent member that really means none -----
+#
+# The default has to be the one that cannot pass by accident, but a source whose
+# API genuinely omits the member when there is no policy says so, and then an
+# absent member is a real answer and a passing one.
+SPECS_TABLE["aws_iam_role"]["document_absent_is_no_policy"] = true
+declared = Reader.new(type: "aws_iam_role", predicate: "no_wildcard_principal")
+SPECS_TABLE["aws_iam_role"].delete("document_absent_is_no_policy")
+declared_row = declared.assets.find { |r| r[:id] == "no-document-member" }
+assert "document_absent_is_no_policy makes an absent member a PASS",
+       declared_row && declared_row[:offenders] == [] &&
+       declared_row[:policy_present] == false
+assert "declaring it does not also excuse an unjudgeable document",
+       declared.undecidable.any? { |u| u.include?("statement-is-a-string") }
 
 begin
   Reader.new(type: "aws_iam_role", predicate: "no_such_thing")

@@ -57,6 +57,15 @@ MAPS = (HERE / "resource_map.yml", HERE / "resource_map_derived.yml")
 
 SPEC_REQUIRED = ("gem", "client", "list", "collection", "id")
 
+# Every key a source may carry. An unknown key is refused rather than ignored:
+# `documnet:` reads as a spec that declares no document at all, and
+# `document_absent_is_no_polcy:` reads as the default — one of which fails
+# loudly and one of which does not.
+SPEC_KEYS = SPEC_REQUIRED + (
+    "arn", "scope", "list_args", "document", "document_absent_is_no_policy", "fetch")
+FETCH_KEYS = ("call", "args", "document", "absent_when")
+SCOPES = ("global", "regional")
+
 
 def load_yaml(path, default=None):
     if not path.is_file():
@@ -101,6 +110,17 @@ def spec_problems(source, spec):
     for key in SPEC_REQUIRED:
         if not spec.get(key):
             problems.append(f"{source}: `{key}` is required")
+    for key in sorted(set(spec) - set(SPEC_KEYS)):
+        problems.append(f"{source}: unknown key `{key}` — the reader ignores it, so it reads "
+                        f"as a setting that was made and was not. Known: {', '.join(SPEC_KEYS)}")
+
+    scope = spec.get("scope")
+    if scope is not None and scope not in SCOPES:
+        problems.append(f"{source}: `scope: {scope}` is neither `global` nor `regional`; the "
+                        f"reader treats anything but `global` as regional, so a typo silently "
+                        f"walks every region and enumerates a global service once per region")
+    if spec.get("document_absent_is_no_policy") not in (None, True, False):
+        problems.append(f"{source}: `document_absent_is_no_policy` must be true or false")
 
     has_document, fetch = spec.get("document"), spec.get("fetch")
     if not has_document and not fetch:
@@ -115,6 +135,8 @@ def spec_problems(source, spec):
     for key in ("call", "document"):
         if not fetch.get(key):
             problems.append(f"{source}: fetch.{key} is required")
+    for key in sorted(set(fetch) - set(FETCH_KEYS)):
+        problems.append(f"{source}: unknown key `fetch.{key}`. Known: {', '.join(FETCH_KEYS)}")
     for name, value in (fetch.get("args") or {}).items():
         if not isinstance(value, dict):
             continue                                  # a literal argument
