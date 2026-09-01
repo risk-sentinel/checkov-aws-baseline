@@ -121,13 +121,23 @@ end
 
         results = {}
         for control in report["profiles"][0]["controls"]:
+            # An exception raised inside an example is reported as status
+            # "failed" like any other, so collapsing the two would let a control
+            # that BLEW UP satisfy a `want failed` case -- and four of the six
+            # cases here want failed. Planting `from_port: 'x'` (which makes
+            # `'x' <= 22` raise) proved that: the probe printed ok on a control
+            # that never evaluated the roll-up at all. The reporter distinguishes
+            # them by an `exception`/`backtrace` pair on the result, so an error
+            # is classified as one and matches no expectation.
+            errored = any(r.get("exception") or r.get("backtrace") for r in control["results"])
             statuses = {r["status"] for r in control["results"]}
-            results[control["id"]] = "failed" if "failed" in statuses else "passed"
+            results[control["id"]] = ("errored" if errored
+                                      else "failed" if "failed" in statuses else "passed")
 
         bad = []
         for case, (_, want) in CASES.items():
             got = results.get(f"probe_{case}", "MISSING")
-            print(f"  {case:<9} want {want:<6} got {got:<7} "
+            print(f"  {case:<9} want {want:<6} got {got:<8} "
                   f"{'ok' if got == want else 'FAIL'}")
             if got != want:
                 bad.append(case)

@@ -18,6 +18,15 @@ The gem list is read from the image itself, so it cannot drift from reality:
 
 Pass --image-gems FILE with that output to check against a specific image;
 without it, the committed manifest is used.
+
+It also asserts the BAKE is current. tools/api_specs.yml is what the linters
+read; libraries/_api_specs.rb is what the reader reads, and only
+tools/render_api_specs.py connects them. When the two drift, every static
+guarantee about the specs -- this lint, and every path tools/lint_api_paths.rb
+resolves against the SDK model -- is a guarantee about a file nothing executes.
+That is not hypothetical: a field removed from the YAML because ListFunctions
+does not return it stayed in the bake, so the reader went on declaring a member
+the lint had just proved absent.
 """
 import argparse
 import pathlib
@@ -28,6 +37,7 @@ import yaml
 HERE = pathlib.Path(__file__).resolve().parent
 SPECS = HERE / "api_specs.yml"
 MANIFEST = HERE / "image_gems.txt"
+BAKE = HERE.parent / "libraries" / "_api_specs.rb"
 
 
 def main() -> int:
@@ -56,7 +66,18 @@ def main() -> int:
         for t, gem in missing:
             print(f"  {t}: {gem}")
         return 1
-    print("OK — every api spec names a gem the image ships.")
+    if not BAKE.is_file():
+        print(f"::error::no baked spec table at {BAKE}. Run tools/render_api_specs.py.")
+        return 1
+    import render_api_specs
+    if BAKE.read_text() != render_api_specs.bake(specs):
+        print("::error::libraries/_api_specs.rb is stale against tools/api_specs.yml. The "
+              "reader loads the BAKE and every lint reads the YAML, so a drift means the "
+              "specs are checked in one file and executed from another. Run "
+              "tools/render_api_specs.py and commit the result.")
+        return 1
+
+    print("OK — every api spec names a gem the image ships, and the bake is current.")
     return 0
 
 

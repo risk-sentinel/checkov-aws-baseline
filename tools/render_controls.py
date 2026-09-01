@@ -651,12 +651,20 @@ def ruby_literal(value):
     of "IMMUTABLE" rendered as the bare word `immutable`, which is a NameError at
     exec and reports as a FAILED control rather than an errored one — a broken
     control that reads as a finding.
+
+    The quote escape is `\\'`, not `''`. `''` is the SQL escape; Ruby reads
+    `'a''b'` as two adjacent literals and concatenates them to "ab", silently
+    DROPPING the quote — so a value containing an apostrophe would be compared
+    against a string that is not the one authored, and the control would fail
+    (or pass) on a value nobody wrote. A backslash has to be escaped first or it
+    would eat the escape that follows it. tools/render_api_specs.py's `ruby()`
+    already had this right; this is the same rule in the other renderer.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def enumeration_for(spec, enum):

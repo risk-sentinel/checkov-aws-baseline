@@ -179,15 +179,39 @@ MAPS.each do |file|
         errors << "#{cid}/#{type}: `field: #{field_path}` — #{e.message}"
         next
       end
-      next if collection_shape == :map
+      if collection_shape == :map
+        # Skipping here would leave the condition paths unchecked while the lint
+        # still reported OK -- the exact silence this file exists to remove. A
+        # map's keys are data, so nothing static can resolve past one; a roll-up
+        # over a field behind a map has to wait for a guard that can.
+        errors << "#{cid}/#{type}: `field: #{field_path}` crosses a map, so its condition " \
+                  "paths CANNOT be resolved statically. A roll-up whose paths are unchecked " \
+                  "is a control that may be unable to fail — do not ship it on this field."
+        next
+      end
 
       item = element_shape(collection_shape)
+      if item.is_a?(Shapes::MapShape)
+        errors << "#{cid}/#{type}: `field: #{field_path}` is a map, whose keys are data — no " \
+                  "condition path over it can be resolved statically, and an unchecked " \
+                  "roll-up path is a control that may be unable to fail."
+        next
+      end
+
       Array(mapping["conditions"]).each do |condition|
         Array(condition["path"]).each do |path|
           checked += 1
           begin
             landed = resolve(item, path)
-            notes << "#{cid}/#{type}: condition path `#{path}` crosses a map; rest unchecked" if landed == :map
+            # A NOTE here would be the same silence one level down: the lint would
+            # print OK having left this path unresolved, which is precisely the
+            # state that makes `none_of` vacuously true for every asset. A scalar
+            # `fields:` path crossing a map is only a nil the template filters;
+            # a roll-up CONDITION path crossing one is a verdict nothing checked.
+            if landed == :map
+              errors << "#{cid}/#{type}: condition path `#{path}` crosses a map, so the rest " \
+                        "of it CANNOT be resolved statically. Do not ship a roll-up on it."
+            end
           rescue RuntimeError => e
             errors << "#{cid}/#{type}: condition path `#{path}` — #{e.message}"
           end

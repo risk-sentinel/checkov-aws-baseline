@@ -154,9 +154,9 @@ class AwsApiAssets < AwsResourceBase
   end
 
   def row_for(item, region)
-    row = { id: item[@spec["id"].to_sym].to_s, region: region || "global",
+    row = { id: dig_path(item, @spec["id"]).to_s, region: region || "global",
             account_id: @account_id, type: @type }
-    row[:arn] = item[@spec["arn"].to_sym] if @spec["arn"]
+    row[:arn] = dig_path(item, @spec["arn"]) if @spec["arn"]
     (@spec["fields"] || {}).each { |name, path| row[name.to_sym] = dig_path(item, path) }
     row
   end
@@ -164,11 +164,21 @@ class AwsApiAssets < AwsResourceBase
   # "tracing_config.mode" -> item[:tracing_config][:mode], tolerating a missing
   # level. A field the API did not return is nil, and a control skips a nil
   # rather than reading it as a passing false.
+  #
+  # `false` is a VALUE and must survive, so the symbol key is tested for nil
+  # explicitly rather than for truthiness. `node[key.to_sym] || node[key]` read a
+  # member the API returned as `false` -- the FAILING state for every
+  # `equals: true` mapping -- as nil, which the generated template then filters
+  # out of scope as "does not express this setting". A boundary where every
+  # asset failed rendered as Not Applicable, and one where some failed reported
+  # 100% pass over the survivors. Same reason _checkov_collection.rb's `step`
+  # tests nil explicitly; both walks have to.
   def dig_path(item, path)
     path.to_s.split(".").reduce(item) do |node, key|
-      break nil unless node.respond_to?(:[])
+      break nil unless node.is_a?(Hash)
 
-      node.is_a?(Hash) ? (node[key.to_sym] || node[key]) : nil
+      value = node[key.to_sym]
+      value.nil? ? node[key] : value
     end
   end
 end
