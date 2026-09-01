@@ -10,7 +10,7 @@
 
 control 'CKV2_AWS_7' do
   impact 0.0
-  title 'Ensure that Amazon EMR clusters'' security groups are not open to the world'
+  title 'Ensure that Amazon EMR clusters\' security groups are not open to the world'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

@@ -84,7 +84,14 @@ control 'CKV_AWS_278' do
   # deliberately not filtered out here.
   in_scope = assets.assets(exempt: exempt)
 
-  applicable = !in_scope.empty?
+  # `!unreadable.empty?` keeps the control APPLICABLE when the enumeration could
+  # not be read. Without it, the single case the guard above exists for — every
+  # region denied, so ZERO rows AND an error — makes `in_scope` empty, only_if
+  # skips the whole control, and the guard is skipped along with it: impact 0.0
+  # and one skipped result, which HDF rolls up as Not Applicable. A guard that
+  # only_if suppresses is not a guard, and this one was suppressed in exactly
+  # the state it was written to catch.
+  applicable = !in_scope.empty? || !unreadable.empty?
   impact 0.5
   impact 0.0 unless applicable
   only_if('no aws_memorydb_snapshot in scope expressing this setting') { applicable }

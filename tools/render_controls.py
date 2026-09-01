@@ -256,7 +256,14 @@ control '{cid}' do
 {nil_filter_comment}
   in_scope = assets.assets(exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  # `!unreadable.empty?` keeps the control APPLICABLE when the enumeration could
+  # not be read. Without it, the single case the guard above exists for — every
+  # region denied, so ZERO rows AND an error — makes `in_scope` empty, only_if
+  # skips the whole control, and the guard is skipped along with it: impact 0.0
+  # and one skipped result, which HDF rolls up as Not Applicable. A guard that
+  # only_if suppresses is not a guard, and this one was suppressed in exactly
+  # the state it was written to catch.
+  applicable = !in_scope.empty? || !unreadable.empty?
   impact {impact}
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope expressing this setting') {{ applicable }}
@@ -605,7 +612,7 @@ exempt       = (input('exempt_assets') || {{}})['{cid}'] || []
 applies_to   = {types_rb}
 
 control '{cid}' do
-  title '{entry["name"].rstrip(".").replace("'", "''")}'
+  title '{ruby_quoted_body(entry["name"].rstrip("."))}'
 
   desc <<~DESC
 {wrap(f"Checkov asserts this against Terraform. This profile asserts it against the {prose} that actually exist.", 4)}{stronger}
@@ -687,7 +694,7 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
 
     return STOCK_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_quoted_body(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the {tf_type} resources that actually exist, read through the stock "
                   f"inspec-aws {assertion['resource']} resource.", 4),
@@ -712,6 +719,33 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
         prop=assertion["property"], matcher=matcher)
 
 
+def ruby_single_quoted(text):
+    """A Python string as a Ruby single-quoted literal, escaped correctly.
+
+    `"'" + s.replace("'", "''")` is the SQL escape, and Ruby does not read it.
+    Ruby juxtaposes adjacent string literals, so `'a''b'` lexes as `'a'` `'b'`
+    and evaluates to "ab" — the apostrophe is DELETED, silently, with no syntax
+    error to notice. Eleven control titles were rendering that way:
+    "a statement''s actions" reached HDF as "a statements actions", and
+    "has ''restrict_public_buckets'' enabled" lost both quotes.
+
+    Cosmetic in a title; not cosmetic in a comparison value, where a silently
+    different string is compared against the API and the control passes or fails
+    on the wrong answer with nothing to show for it.
+
+    Backslash first, or it would then escape the backslashes this adds.
+    tools/render_api_specs.py already escapes this way; this is the same rule.
+    """
+    return "'" + ruby_quoted_body(text) + "'"
+
+
+def ruby_quoted_body(text):
+    """The inside of a Ruby single-quoted string, for the templates that already
+    write the surrounding quotes themselves. Same escaping rule as
+    ruby_single_quoted; see the note there for why `''` is not it."""
+    return str(text).replace("\\", "\\\\").replace("'", "\\'")
+
+
 def ruby_literal(value):
     """A value as Ruby source.
 
@@ -724,7 +758,7 @@ def ruby_literal(value):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+    return ruby_single_quoted(value)
 
 
 def enumeration_for(spec, enum):
@@ -808,7 +842,7 @@ def render_api(cid, version, entry, mapping, meta, fixes):
     spec = mapping[tf_type]
     return API_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_quoted_body(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the {tf_type} resources that actually exist, enumerated through the "
                   f"declarative API spec.", 4),
@@ -991,7 +1025,7 @@ def render_membership(cid, version, entry, mapping, meta, fixes):
 
     return MEMBERSHIP_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_quoted_body(entry["name"].rstrip(".")),
         desc=desc,
         rationale=wrap(meta["rationale"], 4),
         what=wrap("Checkov looks for: " + check_prose(entry, meta), 4),
@@ -1009,7 +1043,7 @@ def render_membership(cid, version, entry, mapping, meta, fixes):
         match_region=match_region, region_reading=region_reading,
         right_filter=right_filter, filter_guard=filter_guard,
         empty_right_comment=comment_block(spec["empty_right_means"]),
-        uncovered_message=uncovered.replace("'", "''"))
+        uncovered_message=ruby_quoted_body(uncovered))
 
 
 def render_singleton(cid, version, entry, mapping, meta, fixes):
@@ -1038,7 +1072,7 @@ def render_singleton(cid, version, entry, mapping, meta, fixes):
         condition = f"subject_resource.exists? && subject_resource.{guard}"
     return SINGLETON_TEMPLATE.format(
         cid=cid, version=version, tf_type=tf_type, resource=spec["resource"],
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_quoted_body(entry["name"].rstrip(".")),
         desc=wrap(f"Checkov asserts this against Terraform. This profile asserts it against "
                   f"the account's own {tf_type}, which is a single object rather than a "
                   f"collection.", 4),
@@ -1072,7 +1106,7 @@ def render_planned(cid, version, entry, meta):
     docs = entry["tf_docs"][types[0]] if types else PROVIDER_DOCS
     return PLANNED_TEMPLATE.format(
         cid=cid, version=version,
-        title=entry["name"].rstrip(".").replace("'", "''"),
+        title=ruby_quoted_body(entry["name"].rstrip(".")),
         types=", ".join(types) or "(not derivable from the graph definition)",
         types_rb="%w[" + " ".join(types) + "]",
         needs=needs,

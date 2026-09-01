@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_295' do
   impact 0.0
-  title 'Ensure DataSync Location Object Storage doesn''t expose secrets'
+  title 'Ensure DataSync Location Object Storage doesn\'t expose secrets'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

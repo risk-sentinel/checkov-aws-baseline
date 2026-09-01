@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_355' do
   impact 0.0
-  title 'Ensure no IAM policies documents allow "*" as a statement''s resource for restrictable actions'
+  title 'Ensure no IAM policies documents allow "*" as a statement\'s resource for restrictable actions'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader

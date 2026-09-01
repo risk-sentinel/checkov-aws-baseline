@@ -10,7 +10,7 @@
 
 control 'CKV_AWS_199' do
   impact 0.0
-  title 'Ensure Image Builder Distribution Configuration encrypts AMI''s using KMS - a customer managed Key (CMK)'
+  title 'Ensure Image Builder Distribution Configuration encrypts AMI\'s using KMS - a customer managed Key (CMK)'
 
   desc <<~DESC
     Catalogued from Checkov 3.3.16, not yet assessed here: no reader
