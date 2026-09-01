@@ -1,0 +1,16 @@
+name: membership-harness
+title: membership harness
+maintainer: x
+copyright: x
+license: Apache-2.0
+summary: exercises the generated membership control body against fabricated rows
+version: 0.1.0
+supports:
+  - platform: os
+inputs:
+  - name: scan_regions
+    type: array
+    value: ['us-east-1']
+  - name: exempt_assets
+    type: hash
+    value: {}

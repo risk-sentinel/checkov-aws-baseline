@@ -1,0 +1,677 @@
+# Slice coll-b — checks whose deployed assertion is a roll-up (any_of / all_of /
+# none_of) over a collection-valued field.
+#
+# Twenty checks were assigned. Five are mapped; fifteen are skipped, and the
+# reason for each is in `skipped:` rather than in a commit message, because a
+# check nobody can map is a finding about the catalogue.
+#
+# Two of the assigned twenty (CKV_AWS_285, CKV_AWS_293) are ALREADY live. They
+# are recorded in `skipped:` with that fact rather than re-proposed: merge_proposals
+# refuses a draft that replaces a reviewed or exec-validated mapping, and it is
+# right to.
+#
+# A sixth, CKV_AWS_318, was drafted and then WITHDRAWN on adversarial review: it
+# is claimed by tools/staging/pc-b.yml as well — both the check and the
+# aws_elasticsearch_domain api spec — which merge_proposals refuses on the full
+# run, and the draft also asserted zone awareness, which the check does not. The
+# reasoning and the one-line fix that belongs in pc-b are in `skipped:`.
+#
+# Every path below was resolved against the AWS SDK response model in the
+# auditor image (`ruby -e 'require "aws-sdk-x"; Aws::X::Types::Y.members'`),
+# not transliterated from the Terraform argument. The members confirmed:
+#   Aws::EC2::Types::IpPermission            ip_protocol from_port to_port
+#                                            ip_ranges ipv_6_ranges
+#   Aws::EC2::Types::IpRange                 cidr_ip
+#   Aws::EC2::Types::Ipv6Range               cidr_ipv_6
+#   Aws::ElasticLoadBalancing::Types::ListenerDescription   listener
+#   Aws::ElasticLoadBalancing::Types::Listener              protocol
+#   Aws::ECS::Types::TaskDefinition          task_definition_arn
+#                                            container_definitions
+#   Aws::ECS::Types::ContainerDefinition     readonly_root_filesystem privileged
+
+mappings:
+
+  # --------------------------------------------------------------- EC2 / SG --
+  # The aws_security_group api spec is already live and already carries both
+  # ip_permissions and ip_permissions_egress, so these three reuse the shape
+  # CKV_AWS_24 was exec-validated on rather than inventing one.
+
+  CKV_AWS_260:
+    aws_security_group:
+      reader: api
+      field: ip_permissions
+      satisfies: none_of
+      conditions:
+      - path: from_port
+        satisfies: at_most
+        value: 80
+        when_absent: true
+      - path: to_port
+        satisfies: at_least
+        value: 80
+        when_absent: true
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      note: 'Structurally identical to the exec-validated CKV_AWS_24 mapping, with 22 replaced
+        by 80; the field and every condition path are the ones that mapping already proved
+        against ec2:DescribeSecurityGroups (IpPermissions[].IpRanges[].CidrIp and
+        Ipv6Ranges[].CidrIpv6 — SDK ip_ranges.cidr_ip and ipv_6_ranges.cidr_ipv_6).
+        when_absent: true on both port conditions is the deployed reading of Checkov''s
+        protocol "-1" case: AWS stores an all-traffic rule with NO FromPort or ToPort member
+        at all, and "the member is absent" is exactly "every port", so without it a rule
+        opening everything to the world would pass a check about port 80.'
+
+  CKV_AWS_277:
+    aws_security_group:
+      reader: api
+      field: ip_permissions
+      satisfies: none_of
+      conditions:
+      - path: ip_protocol
+        satisfies: equals
+        value: '-1'
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      note: '"Port -1" is not a port. In Terraform it is the from_port = -1 / to_port = -1 /
+        protocol = "-1" spelling of an all-traffic rule, and Checkov''s port arithmetic fires
+        on exactly that literal. AWS does not store it that way: DescribeSecurityGroups returns
+        such a permission as IpProtocol "-1" carrying no FromPort or ToPort member at all.
+        So the deployed equivalent of Checkov''s literal is the protocol, not a port range,
+        and that is what is asserted here — ip_protocol is a member EC2 always populates on
+        an IpPermission, so the condition is decidable on every element rather than resting
+        on a when_absent verdict. Deliberately narrower than CKV_AWS_24: every rule this
+        fails, CKV_AWS_24 also fails, and the two are separate checks upstream for the same
+        reason they are separate here — "every protocol and every port is open to the
+        internet" is a different finding from "SSH is".'
+
+  CKV_AWS_382:
+    aws_security_group:
+      reader: api
+      field: ip_permissions_egress
+      satisfies: none_of
+      conditions:
+      - path: ip_protocol
+        satisfies: equals
+        value: '-1'
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      note: 'CKV_AWS_277 over the egress side. ip_permissions_egress is already declared on
+        the live aws_security_group api spec, and Aws::EC2::Types::IpPermission is the same
+        structure on both sides, so every condition path is the confirmed one.
+        Expect this to fail widely and read the failures before treating them as noise: EC2
+        gives EVERY security group a default egress permission of IpProtocol "-1" to
+        0.0.0.0/0 unless one is written over it, so an account that has never narrowed egress
+        fails on nearly every group. That is the true state of the estate and it is what
+        Checkov flags; it is a finding, not a false positive. It can pass — a group whose
+        egress is written as explicit protocol/port/destination rules has no "-1" permission
+        at all — so this is not a control that cannot pass.'
+
+  # --------------------------------------------------------------- ELB (v1) --
+
+  CKV_AWS_376:
+    aws_elb:
+      reader: api
+      field: listener_descriptions
+      satisfies: none_of
+      conditions:
+      - path: listener.protocol
+        satisfies: not_in_list
+        value:
+        - HTTPS
+        - SSL
+        when_absent: true
+      note: 'The aws_elb api spec is already live and already declares listener_descriptions.
+        Aws::ElasticLoadBalancing::Types::ListenerDescription carries `listener`, and
+        Aws::ElasticLoadBalancing::Types::Listener carries `protocol` — confirmed against the
+        SDK model, and NOT the same thing as `instance_protocol`, which is the back-end leg
+        and is a different question.
+        Written as not_in_list [HTTPS, SSL] rather than in_list [HTTP, TCP] on purpose. The
+        two are equivalent over ELB classic''s closed set of four protocols, but they fail in
+        opposite directions if the API ever answers in a casing this does not expect: the
+        in_list form would match nothing and none_of would pass VACUOUSLY, while this form
+        treats an unrecognised protocol as unencrypted and fails visibly. when_absent: true
+        for the same reason — a listener whose protocol could not be read has not been shown
+        to use TLS.
+        Deliberately ONE condition, not two. The proposal also wanted "every HTTPS/SSL
+        listener carries an ssl_certificate_id", and that clause is dropped rather than
+        folded in because ELB classic refuses to create an HTTPS or SSL listener without
+        SSLCertificateId — it is a condition that cannot fail on a deployed listener, and a
+        condition that cannot fail adds nothing but the appearance of rigour.'
+
+  # ---------------------------------------------------------------- ECS ------
+
+  CKV_AWS_336:
+    aws_ecs_task_definition:
+      reader: api
+      field: container_definitions
+      satisfies: all_of
+      conditions:
+      - path: readonly_root_filesystem
+        satisfies: equals
+        value: true
+        when_absent: false
+      note: 'Aws::ECS::Types::ContainerDefinition carries readonly_root_filesystem — confirmed
+        against the SDK model, and it is the member name, not the Terraform argument spelling.
+        ECS refuses a task definition with no container definitions, so container_definitions
+        is never empty on a real asset and all_of cannot pass vacuously. AWS omits
+        readonly_root_filesystem entirely when it was never set, which is the exact violation
+        this rule exists to catch, so when_absent is false and the omission FAILS.
+        The enumeration deliberately does NOT use ecs:ListTaskDefinitions. That call returns
+        every REVISION ever registered, which tools/proposals/parentchild.yml records as the
+        one population in this catalogue that costs more than the rest of the profile
+        combined. ecs:ListTaskDefinitionFamilies takes no required argument, defaults to
+        ACTIVE families, and is bounded by the FAMILY count;
+        ecs:DescribeTaskDefinition(taskDefinition: <family>) then resolves the latest ACTIVE
+        revision, which is the definition a new task would actually run. That is a divergence
+        from Checkov, which sees every revision in the HCL, and it is the right one: a
+        deregistered revision is not a deployed asset.'
+
+api_specs:
+
+  aws_ecs_task_definition:
+    arg: task_definition
+    arn: task_definition_arn
+    client: Aws::ECS::Client
+    collection: task_definition
+    fields:
+      container_definitions: container_definitions
+    gem: aws-sdk-ecs
+    id: task_definition_arn
+    list: describe_task_definition
+    parent:
+      collection: families
+      id: _self
+      list: list_task_definition_families
+    scope: regional
+
+metadata:
+
+  CKV_AWS_260:
+    severity: medium
+    impact: 0.5
+    nist:
+    - SC-7
+    - SC-7 (5)
+    nist_r4:
+    - SC-7
+    - SC-7 (5)
+    cci:
+    - CCI-001097
+    - CCI-002080
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    what: 'aws_security_group: an INGRESS permission whose from_port..to_port span covers 80 —
+      or which carries no port members at all, which is how AWS stores an all-protocols rule —
+      and whose IpRanges contain 0.0.0.0/0 or whose Ipv6Ranges contain ::/0.'
+    rationale: >-
+      Port 80 is cleartext HTTP, so anything reachable on it is reachable without
+      transport confidentiality or server authentication, and world-open means reachable by
+      every host on the internet rather than by a load balancer in front of it. Rated medium
+      rather than high because a public web tier deliberately terminating a redirect on 80 is
+      a legitimate design; the finding is that the security group cannot tell that case from
+      an application server left directly exposed, and only the operator can.
+    stronger: >-
+      Checkov reads Terraform, so a rule added in the console, by a second pipeline or
+      by an incident responder during an outage is invisible to it. This reads the permissions
+      EC2 is actually enforcing, whatever created them.
+
+  CKV_AWS_277:
+    severity: high
+    impact: 0.7
+    nist:
+    - SC-7
+    - SC-7 (5)
+    nist_r4:
+    - SC-7
+    - SC-7 (5)
+    cci:
+    - CCI-001097
+    - CCI-002080
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    what: 'aws_security_group: an INGRESS permission with IpProtocol "-1" — every protocol and
+      every port — whose IpRanges contain 0.0.0.0/0 or whose Ipv6Ranges contain ::/0.'
+    rationale: >-
+      An all-protocols, all-ports ingress permission open to 0.0.0.0/0 removes the
+      security group as a boundary entirely; every service the instance happens to be listening
+      on, including ones nobody knows are listening, is reachable from the internet. It is also
+      the rule that survives longest, because it is usually written to unblock something during
+      an incident and never narrowed afterwards, and nothing about the workload breaks to remind
+      anyone.
+    stronger: >-
+      Deployed rather than declared, so a permission opened by hand is seen. It also
+      reads the protocol AWS actually stored rather than the from_port/to_port pair the HCL
+      declared, which is the only form in which an all-traffic rule exists after apply.
+
+  CKV_AWS_382:
+    severity: medium
+    impact: 0.5
+    nist:
+    - SC-7
+    - SC-7 (5)
+    nist_r4:
+    - SC-7
+    - SC-7 (5)
+    cci:
+    - CCI-001097
+    - CCI-002080
+    ksi:
+    - KSI-CNA-NDS
+    nist_source: agent-drafted
+    what: 'aws_security_group: an EGRESS permission with IpProtocol "-1" whose IpRanges contain
+      0.0.0.0/0 or whose Ipv6Ranges contain ::/0.'
+    rationale: >-
+      Unrestricted egress is what turns a foothold into an exfiltration channel and a
+      command-and-control channel; the boundary that matters after a compromise is the one on
+      the way out. Rated medium because it is the AWS default rather than an act, so the finding
+      is nearly universal in an account that has not done egress design, and a universal finding
+      is a backlog item rather than an incident.
+    stronger: >-
+      Checkov only sees the egress block if the HCL wrote one. A security group whose
+      Terraform declares no egress at all is silently given the open default by EC2, and reading
+      the deployed permissions is the only way that appears.
+
+  CKV_AWS_376:
+    severity: high
+    impact: 0.7
+    nist:
+    - SC-8
+    - SC-8 (1)
+    nist_r4:
+    - SC-8
+    - SC-8 (1)
+    cci:
+    - CCI-002418
+    - CCI-002421
+    ksi:
+    - KSI-SVC-CET
+    nist_source: agent-drafted
+    what: 'aws_elb: a Classic Load Balancer listener whose front-end Protocol is anything other
+      than HTTPS or SSL — that is, HTTP or raw TCP.'
+    rationale: >-
+      A listener is where a client's connection lands, so its protocol decides whether
+      the session between the client and the boundary is encrypted and whether the client can
+      authenticate the endpoint at all. An HTTP or TCP listener carries credentials, session
+      cookies and payloads in cleartext across whatever network the client sits on, and no
+      configuration behind the load balancer compensates for that.
+    stronger: >-
+      Asserts the front-end protocol on the listeners AWS is actually serving, including
+      listeners added outside Terraform. Deliberately does NOT also assert that HTTPS listeners
+      carry a certificate: ELB classic will not create one without SSLCertificateId, so that
+      clause could not fail and is not written.
+
+  CKV_AWS_336:
+    severity: medium
+    impact: 0.5
+    nist:
+    - CM-7
+    nist_r4:
+    - CM-7
+    cci:
+    - CCI-000381
+    ksi:
+    - KSI-CMT-CFG
+    nist_source: agent-drafted
+    what: 'aws_ecs_task_definition: a container definition in the latest ACTIVE revision of a
+      task-definition family whose readonlyRootFilesystem is not true — including the common
+      case where the member is absent because it was never set.'
+    rationale: >-
+      A writable root filesystem lets anything that achieves execution inside the
+      container drop a payload, modify a binary or install persistence, and the change survives
+      for the life of the task while being invisible to image scanning, which only ever looked
+      at the image. Read-only roots remove that step entirely; writable state belongs in a
+      declared volume, which is auditable in a way an arbitrary write is not.
+    stronger: >-
+      Checkov reads whatever revisions the Terraform declares. This reads the latest
+      ACTIVE revision of every task-definition family registered in the account, which is the
+      definition a new task will actually run, and it sees families registered by a pipeline
+      or by hand that no HCL in the repository describes.
+
+fixes:
+
+  CKV_AWS_260:
+    aws_security_group:
+      terraform: |
+        resource "aws_security_group" "web" {
+          name   = "web"
+          vpc_id = aws_vpc.example.id
+
+          # HTTP arrives from the load balancer's security group, never from a
+          # CIDR. There is no ingress block carrying cidr_blocks = ["0.0.0.0/0"];
+          # the public edge is the ALB, and it is the only thing that should be
+          # able to reach 80 here.
+          ingress {
+            description     = "HTTP from the public ALB"
+            from_port       = 80
+            to_port         = 80
+            protocol        = "tcp"
+            security_groups = [aws_security_group.alb.id]
+          }
+        }
+      cli: |
+        aws ec2 revoke-security-group-ingress --group-id <sg-id> --protocol tcp --port 80 --cidr 0.0.0.0/0
+        aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=80,ToPort=80,Ipv6Ranges=[{CidrIpv6=::/0}]
+      note: >-
+        The revoke closes the exposure now and the next terraform apply reopens it if the
+        HCL still carries the rule, so the CLI is containment and the Terraform change is the
+        fix. A permission whose range merely SPANS 80 — 0-65535, or an IpProtocol of "-1",
+        which AWS stores with no ports at all — must be revoked with the range it was created
+        with, not with --port 80. If the world genuinely must reach 80, put an ALB in front and
+        move the rule to the ALB's security group rather than widening this one.
+
+  CKV_AWS_277:
+    aws_security_group:
+      terraform: |
+        resource "aws_security_group" "app" {
+          name   = "app"
+          vpc_id = aws_vpc.example.id
+
+          # No protocol = "-1" ingress block, and no cidr_blocks = ["0.0.0.0/0"].
+          # Every port that must be reachable is named, with the source that is
+          # allowed to reach it.
+          ingress {
+            description     = "app traffic from the ALB"
+            from_port       = 8443
+            to_port         = 8443
+            protocol        = "tcp"
+            security_groups = [aws_security_group.alb.id]
+          }
+        }
+      cli: |
+        aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]
+        aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=-1,Ipv6Ranges=[{CidrIpv6=::/0}]
+      note: >-
+        An IpProtocol of "-1" is revoked as a protocol, not as a port range — there are no
+        FromPort or ToPort members on the stored permission to name. Revoke it before writing
+        the replacement rules if the exposure is live; otherwise write the narrow rules first so
+        nothing is interrupted, then revoke. Confirm what was actually reaching the instance
+        (VPC flow logs, or the load balancer's target health) before assuming the narrow set is
+        complete.
+
+  CKV_AWS_382:
+    aws_security_group:
+      terraform: |
+        resource "aws_security_group" "app" {
+          name   = "app"
+          vpc_id = aws_vpc.example.id
+
+          # An egress block MUST be present. A security group whose Terraform
+          # declares none is given the open "-1 to 0.0.0.0/0" default by EC2, and
+          # the HCL looks clean while the deployed group is wide open.
+          egress {
+            description     = "to the database"
+            from_port       = 5432
+            to_port         = 5432
+            protocol        = "tcp"
+            security_groups = [aws_security_group.db.id]
+          }
+
+          egress {
+            description     = "to AWS APIs via the VPC endpoints"
+            from_port       = 443
+            to_port         = 443
+            protocol        = "tcp"
+            prefix_list_ids = [aws_vpc_endpoint.s3.prefix_list_id]
+          }
+        }
+      cli: |
+        aws ec2 authorize-security-group-egress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=<pl-id>}]
+        aws ec2 revoke-security-group-egress --group-id <sg-id> --ip-permissions IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]
+      note: >-
+        Order matters here in a way it does not for ingress. Authorize the replacement egress
+        FIRST and revoke the open default second — revoking first severs every outbound
+        connection the workload has, including the ones to AWS APIs it needs to keep running.
+        Egress narrowing is the change most likely to break a working system, so establish what
+        the workload actually talks to from VPC flow logs before doing it, and expect to need
+        endpoints or prefix lists for AWS services.
+
+  CKV_AWS_376:
+    aws_elb:
+      terraform: |
+        resource "aws_elb" "example" {
+          name    = "example"
+          subnets = var.public_subnet_ids
+
+          listener {
+            lb_port            = 443
+            lb_protocol        = "https"
+            instance_port      = 8443
+            instance_protocol  = "https"
+            ssl_certificate_id = aws_acm_certificate.example.arn
+          }
+
+          # There is no lb_protocol = "http" listener. A redirect from 80 is not
+          # expressible on a Classic Load Balancer, so if one is needed the
+          # right move is an Application Load Balancer with a redirect action,
+          # not an HTTP listener here.
+        }
+      cli: |
+        aws elb create-load-balancer-listeners --load-balancer-name <name> --listeners Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTPS,InstancePort=8443,SSLCertificateId=<acm-arn>
+        aws elb delete-load-balancer-listeners --load-balancer-name <name> --load-balancer-ports 80
+      note: >-
+        Create the HTTPS listener before deleting the cleartext one, and move clients over
+        before the delete — deleting a listener drops every connection on that port immediately
+        and there is no redirect to catch them. Classic Load Balancers cannot redirect at all,
+        so a workload that needs an HTTP-to-HTTPS redirect is a migration to an Application Load
+        Balancer, not a listener edit. Check the instance_protocol leg too: it is a separate
+        setting, not covered by this control, and an HTTPS front end talking cleartext to the
+        instances leaves the inside of the VPC unencrypted.
+
+  CKV_AWS_336:
+    aws_ecs_task_definition:
+      terraform: |
+        resource "aws_ecs_task_definition" "example" {
+          family = "example"
+
+          container_definitions = jsonencode([
+            {
+              name                   = "app"
+              image                  = var.image
+              essential              = true
+              readonlyRootFilesystem = true
+
+              # Everything the process needs to write goes in a declared mount,
+              # so the writes are visible in the task definition instead of
+              # landing anywhere in the container's filesystem.
+              mountPoints = [
+                { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+              ]
+            },
+          ])
+
+          volume {
+            name = "tmp"
+          }
+        }
+      cli: |
+        aws ecs register-task-definition --cli-input-json file://task-definition.json
+      note: >-
+        A task definition revision is immutable, so there is no in-place fix — the change is
+        a new revision plus an update of every service that references the family, and running
+        tasks keep the old revision until they are replaced. Expect the first attempt to crash:
+        application servers, language runtimes and agents write to paths nobody documents, and the
+        way to find them is to run the read-only revision in a non-production environment and add
+        a declared volume for each path that fails, rather than reverting the flag.
+
+skipped:
+
+  CKV_AWS_232: >-
+    NACL ingress to port 22. Every condition is expressible — egress false, rule_action
+    'allow', cidr_block/ipv_6_cidr_block in the world list, port_range.from at_most 22 and
+    port_range.to at_least 22 with when_absent true for the entry that names no port range —
+    but the check is not a conjunction over independent entries. Network ACLs are evaluated in
+    RuleNumber order and the first match wins, so a lower-numbered DENY covering 0.0.0.0/0 on
+    22 makes a higher-numbered ALLOW unreachable. The roll-up verbs judge each element
+    independently and have no way to express precedence, so a mapping written with them would
+    fail every NACL that denies 22 before allowing everything — a systematic false FAIL on
+    exactly the configuration the rule wants. Needs an ordered evaluator over the entries, not
+    a roll-up. No api spec was written for aws_network_acl either, since it would only exist
+    to serve this.
+
+  CKV_AWS_259: >-
+    CloudFront response headers policy enforcing HSTS. The roll-up is not the blocker and
+    neither is the nested collection (the api reader's `collection:` already accepts a dotted
+    path, so response_headers_policy_list.items is reachable). The blocker is population
+    scope: cloudfront:ListResponseHeadersPolicies returns AWS-MANAGED policies alongside the
+    account's own unless it is called with Type=custom, and the api spec schema has no way to
+    pass a literal argument — `args:` is listed as NOT IMPLEMENTED in tools/api_specs.yml and
+    refused by tools/lint_api_specs.py. Every account carries the managed policies whether or
+    not it uses CloudFront at all, several of them (Managed-SimpleCORS,
+    Managed-CORS-With-Preflight) carry no SecurityHeadersConfig, and no consumer can remediate
+    them. The control would therefore fail in every account regardless of what the account
+    configured — a verdict that is a constant, which is as useless as one that cannot fail.
+    Unblocked by `args:` on the api spec, nothing else.
+
+  CKV_AWS_285: >-
+    NOT skipped for cause — already live. CKV_AWS_285 is mapped in
+    tools/resource_map_derived.yml with metadata and a fix already present, so this slice did
+    not re-propose it; merge_proposals refuses a draft that replaces an existing entry, and
+    correctly. It appears in this slice's assignment by mistake.
+
+  CKV_AWS_286: >-
+    IAM policies must not allow privilege escalation. Not a collection roll-up at all: it is a
+    policy-document judgement and belongs to the `policy` reader, whose unit is a Statement and
+    whose verdict depends on Effect, Action, Resource and Condition together. Checkov decides
+    it against a curated list of ~30 action COMBINATIONS (iam:CreatePolicyVersion,
+    iam:PassRole + lambda:CreateFunction, and so on), which is not a field comparison and is not
+    one of the six predicates libraries/_policy_document.rb implements (no_wildcard_principal,
+    no_wildcard_action, no_admin_star_star, no_cross_account_principal_without_condition,
+    no_account_root_principal, gh_oidc_sub_safe). Needs a new predicate in the Ruby, which is
+    outside this slice's one file — and merge_proposals refuses a mapping naming a predicate
+    nobody implemented, which is the right refusal.
+
+  CKV_AWS_287: >-
+    IAM policies must not allow credentials exposure. Same shape and same blocker as
+    CKV_AWS_286: a policy-document predicate over a curated action list (iam:CreateAccessKey,
+    sts:AssumeRole, ecr:GetAuthorizationToken and the rest), not a collection roll-up, and not
+    among the six predicates libraries/_policy_document.rb implements. Needs a new predicate.
+
+  CKV_AWS_288: >-
+    IAM policies must not allow data exfiltration. Same blocker as CKV_AWS_286 — a curated
+    action list evaluated per Statement, needing a policy predicate that does not exist yet.
+    Worth noting for whoever writes it that the exfiltration list is the one most sensitive to
+    Resource and Condition scoping, so a predicate that only looks at Action would flag every
+    legitimate read role in the account.
+
+  CKV_AWS_289: >-
+    IAM policies must not allow permissions management or resource exposure without
+    constraints. Same blocker as CKV_AWS_286. The "without constraints" half is the part that
+    makes it a genuine statement-level judgement rather than an action match: the same
+    iam:PutRolePolicy is compliant with a Resource scope and a Condition and non-compliant
+    without one, and only a predicate seeing the whole Statement can tell them apart.
+
+  CKV_AWS_290: >-
+    IAM policies must not allow write access without constraints. Same blocker as
+    CKV_AWS_286 and the same "without constraints" nuance as CKV_AWS_289 — a new policy
+    predicate, not a roll-up verb.
+
+  CKV_AWS_293: >-
+    NOT skipped for cause — already live. CKV_AWS_293 (RDS deletion protection) is in the
+    AUTHORED tools/resource_map.yml with reviewed metadata and a fix, so this slice did not
+    re-propose it. It appears in this slice's assignment by mistake.
+
+  CKV_AWS_300: >-
+    S3 lifecycle configuration must abort incomplete multipart uploads. The roll-up itself is
+    expressible — any_of over the rules with status equals 'Enabled', an
+    abort_incomplete_multipart_upload presence test, and an `empty` filter test — but there is
+    no way to enumerate the data. The value lives in s3:GetBucketLifecycleConfiguration, a
+    per-bucket sub-resource call, and tools/api_specs.yml states plainly that an S3 two-step
+    spec must not ship until two things exist: `absent_errors:`, because
+    NoSuchLifecycleConfiguration is the FAILING case and is currently recorded as a parent
+    failure rather than as a finding, and per-bucket region routing, because S3 answers 301 to
+    a call issued against the wrong region so most buckets would record a parent failure
+    instead of an answer. The vendored aws_s3_bucket does expose bucket_lifecycle_rules, but
+    roll-up verbs are supported on the `api` reader only.
+
+  CKV_AWS_318: >-
+    Elasticsearch domains configured with at least three dedicated master nodes. DRAFTED as an
+    all_of roll-up over elasticsearch_cluster_config and then WITHDRAWN from this slice on
+    review, for two reasons. (1) Ownership: tools/staging/pc-b.yml already claims BOTH
+    CKV_AWS_318 and an aws_elasticsearch_domain api spec. merge_proposals.collect() refuses a
+    check or a spec claimed by two staging files, so shipping both is a hard merge failure on
+    the full run — it is only invisible under `--only coll-b`, which reads one file. One slice
+    must own it, and pc-b's spec is the superset (eleven flattened fields against this slice's
+    one), so pc-b keeps it. (2) Faithfulness: the withdrawn draft ANDed a third condition,
+    zone_awareness_enabled == true, which the check does not assert. A domain with three
+    dedicated masters in one AZ would have FAILED a control carrying this check id while
+    Checkov passes it — a wrong failure attributed to a rule that did not make the claim.
+    Carried forward for whoever revisits pc-b's version, because pc-b's own note concedes the
+    defect: `field: dedicated_master_count, at_least 3` is nil-filtered, and AWS OMITS
+    DedicatedMasterCount when dedicated masters were never enabled — so the worst-configured
+    domain in the account is scoped OUT of the control and the control renders Not Applicable
+    on it. The one-line fix is inside pc-b, not here: add
+    `elasticsearch_cluster_config: elasticsearch_cluster_config` to its `fields:` and take the
+    roll-up form (dedicated_master_enabled == true AND dedicated_master_count at_least 3, both
+    when_absent: false), which decides the masters-off domain instead of excusing it. Both
+    members and the two-step enumeration were confirmed against the SDK model in the image
+    (ListDomainNames has no required input and returns DomainInfo.domain_name;
+    DescribeElasticsearchDomain(domain_name) returns domain_status carrying
+    elasticsearch_cluster_config), so the blocker is ownership and scope, not reachability.
+
+  CKV_AWS_334: >-
+    ECS containers must run non-privileged. Skipped on Checkov's own logic rather than on
+    reachability: the check inspects the key "privilege", and the ECS container definition
+    member is "privileged", so the upstream check cannot fire on any input. There is nothing
+    for a deployed-state control to re-assert. Recorded rather than quietly fixed because
+    "restate what the check asserted, against the deployed asset" is this profile's contract,
+    and silently asserting something stronger under the check's id would misattribute the
+    finding. Note for whoever revisits it: the assertion IS now cheap — this slice's new
+    aws_ecs_task_definition api spec already carries container_definitions, and
+    none_of(container_definitions, [privileged equals true]) would work as written — so this is
+    a deliberate scope decision, not a technical blocker.
+
+  CKV_AWS_342: >-
+    WAF rule must have an action. Blocked twice, and the roll-up verb is only the smaller half.
+    First, the per-element condition is a genuine DISJUNCTION of three different comparisons —
+    a rule is acceptable if it has an Action, OR an OverrideAction, OR a managed rule group
+    statement — and conditions are ANDed with no disjunction between different comparisons.
+    Dropping any of the three would fail every rule of the other two kinds. Second, the
+    enumeration does not exist: wafv2:ListWebACLs REQUIRES a Scope argument (REGIONAL or
+    CLOUDFRONT) and the api spec schema cannot pass a literal argument (`args:` is not
+    implemented). The classic-WAF fallback does not rescue it either: aws_waf_web_acl's
+    rules_actions returns nil entries for GROUP-type rules, so a not_empty on it would restate
+    CKV_AWS_175 rather than assert this.
+
+  CKV_AWS_352: >-
+    NACL ingress must not allow all ports. The conditions are expressible, including the
+    awkward part — "no port range at all, or 0-65535" is port_range.from at_most 0 and
+    port_range.to at_least 65535, both with when_absent true, which gives an entry that names
+    no range its documented meaning of every port. The blocker is the same as CKV_AWS_232:
+    network ACL entries are evaluated in RuleNumber order and first match wins, and a roll-up
+    that judges entries independently reports a false FAIL on any NACL that denies before it
+    allows. Needs an ordered evaluator. Also worth recording that Checkov's own version of this
+    check is close to vacuous — it passes any rule that merely SETS from_port, so an explicit
+    0-65535 rule passes it — so the assertion above is the check's title rather than its body,
+    which is a divergence a reviewer should agree to before it ships.
+
+  CKV_AWS_375: >-
+    S3 bucket must not have global-view ACL permissions. The roll-up is expressible —
+    none_of over the grants with permission in [FULL_CONTROL, READ, READ_ACP] and
+    grantee.uri equal to the AllUsers group — but the enumeration is not. s3:GetBucketAcl is a
+    per-bucket sub-resource call, and tools/api_specs.yml forbids shipping an S3 two-step spec
+    before per-bucket region routing exists, because S3 answers 301 PermanentRedirect to a call
+    issued against a bucket outside the client's region and every such bucket would be recorded
+    as a parent failure rather than assessed. Unlike CKV_AWS_300 this one does NOT also need
+    `absent_errors:` — a bucket ACL always exists — so region routing is the single thing
+    standing in its way. The vendored aws_s3_bucket exposes bucket_acl, but roll-up verbs are
+    supported on the `api` reader only.

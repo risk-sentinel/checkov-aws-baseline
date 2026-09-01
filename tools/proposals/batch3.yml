@@ -1,0 +1,1253 @@
+# batch3 -- 64 Checkov AWS checks, drafted against the vendored inspec-aws pack
+# (vendor/8d70ebd.../libraries) and the botocore 1.43.24 service models.
+#
+# Every property named below was read out of the vendored Ruby source or an
+# authoritative API shape. Nothing here is guessed.
+#
+# Two structural facts about tools/render_controls.py drove most of the skips,
+# and both were verified in the renderer source rather than assumed:
+#
+#   * The api reader rejects nil fields BEFORE asserting
+#     (`in_scope = assets.assets(...).reject { |a| a[:field].nil? }`), so under
+#     `reader: api` a `satisfies: not_empty` can never fail: an absent value
+#     leaves scope and a present one is a non-empty string. Such a mapping
+#     renders Not Applicable where the truth is "exists and is non-compliant".
+#     Under `reader: stock` there is no nil guard, so not_empty stays live.
+#   * The only satisfies verbs implemented are equals / not_empty / empty /
+#     greater_than / in_list (render_controls.py:474-487). There is no
+#     not_equals, no membership test, and no way to AND or OR two fields.
+
+mappings:
+
+  # ---------------------------------------------------------------- RDS ------
+  CKV_AWS_133:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: positional
+        property: "backup_retention_period"
+        satisfies: greater_than
+        value: 0
+      note: >-
+        Checkov accepts 0 < period <= 35. The upper bound is enforced by the RDS
+        API itself -- ModifyDBInstance rejects anything above 35 -- so on a
+        deployed instance `> 0` is the whole of the check.
+    aws_rds_cluster:
+      reader: stock
+      enumerate: {resource: aws_rds_clusters, ids: cluster_identifier}
+      assert:
+        resource: aws_rds_cluster
+        arg: db_cluster_identifier
+        property: "backup_retention_period"
+        satisfies: greater_than
+        value: 0
+      note: >-
+        aws_rds_clusters registers its id column as `cluster_identifier`
+        (singular) over the API's db_cluster_identifier -- verified in
+        aws_rds_clusters.rb fetch_data, not inferred from the plural's name.
+
+  CKV_AWS_146:
+    aws_db_cluster_snapshot:
+      reader: stock
+      enumerate: {resource: aws_rds_db_cluster_snapshots, ids: db_cluster_snapshot_identifiers}
+      assert:
+        resource: aws_rds_db_cluster_snapshot
+        arg: db_cluster_snapshot_id
+        property: "storage_encrypted"
+        satisfies: equals
+        value: true
+      note: >-
+        The singular's parameter is `db_cluster_snapshot_id`, NOT the API's
+        DBClusterSnapshotIdentifier -- aws_rds_db_cluster_snapshot.rb takes
+        db_cluster_snapshot_id and turns it into a db-cluster-snapshot-id
+        filter. The plural's column keeps the API spelling
+        (db_cluster_snapshot_identifiers), so the two differ on purpose.
+      stronger: >-
+        Checkov reads storage_encrypted on the aws_db_cluster_snapshot resource
+        block. This reads DescribeDBClusterSnapshots, so a snapshot taken by
+        hand, by a backup plan, or by an automated retention policy is assessed
+        too -- and those are the snapshots Terraform never sees.
+
+  CKV_AWS_266:
+    aws_db_snapshot_copy:
+      reader: stock
+      enumerate: {resource: aws_rds_snapshots, ids: db_snapshot_identifiers}
+      assert:
+        resource: aws_rds_snapshot
+        arg: positional
+        property: "kms_key_id"
+        satisfies: not_empty
+      note: >-
+        DescribeDBSnapshots does not distinguish a copy from an original, so this
+        asserts the property over every DB snapshot in the account -- broader
+        than the IaC check, and in the safe direction. Two caveats a reviewer
+        should see: (a) KmsKeyId is nil on an unencrypted snapshot and the stock
+        template has no nil guard, so such a snapshot raises inside the example
+        rather than reporting a clean failure -- visible, but ugly; (b) the
+        field cannot tell a customer-managed key from an AWS-managed one, so the
+        "CMK" half of the check title is not assessed. That limitation is shared
+        with the already-shipped CKV_AWS_327 / CKV_AWS_354 mappings.
+
+  # ---------------------------------------------------------------- SNS ------
+  CKV_AWS_26:
+    aws_sns_topic:
+      reader: stock
+      enumerate: {resource: aws_sns_topics, ids: topic_arns}
+      assert:
+        resource: aws_sns_topic
+        arg: arn
+        property: "kms_master_key_id"
+        satisfies: not_empty
+      note: >-
+        aws_sns_topic reads GetTopicAttributes and lifts the KmsMasterKeyId
+        attribute into a reader of that name (aws_sns_topic.rb:26). SNS omits
+        the attribute entirely on an unencrypted topic, so the value is nil
+        there and the example raises rather than failing cleanly. The topic ARN
+        is the enumeration id and the singular's argument is `arn`, not a name.
+        There is also an api_specs entry for aws_sns_topic (list_topics, no
+        fields); the stock resource is used here because it is the only one of
+        the two that can read topic attributes.
+
+  # --------------------------------------------------------- CloudFront ------
+  CKV_AWS_34:
+    aws_cloudfront_distribution:
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: "has_viewer_protocol_policies_allowing_http?"
+        satisfies: equals
+        value: false
+      note: >-
+        An exact translation. The vendored predicate collects the default cache
+        behaviour's viewer_protocol_policy plus every additional cache
+        behaviour's, then tests for "allow-all" -- the same set and the same
+        value Checkov fails on across default_cache_behavior and
+        ordered_cache_behavior.
+
+  # ---------------------------------------------------------------- ELB ------
+  CKV_AWS_92:
+    aws_elb:
+      reader: stock
+      enumerate: {resource: aws_elbs, ids: load_balancer_names}
+      assert:
+        resource: aws_elb
+        arg: load_balancer_name
+        property: "access_log_enabled?"
+        satisfies: equals
+        value: true
+      note: >-
+        access_log_enabled? reads DescribeLoadBalancerAttributes
+        (.access_log.enabled), which is the deployed form of the `access_logs`
+        block Checkov looks for.
+
+  # ---------------------------------------------------------------- EMR ------
+  CKV_AWS_349:
+    aws_emr_security_configuration:
+      reader: stock
+      enumerate: {resource: aws_emr_security_configurations, ids: security_configuration_names}
+      assert:
+        resource: aws_emr_security_configuration
+        arg: security_configuration_name
+        property: "local_disk_encryption"
+        satisfies: equals
+        value: true
+      note: >-
+        The vendored reader parses the security configuration JSON and sets
+        local_disk_encryption from the presence of
+        EncryptionConfiguration.AtRestEncryptionConfiguration.LocalDiskEncryptionConfiguration.
+        Checkov additionally requires EnableAtRestEncryption to be true, which
+        the vendored field does not test -- so this is very slightly weaker than
+        the IaC check, never stricter. The field is a computed boolean, never
+        nil, so there is no nil-subject hazard.
+
+  CKV_AWS_351:
+    aws_emr_security_configuration:
+      reader: stock
+      enumerate: {resource: aws_emr_security_configurations, ids: security_configuration_names}
+      assert:
+        resource: aws_emr_security_configuration
+        arg: security_configuration_name
+        property: "encryption_in_transit"
+        satisfies: equals
+        value: true
+      note: >-
+        Exact: the vendored field is
+        EncryptionConfiguration.EnableInTransitEncryption, which is the key
+        Checkov reads. Computed boolean, never nil.
+
+  # ---------------------------------------------------------------- MSK ------
+  CKV_AWS_81:
+    aws_msk_cluster:
+      reader: api
+      field: encryption_in_transit_client_broker
+      satisfies: equals
+      value: TLS
+    # PARTIAL, and deliberately declared as such. Checkov fails a cluster if
+    # client_broker != TLS OR in_cluster is false. The schema cannot AND two
+    # fields, so this asserts the client-broker leg only. in_cluster is
+    # published as its own field in the api spec below so a future conjunction
+    # form can pick it up without another API change.
+
+  CKV_AWS_291:
+    aws_msk_cluster:
+      reader: api
+      field: public_access_type
+      satisfies: equals
+      value: DISABLED
+    # MSK's PublicAccess.Type is a two-value enum: DISABLED or
+    # SERVICE_PROVIDED_EIPS. Checkov forbids the latter, and there is no
+    # not_equals verb, so the mapping asserts the only other legal value. A
+    # cluster old enough not to report PublicAccess at all yields nil and drops
+    # out of scope rather than failing.
+
+  # --------------------------------------------------------- CloudWatch ------
+  CKV_AWS_319:
+    aws_cloudwatch_metric_alarm:
+      reader: api
+      field: actions_enabled
+      satisfies: equals
+      value: true
+
+  CKV_AWS_338:
+    aws_cloudwatch_log_group:
+      reader: api
+      field: retention_in_days
+      satisfies: greater_than
+      value: 364
+      note: >-
+        Checkov passes retention == 0 as well, meaning "never expires". In
+        DescribeLogGroups that state is the ABSENCE of retentionInDays, not a
+        zero, so such a group has a nil field and the api reader drops it from
+        scope -- it is reported as not expressing the setting rather than failed.
+        No false positive, but a never-expiring group is unassessed. Uses the
+        existing aws_cloudwatch_log_group api spec; no new spec needed.
+
+  # ------------------------------------------------------------- Config ------
+  CKV_AWS_121:
+    aws_config_configuration_aggregator:
+      reader: api
+      field: organization_all_aws_regions
+      satisfies: equals
+      value: true
+      note: >-
+        PARTIAL. Checkov passes on all_regions under EITHER
+        account_aggregation_source OR organization_aggregation_source. The
+        account-based side is a LIST in the API (AccountAggregationSources[]),
+        and the api spec's dotted `fields` path cannot index a list, so only the
+        organization side is readable. An account-based aggregator has a nil
+        field and leaves scope rather than failing. Note the argument-name
+        divergence recorded below: Terraform's `all_regions` is the API's
+        `AllAwsRegions`.
+
+  # ------------------------------------------------------- Route 53 Domains --
+  CKV_AWS_377:
+    aws_route53domains_registered_domain:
+      reader: api
+      field: transfer_lock
+      satisfies: equals
+      value: true
+
+
+api_specs:
+
+  aws_msk_cluster:
+    gem: aws-sdk-kafka
+    client: Aws::Kafka::Client
+    # ListClusters (v1), not ListClustersV2, on purpose. v1 returns provisioned
+    # clusters with BrokerNodeGroupInfo / EncryptionInfo / LoggingInfo at the
+    # top of each item; v2 nests all of that under a `Provisioned` structure and
+    # also returns serverless clusters, whose Terraform type is
+    # aws_msk_serverless_cluster, not aws_msk_cluster. v1 is the exact
+    # correspondence and neither operation is flagged deprecated in the current
+    # service model.
+    list: list_clusters
+    collection: cluster_info_list
+    id: cluster_name
+    arn: cluster_arn
+    scope: regional
+    fields:
+      public_access_type: broker_node_group_info.connectivity_info.public_access.type
+      encryption_in_transit_client_broker: encryption_info.encryption_in_transit.client_broker
+      encryption_in_transit_in_cluster: encryption_info.encryption_in_transit.in_cluster
+      encryption_at_rest_kms_key_id: encryption_info.encryption_at_rest.data_volume_kms_key_id
+      logging_cloudwatch_enabled: logging_info.broker_logs.cloud_watch_logs.enabled
+      logging_firehose_enabled: logging_info.broker_logs.firehose.enabled
+      logging_s3_enabled: logging_info.broker_logs.s3.enabled
+
+  aws_cloudwatch_metric_alarm:
+    gem: aws-sdk-cloudwatch
+    client: Aws::CloudWatch::Client
+    # DescribeAlarms returns two collections, CompositeAlarms and MetricAlarms.
+    # The Terraform type is aws_cloudwatch_metric_alarm, so the metric list is
+    # the right one; aws_cloudwatch_composite_alarm would need its own spec.
+    list: describe_alarms
+    collection: metric_alarms
+    id: alarm_name
+    arn: alarm_arn
+    scope: regional
+    fields:
+      actions_enabled: actions_enabled
+      alarm_actions: alarm_actions
+
+  aws_route53domains_registered_domain:
+    gem: aws-sdk-route53domains
+    client: Aws::Route53Domains::Client
+    list: list_domains
+    collection: domains
+    id: domain_name
+    # Route 53 Domains has a single regional endpoint per partition
+    # (us-east-1 in aws), so a region walk would call the same endpoint once per
+    # region and report N-1 identical copies of every domain. Declared global so
+    # aws_api_assets uses the connection's own client once. The scan connection
+    # must therefore be able to reach us-east-1; if it cannot, the failure
+    # surfaces in unreadable_regions rather than as a pass.
+    scope: global
+    fields:
+      transfer_lock: transfer_lock
+      auto_renew: auto_renew
+
+  aws_config_configuration_aggregator:
+    gem: aws-sdk-configservice
+    client: Aws::ConfigService::Client
+    list: describe_configuration_aggregators
+    collection: configuration_aggregators
+    id: configuration_aggregator_name
+    arn: configuration_aggregator_arn
+    scope: regional
+    fields:
+      # Terraform calls this all_regions; the API calls it AllAwsRegions.
+      organization_all_aws_regions: organization_aggregation_source.all_aws_regions
+      organization_role_arn: organization_aggregation_source.role_arn
+
+
+metadata:
+
+  CKV_AWS_133:
+    what: backup_retention_period is set to between 1 and 35 days
+    severity: medium
+    impact: 0.5
+    nist: ['CP-9', 'CP-10']
+    nist_r4: ['CP-9', 'CP-10']
+    cci: ['CCI-000535', 'CCI-000553']
+    ksi: ['KSI-RPL-RCY']
+    rationale: >-
+      A retention period of zero turns automated backups off entirely, so a
+      dropped table or a corrupted write has no point to recover from. The
+      window is the only thing standing between a mistake and permanent data
+      loss, and it cannot be added retroactively.
+
+  CKV_AWS_146:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A cluster snapshot holds a full copy of the database and outlives the
+      cluster it came from. If it is unencrypted, the data is readable by anyone
+      who can restore it or who gains access to the snapshot store, without ever
+      touching the running database.
+    stronger: >-
+      Checkov reads the declared snapshot resource. This reads
+      DescribeDBClusterSnapshots, so snapshots created by hand or by a retention
+      policy -- the ones Terraform never declared -- are assessed too.
+
+  CKV_AWS_266:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)', 'SC-12']
+    nist_r4: ['SC-28', 'SC-28 (1)', 'SC-12']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER', 'KSI-SVC-KMG']
+    rationale: >-
+      A snapshot copy is a second, independently retained image of the database.
+      Encrypting it under a managed key keeps the ability to revoke access to
+      the copy without deleting it, which is the only lever available once a
+      snapshot has been shared or moved to another region.
+
+  CKV_AWS_26:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Messages sit in the topic between publish and delivery, and topics
+      routinely carry identifiers, tokens and operational detail from the
+      systems that publish to them. Server-side encryption puts that at-rest
+      window under a key whose use is logged and can be revoked.
+
+  CKV_AWS_34:
+    what: no cache behaviour sets viewer_protocol_policy to allow-all
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      allow-all leaves the plain HTTP listener answering, so a client that
+      starts on HTTP -- or is pushed there -- completes the request in the
+      clear, cookies and all. Redirecting or refusing is what makes the TLS
+      certificate on the distribution mean anything.
+
+  CKV_AWS_92:
+    what: an access_logs block is present and not disabled
+    severity: medium
+    impact: 0.5
+    nist: ['AU-2', 'AU-12']
+    nist_r4: ['AU-2', 'AU-12']
+    cci: ['CCI-000169', 'CCI-000172']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Without access logs the load balancer is the one hop in the request path
+      that keeps no record. Client address, path and response code for traffic
+      that never reached a backend exist nowhere else, which is exactly the
+      traffic an investigation needs.
+
+  CKV_AWS_349:
+    what: the security configuration enables at-rest encryption with a local disk encryption configuration
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      EMR spills intermediate results to the instance storage attached to each
+      node. Those files hold the same data as the source dataset and survive
+      until the node is reclaimed, so the local disks need the same treatment as
+      the source store.
+
+  CKV_AWS_351:
+    what: the security configuration sets EnableInTransitEncryption
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      Cluster nodes shuffle whole partitions of the dataset between each other
+      over the VPC network. Unencrypted, that traffic exposes the data to
+      anything with a foothold in the subnet, which is a much lower bar than
+      access to the cluster itself.
+
+  CKV_AWS_81:
+    what: encryption_info is set and encryption_in_transit does not weaken client_broker or in_cluster
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      A client_broker setting of PLAINTEXT or TLS_PLAINTEXT keeps a cleartext
+      listener open on every broker, so a producer misconfiguration silently
+      sends the topic's payload unencrypted across the VPC. Requiring TLS
+      removes the option rather than relying on every client to choose it.
+
+  CKV_AWS_291:
+    severity: high
+    impact: 0.7
+    nist: ['SC-7', 'SC-7 (5)']
+    nist_r4: ['SC-7', 'SC-7 (5)']
+    cci: ['CCI-001097', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      Public access attaches an elastic IP to every broker, putting the Kafka
+      listener directly on the internet where only the security group and the
+      cluster's own authentication stand between a scanner and the topics.
+      Brokers reached through the VPC keep that surface off the public network
+      entirely.
+
+  CKV_AWS_319:
+    severity: medium
+    impact: 0.5
+    nist: ['SI-4', 'AU-12']
+    nist_r4: ['SI-4', 'AU-12']
+    cci: ['CCI-002664', 'CCI-000172']
+    ksi: ['KSI-MLA-OSM']
+    rationale: >-
+      An alarm with actions disabled still changes state and still shows red on
+      a dashboard, but notifies nobody. It is the failure mode that looks most
+      like working monitoring, which is why it survives unnoticed for so long.
+
+  CKV_AWS_338:
+    what: retention_in_days is at least 365, or 0 meaning never expire
+    severity: medium
+    impact: 0.5
+    nist: ['AU-11', 'SI-12']
+    nist_r4: ['AU-11', 'SI-12']
+    cci: ['CCI-000167', 'CCI-001227']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Intrusions are routinely found months after the fact. A retention window
+      shorter than the time it takes to notice means the log lines that would
+      explain what happened have already been deleted when the question is
+      finally asked.
+
+  CKV_AWS_121:
+    what: an aggregation source covers all regions
+    severity: medium
+    impact: 0.5
+    nist: ['CM-8', 'AU-12']
+    nist_r4: ['CM-8', 'AU-12']
+    cci: ['CCI-000172', 'CCI-000366']
+    ksi: ['KSI-CMT-INV']
+    rationale: >-
+      An aggregator pinned to a region list records configuration only where
+      someone remembered to look. Resources appear in unexpected regions
+      precisely when nobody is watching them, so a region-limited aggregator
+      makes the inventory look complete while missing the part that matters.
+
+  CKV_AWS_377:
+    severity: medium
+    impact: 0.5
+    nist: ['CM-6', 'AC-3']
+    nist_r4: ['CM-6', 'AC-3']
+    cci: ['CCI-000366', 'CCI-000213']
+    ksi: ['KSI-CMT-CFG']
+    rationale: >-
+      Without the transfer lock, a registrar transfer needs only the auth code,
+      and a transferred domain takes the DNS zone -- and with it mail delivery
+      and every certificate issued by DNS validation -- to whoever initiated it.
+      Recovering a domain after the fact is a dispute process, not a rollback.
+
+  # `what` for the skipped custom-kind checks: render_planned still calls
+  # check_prose, and a custom check has no declarative inspected key for the
+  # catalogue to derive one from.
+  CKV_AWS_143:  {what: an object_lock_configuration block sets object_lock_enabled to Enabled}
+  CKV_AWS_300:  {what: an enabled lifecycle rule sets abort_incomplete_multipart_upload and applies to all objects}
+  CKV_AWS_375:  {what: no ACL grant gives FULL_CONTROL or READ_ACP to the AllUsers group URI}
+  CKV_AWS_392:  {what: the access point's public_access_block_configuration does not disable all three blocks}
+  CKV_AWS_70:   {what: no policy statement allows an action to Principal "*" without a narrowing condition}
+  CKV_AWS_93:   {what: no Deny statement locks every principal out of s3:PutBucketPolicy}
+  CKV_AWS_198:  {what: no aws_db_security_group resource is declared at all}
+  CKV_AWS_23:   {what: the group carries a description and so does every ingress and egress rule}
+  CKV_AWS_250:  {what: a postgres or aurora-postgresql engine_version is past the log_fdw fix}
+  CKV_AWS_388:  {what: an aurora-postgresql engine_version is not one of 10.11, 10.12, 10.13, 11.6, 11.7 or 11.8}
+  CKV_AWS_114:  {what: a cluster declaring kerberos_attributes also sets realm}
+  CKV_AWS_171:  {what: the security configuration mentions SSE-KMS}
+  CKV_AWS_350:  {what: the security configuration sets EnableEbsEncryption under LocalDiskEncryptionConfiguration}
+  CKV_AWS_229:  {what: no NACL rule allows ingress from 0.0.0.0/0 to port 21}
+  CKV_AWS_230:  {what: no NACL rule allows ingress from 0.0.0.0/0 to port 20}
+  CKV_AWS_231:  {what: no NACL rule allows ingress from 0.0.0.0/0 to port 3389}
+  CKV_AWS_232:  {what: no NACL rule allows ingress from 0.0.0.0/0 to port 22}
+  CKV_AWS_352:  {what: an ingress rule declares a from_port rather than leaving the range open}
+  CKV_AWS_259:  {what: strict_transport_security sets a max age of at least a year with include_subdomains, preload and override}
+  CKV_AWS_310:  {what: an origin_group declares failover_criteria and at least two members}
+  CKV_AWS_127:  {what: every listener block carries an ssl_certificate_id}
+  CKV_AWS_376:  {what: no listener uses a bare http or tcp instance_protocol, and https or ssl listeners carry a certificate}
+  CKV_AWS_169:  {what: the topic policy grants no internet-accessible action}
+  CKV_AWS_385:  {what: no Allow statement names a specific external IAM ARN without a condition}
+  CKV_AWS_32:   {what: the repository policy grants no internet-accessible action}
+  CKV_AWS_80:   {what: broker_logs enables at least one of cloudwatch_logs, firehose or s3}
+  CKV_AWS_192:  {what: a rule set blocks the Log4Shell message-lookup pattern}
+
+
+fixes:
+
+  CKV_AWS_133:
+    aws_db_instance:
+      terraform: |
+        resource "aws_db_instance" "app" {
+          identifier           = "app-db"
+          engine               = "postgres"
+          engine_version       = "16.4"
+          instance_class       = "db.t4g.medium"
+          allocated_storage    = 50
+          username             = "app"
+          manage_master_user_password = true
+          storage_encrypted    = true
+          skip_final_snapshot  = false
+          final_snapshot_identifier = "app-db-final"
+
+          backup_retention_period = 30            # 1-35; 0 disables backups
+          backup_window           = "03:00-04:00"
+          copy_tags_to_snapshot   = true
+        }
+      cli: |
+        aws rds modify-db-instance --db-instance-identifier app-db --backup-retention-period 30 --apply-immediately
+      note: >-
+        Raising the retention period from 0 restarts automated backups but does
+        not create history: the first recoverable point is the backup taken
+        after the change, so there is a gap equal to the time the setting was 0.
+    aws_rds_cluster:
+      terraform: |
+        resource "aws_rds_cluster" "app" {
+          cluster_identifier  = "app-aurora"
+          engine              = "aurora-postgresql"
+          engine_version      = "15.4"
+          master_username     = "app"
+          manage_master_user_password = true
+          storage_encrypted   = true
+          skip_final_snapshot = false
+          final_snapshot_identifier = "app-aurora-final"
+
+          backup_retention_period      = 30
+          preferred_backup_window      = "03:00-04:00"
+          copy_tags_to_snapshot        = true
+        }
+      cli: |
+        aws rds modify-db-cluster --db-cluster-identifier app-aurora --backup-retention-period 30 --apply-immediately
+
+  CKV_AWS_146:
+    aws_db_cluster_snapshot:
+      terraform: |
+        # A cluster snapshot inherits encryption from the cluster; it cannot be
+        # encrypted on its own. Encrypt the cluster and every snapshot follows.
+        resource "aws_rds_cluster" "app" {
+          cluster_identifier = "app-aurora"
+          engine             = "aurora-postgresql"
+          engine_version     = "15.4"
+          master_username    = "app"
+          manage_master_user_password = true
+
+          storage_encrypted = true
+          kms_key_id        = aws_kms_key.rds.arn
+        }
+
+        resource "aws_db_cluster_snapshot" "app" {
+          db_cluster_identifier          = aws_rds_cluster.app.id
+          db_cluster_snapshot_identifier = "app-aurora-2026-08-30"
+        }
+      cli: |
+        There is no in-place fix. A snapshot's encryption is fixed at creation and
+        so is the cluster's. Copy the snapshot to an encrypted one, then restore
+        a new cluster from the copy and cut over:
+        aws rds copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier app-aurora-2026-08-30 --target-db-cluster-snapshot-identifier app-aurora-2026-08-30-enc --kms-key-id <key-arn>
+      note: >-
+        Encryption cannot be turned on for an existing cluster or an existing
+        snapshot. The remediation is a copy-and-restore, and the unencrypted
+        original should be deleted once the replacement is verified.
+
+  CKV_AWS_266:
+    aws_db_snapshot_copy:
+      terraform: |
+        resource "aws_db_snapshot_copy" "app" {
+          source_db_snapshot_identifier = aws_db_snapshot.app.db_snapshot_arn
+          target_db_snapshot_identifier = "app-db-2026-08-30-copy"
+          kms_key_id                    = aws_kms_key.rds.arn
+        }
+      cli: |
+        aws rds copy-db-snapshot --source-db-snapshot-identifier app-db-2026-08-30 --target-db-snapshot-identifier app-db-2026-08-30-copy --kms-key-id <key-arn>
+      note: >-
+        An existing unencrypted snapshot cannot be encrypted in place. Copy it
+        with --kms-key-id and delete the unencrypted original.
+
+  CKV_AWS_26:
+    aws_sns_topic:
+      terraform: |
+        resource "aws_kms_key" "sns" {
+          description         = "SNS topic encryption"
+          enable_key_rotation = true
+        }
+
+        resource "aws_sns_topic" "alerts" {
+          name              = "alerts"
+          kms_master_key_id = aws_kms_key.sns.id
+        }
+      cli: |
+        aws sns set-topic-attributes --topic-arn <arn> --attribute-name KmsMasterKeyId --attribute-value <key-id>
+      note: >-
+        Encryption applies to messages published after the change; anything
+        already in flight is unaffected. Every publisher and subscriber principal
+        needs kms:GenerateDataKey and kms:Decrypt on the key, or publishing
+        starts failing at the moment the attribute is set.
+
+  CKV_AWS_34:
+    aws_cloudfront_distribution:
+      terraform: |
+        resource "aws_cloudfront_distribution" "site" {
+          enabled             = true
+          default_root_object = "index.html"
+
+          origin {
+            domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+            origin_id                = "s3-site"
+            origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+          }
+
+          default_cache_behavior {
+            target_origin_id       = "s3-site"
+            viewer_protocol_policy = "redirect-to-https"   # never allow-all
+            allowed_methods        = ["GET", "HEAD"]
+            cached_methods         = ["GET", "HEAD"]
+            cache_policy_id        = data.aws_cloudfront_cache_policy.optimized.id
+          }
+
+          ordered_cache_behavior {
+            path_pattern           = "/api/*"
+            target_origin_id       = "s3-site"
+            viewer_protocol_policy = "https-only"
+            allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+            cached_methods         = ["GET", "HEAD"]
+            cache_policy_id        = data.aws_cloudfront_cache_policy.disabled.id
+          }
+
+          restrictions {
+            geo_restriction { restriction_type = "none" }
+          }
+
+          viewer_certificate {
+            acm_certificate_arn      = aws_acm_certificate.site.arn
+            ssl_support_method       = "sni-only"
+            minimum_protocol_version = "TLSv1.2_2021"
+          }
+        }
+      cli: |
+        There is no single-field CloudFront update. Fetch the current config,
+        change every viewer_protocol_policy, and put it back with the ETag:
+        aws cloudfront get-distribution-config --id <id> > dist.json
+        aws cloudfront update-distribution --id <id> --distribution-config file://config.json --if-match <etag>
+
+  CKV_AWS_92:
+    aws_elb:
+      terraform: |
+        resource "aws_elb" "app" {
+          name            = "app-elb"
+          subnets         = var.subnet_ids
+          security_groups = [aws_security_group.elb.id]
+
+          listener {
+            instance_port      = 8080
+            instance_protocol  = "https"
+            lb_port            = 443
+            lb_protocol        = "https"
+            ssl_certificate_id = aws_acm_certificate.app.arn
+          }
+
+          access_logs {
+            enabled       = true
+            bucket        = aws_s3_bucket.elb_logs.id
+            bucket_prefix = "app-elb"
+            interval      = 60
+          }
+        }
+      cli: |
+        aws elb modify-load-balancer-attributes --load-balancer-name app-elb --load-balancer-attributes '{"AccessLog":{"Enabled":true,"S3BucketName":"my-elb-logs","EmitInterval":60,"S3BucketPrefix":"app-elb"}}'
+      note: >-
+        The log bucket needs a policy allowing the regional ELB account
+        principal to PutObject, or the attribute update is rejected outright.
+
+  CKV_AWS_349:
+    aws_emr_security_configuration:
+      terraform: |
+        resource "aws_emr_security_configuration" "app" {
+          name = "app-emr-sec"
+
+          configuration = jsonencode({
+            EncryptionConfiguration = {
+              EnableAtRestEncryption = true
+              AtRestEncryptionConfiguration = {
+                LocalDiskEncryptionConfiguration = {
+                  EncryptionKeyProviderType = "AwsKms"
+                  AwsKmsKey                 = aws_kms_key.emr.arn
+                  EnableEbsEncryption       = true
+                }
+                S3EncryptionConfiguration = {
+                  EncryptionMode = "SSE-KMS"
+                  AwsKmsKey      = aws_kms_key.emr.arn
+                }
+              }
+              EnableInTransitEncryption = true
+              InTransitEncryptionConfiguration = {
+                TLSCertificateConfiguration = {
+                  CertificateProviderType = "PEM"
+                  S3Object                = "s3://${aws_s3_bucket.emr.id}/certs.zip"
+                }
+              }
+            }
+          })
+        }
+      cli: |
+        There is no in-place fix. An EMR security configuration is immutable:
+        create a replacement and point new clusters at it.
+        aws emr create-security-configuration --name app-emr-sec-v2 --security-configuration file://sec.json
+      note: >-
+        A running cluster keeps the configuration it launched with. Changing this
+        requires launching a replacement cluster against the new configuration.
+
+  CKV_AWS_351:
+    aws_emr_security_configuration:
+      terraform: |
+        resource "aws_emr_security_configuration" "app" {
+          name = "app-emr-sec"
+
+          configuration = jsonencode({
+            EncryptionConfiguration = {
+              EnableInTransitEncryption = true
+              InTransitEncryptionConfiguration = {
+                TLSCertificateConfiguration = {
+                  CertificateProviderType = "PEM"
+                  S3Object                = "s3://${aws_s3_bucket.emr.id}/certs.zip"
+                }
+              }
+              EnableAtRestEncryption = true
+              AtRestEncryptionConfiguration = {
+                LocalDiskEncryptionConfiguration = {
+                  EncryptionKeyProviderType = "AwsKms"
+                  AwsKmsKey                 = aws_kms_key.emr.arn
+                  EnableEbsEncryption       = true
+                }
+              }
+            }
+          })
+        }
+      cli: |
+        There is no in-place fix -- an EMR security configuration is immutable.
+        Create a replacement and launch clusters against it.
+
+  CKV_AWS_81:
+    aws_msk_cluster:
+      terraform: |
+        resource "aws_msk_cluster" "events" {
+          cluster_name           = "events"
+          kafka_version          = "3.6.0"
+          number_of_broker_nodes = 3
+
+          broker_node_group_info {
+            instance_type   = "kafka.m5.large"
+            client_subnets  = var.private_subnet_ids
+            security_groups = [aws_security_group.msk.id]
+            storage_info {
+              ebs_storage_info { volume_size = 100 }
+            }
+          }
+
+          encryption_info {
+            encryption_at_rest_kms_key_arn = aws_kms_key.msk.arn
+            encryption_in_transit {
+              client_broker = "TLS"    # not TLS_PLAINTEXT, not PLAINTEXT
+              in_cluster    = true
+            }
+          }
+        }
+      cli: |
+        aws kafka update-security --cluster-arn <arn> --current-version <version> --encryption-info '{"EncryptionInTransit":{"ClientBroker":"TLS","InCluster":true}}'
+      note: >-
+        UpdateSecurity performs a rolling broker restart. Any producer or
+        consumer still connecting on the plaintext port stops working the moment
+        it completes, so move the clients first.
+
+  CKV_AWS_291:
+    aws_msk_cluster:
+      terraform: |
+        resource "aws_msk_cluster" "events" {
+          cluster_name           = "events"
+          kafka_version          = "3.6.0"
+          number_of_broker_nodes = 3
+
+          broker_node_group_info {
+            instance_type   = "kafka.m5.large"
+            client_subnets  = var.private_subnet_ids
+            security_groups = [aws_security_group.msk.id]
+
+            connectivity_info {
+              public_access {
+                type = "DISABLED"
+              }
+            }
+
+            storage_info {
+              ebs_storage_info { volume_size = 100 }
+            }
+          }
+
+          encryption_info {
+            encryption_in_transit {
+              client_broker = "TLS"
+              in_cluster    = true
+            }
+          }
+        }
+      cli: |
+        aws kafka update-connectivity --cluster-arn <arn> --current-version <version> --connectivity-info '{"PublicAccess":{"Type":"DISABLED"}}'
+      note: >-
+        Turning public access off releases the brokers' elastic IPs, so any
+        client bootstrapping against the public endpoint must be moved into the
+        VPC (or onto a VPC connection) before the update.
+
+  CKV_AWS_319:
+    aws_cloudwatch_metric_alarm:
+      terraform: |
+        resource "aws_cloudwatch_metric_alarm" "high_5xx" {
+          alarm_name          = "app-high-5xx"
+          namespace           = "AWS/ApplicationELB"
+          metric_name         = "HTTPCode_Target_5XX_Count"
+          statistic           = "Sum"
+          period              = 300
+          evaluation_periods  = 2
+          threshold           = 10
+          comparison_operator = "GreaterThanThreshold"
+          treat_missing_data  = "notBreaching"
+
+          actions_enabled = true                       # the default; state it
+          alarm_actions   = [aws_sns_topic.alerts.arn]
+          ok_actions      = [aws_sns_topic.alerts.arn]
+        }
+      cli: |
+        aws cloudwatch enable-alarm-actions --alarm-names app-high-5xx
+      note: >-
+        Enabling actions on an alarm that has no alarm_actions changes nothing
+        observable. Check that the action list is non-empty at the same time.
+
+  CKV_AWS_338:
+    aws_cloudwatch_log_group:
+      terraform: |
+        resource "aws_cloudwatch_log_group" "app" {
+          name              = "/aws/app/api"
+          retention_in_days = 365        # 0 means never expire, also acceptable
+          kms_key_id        = aws_kms_key.logs.arn
+        }
+      cli: |
+        aws logs put-retention-policy --log-group-name /aws/app/api --retention-in-days 365
+      note: >-
+        Raising retention does not bring back events already aged out; it only
+        governs what is kept from now on. CloudWatch Logs accepts a fixed set of
+        values -- 365 and 400 are the ones at or just above a year.
+
+  CKV_AWS_121:
+    aws_config_configuration_aggregator:
+      terraform: |
+        resource "aws_config_configuration_aggregator" "org" {
+          name = "org-aggregator"
+
+          organization_aggregation_source {
+            all_regions = true                       # API: AllAwsRegions
+            role_arn    = aws_iam_role.config_aggregator.arn
+          }
+        }
+      cli: |
+        aws configservice put-configuration-aggregator --configuration-aggregator-name org-aggregator --organization-aggregation-source RoleArn=<role-arn>,AllAwsRegions=true
+      note: >-
+        The aggregator only collects what the recorders in each region actually
+        record. Turning all_regions on does not enable AWS Config anywhere -- a
+        region with no recorder still contributes nothing.
+
+  CKV_AWS_377:
+    aws_route53domains_registered_domain:
+      terraform: |
+        resource "aws_route53domains_registered_domain" "example" {
+          domain_name   = "example.com"
+          transfer_lock = true
+          auto_renew    = true
+        }
+      cli: |
+        aws route53domains enable-domain-transfer-lock --domain-name example.com --region us-east-1
+      note: >-
+        The transfer lock cannot be set during the first 60 days after
+        registration or after a transfer in; the API rejects it until the domain
+        leaves that window.
+
+
+skipped:
+
+  # --- S3 -------------------------------------------------------------------
+  CKV_AWS_143: >-
+    aws_s3_bucket has no object-lock reader. The vendored resource wraps
+    get_bucket_acl, _logging, _versioning, _encryption, _policy, _lifecycle and
+    public-access-block, but not GetObjectLockConfiguration, and the
+    configuration is per-bucket so no plural can carry it either.
+
+  CKV_AWS_181: >-
+    S3 objects cannot be enumerated for an account. aws_s3_bucket_objects
+    requires bucket_name (validate_parameters(required: %i(bucket_name)) plus an
+    explicit raise), and aws_s3_bucket_object requires bucket_name AND key, so
+    neither can be the `enumerate` half of a stock mapping. An object copy also
+    leaves no distinguishable deployed artefact -- it is just an object.
+
+  CKV_AWS_186: >-
+    Same as CKV_AWS_181: no account-wide object enumeration exists, and an
+    object's SSEKMSKeyId is only reachable through a per-key get_object.
+
+  CKV_AWS_300: >-
+    aws_s3_bucket exposes bucket_lifecycle_rules as an array of rule structs.
+    The check needs "some rule has abort_incomplete_multipart_upload AND status
+    Enabled AND an empty filter", which none of equals / not_empty / empty /
+    greater_than / in_list can express against a struct array.
+
+  CKV_AWS_375: >-
+    aws_s3_bucket#bucket_acl returns the raw grants array. The check needs
+    "no grant whose permission is FULL_CONTROL or READ_ACP has a grantee URI of
+    the AllUsers group" -- a per-element predicate over two fields, which the
+    satisfies verbs cannot state. `public?` is close but is a different
+    assertion (it also folds in the policy status) and is already CKV_AWS_20.
+
+  CKV_AWS_392: >-
+    Two independent blockers. (1) s3control ListAccessPoints requires AccountId,
+    so it cannot be an api spec `list`. (2) The vendored aws_s3_access_points /
+    aws_s3_access_point resources are misnamed: they call
+    list_bucket_metrics_configurations and get_bucket_metrics_configuration --
+    S3 metrics configurations, not access points -- and the plural also requires
+    bucket_name. Neither reader answers this check. Worth reporting upstream.
+
+  CKV_AWS_53: >-
+    aws_s3_bucket exposes only prevent_public_access?, which is the AND of all
+    four block-public-access flags; the individual flags are not readable. Using
+    it for the block_public_acls check would fail a bucket that sets
+    block_public_acls correctly but leaves restrict_public_buckets off -- a
+    false positive against this specific check id. The conjunction is already
+    asserted by the shipped CKV2_AWS_6 mapping, so no coverage is lost.
+
+  CKV_AWS_54: >-
+    Same as CKV_AWS_53: only the four-way conjunction prevent_public_access? is
+    exposed, so a block_public_policy control built on it would fail buckets
+    that satisfy this check. Covered by CKV2_AWS_6.
+
+  CKV_AWS_55: >-
+    Same as CKV_AWS_53: ignore_public_acls is not individually readable through
+    aws_s3_bucket. Covered by CKV2_AWS_6.
+
+  CKV_AWS_56: >-
+    Same as CKV_AWS_53: restrict_public_buckets is not individually readable
+    through aws_s3_bucket. Covered by CKV2_AWS_6.
+
+  CKV_AWS_70: >-
+    Requires parsing the bucket policy document -- statement effects,
+    principals and condition operators. Not expressible in either schema.
+
+  CKV_AWS_93: >-
+    Requires parsing the bucket policy document for a Deny statement over
+    s3:PutBucketPolicy with a wildcard principal. Not expressible in either
+    schema.
+
+  # --- RDS ------------------------------------------------------------------
+  CKV_AWS_198: >-
+    The assertion is "the collection is empty", not "each member satisfies a
+    predicate". Both schemas are enumerate-then-assert-per-item and have no
+    collection-level form, and no satisfies verb always fails. The reader exists
+    and works (aws_rds_db_security_groups, column db_security_group_names), so
+    this becomes mappable the day the schema grows a collection assertion.
+
+  CKV_AWS_23: >-
+    Two reasons. The deployed group-level half is vacuous: EC2's
+    CreateSecurityGroup requires Description, so every deployed security group
+    has one. The per-rule half is unreachable: rule descriptions live in
+    ip_permissions[].ip_ranges[].description, which aws_security_group does not
+    surface as a scalar property. Four of the seven declared Terraform types
+    (db/elasticache/redshift security groups, security_group_rule) are also
+    EC2-Classic-era or rule-only and have no standalone deployed object here.
+
+  CKV_AWS_245: >-
+    Mappable in mechanism but vacuous in outcome. The api spec would work --
+    rds DescribeDBInstanceAutomatedBackups takes no required arguments,
+    collection db_instance_automated_backups, id db_instance_identifier, arn
+    db_instance_automated_backups_arn, field kms_key_id -- but the only
+    available assertion is not_empty, and the api reader drops nil fields from
+    scope before asserting. An unencrypted replicated backup has a nil KmsKeyId,
+    so it would leave scope and the control would render Not Applicable rather
+    than failing. That is the silence-as-success shape, so it is not shipped.
+
+  CKV_AWS_250: >-
+    Needs a multi-branch version comparison (>= 14, or 13.x with x > 2, or 12.x
+    with x > 6, ...) parsed out of engine_version, gated on engine being
+    postgres or aurora-postgresql. Neither an applicability gate nor a version
+    predicate exists in the schema.
+
+  CKV_AWS_302: >-
+    A DB snapshot's sharing lives in a separate call. aws_rds_snapshot_attributes
+    is a FilterTable whose attribute_values column is an array of arrays
+    ([["all"]] when public, [[]] when not), so `empty` does not even match the
+    not-shared case. The check also forbids only the literal "all" while
+    permitting named account ids, and there is no membership-negation verb.
+
+  CKV_AWS_388: >-
+    The check is "engine_version is NOT one of 10.11, 10.12, 10.13, 11.6, 11.7,
+    11.8" for aurora-postgresql. in_list tests membership; there is no
+    not_in_list, and inverting it into an allow-list would mean enumerating
+    every safe Aurora PostgreSQL version, which goes stale on every release.
+
+  # --- EMR ------------------------------------------------------------------
+  CKV_AWS_114: >-
+    An applicability-gated check: Checkov returns UNKNOWN for a cluster with no
+    kerberos_attributes and only asserts realm on clusters that have them.
+    DescribeCluster omits KerberosAttributes entirely for a non-Kerberos
+    cluster, so kerberos_attributes_realm is nil -- and the STOCK template has
+    no nil guard, so every non-Kerberos cluster in the account would fail.
+
+  CKV_AWS_171: >-
+    aws_emr_security_configuration parses the configuration JSON but publishes
+    only three computed booleans (encryption_at_rest, encryption_in_transit,
+    local_disk_encryption). The S3 EncryptionMode, which is where "SSE-KMS"
+    appears, is not among them.
+
+  CKV_AWS_350: >-
+    EnableEbsEncryption sits inside LocalDiskEncryptionConfiguration and the
+    vendored resource collapses that whole block into a single presence boolean
+    (local_disk_encryption). The EBS flag is not exposed, and a local disk
+    configuration can be present with EBS encryption off.
+
+  CKV_AWS_390: >-
+    emr GetBlockPublicAccessConfiguration returns a single structure, not a
+    list. The api spec's `collection` is passed to Array(page.public_send(...)),
+    and Array() over an Aws::Structure yields its member VALUES, not one item.
+    It is a per-region singleton, which neither schema models.
+
+  # --- Network ACLs ---------------------------------------------------------
+  CKV_AWS_229: >-
+    Needs a per-entry test over cidr_block, rule_action, egress and a port
+    range. aws_network_acl offers has_ingress?(cidr_block:, rule_action:) --
+    a keyword-argument predicate with no port parameter -- and the schema's
+    `property` is a bare method name that takes no arguments.
+
+  CKV_AWS_230: >-
+    Same as CKV_AWS_229: no argument-taking property, and no port dimension on
+    the vendored predicate.
+
+  CKV_AWS_231: >-
+    Same as CKV_AWS_229.
+
+  CKV_AWS_232: >-
+    Same as CKV_AWS_229.
+
+  CKV_AWS_352: >-
+    Checkov only asks whether an ingress rule declares from_port at all, which
+    is a property of the HCL, not of the deployed NACL: every deployed entry has
+    a port range (or a protocol for which one is meaningless). There is nothing
+    to assess on a deployed network ACL.
+
+  # --- FSx ------------------------------------------------------------------
+  CKV_AWS_178: >-
+    Vacuous against the deployed state. FSx is encrypted at rest unconditionally
+    and DescribeFileSystems always returns a KmsKeyId -- AWS-managed if none was
+    specified -- so `kms_key_id not_empty` can never fail. Telling a
+    customer-managed key from the aws/fsx AWS-managed key needs a second KMS
+    lookup on the key's alias or manager, which neither schema can express.
+    (DescribeFileSystems itself is fine as a `list`: no required arguments,
+    collection file_systems, id file_system_id, arn resource_arn.)
+
+  CKV_AWS_179: >-
+    Same as CKV_AWS_178, for the Windows file system type.
+
+  CKV_AWS_190: >-
+    Same as CKV_AWS_178, for the Lustre file system type. DescribeFileSystems
+    also has no type filter, so a per-type spec would enumerate every FSx file
+    system and label them all Lustre.
+
+  CKV_AWS_203: >-
+    Same as CKV_AWS_178, for the OpenZFS file system type.
+
+  # --- CloudFront -----------------------------------------------------------
+  CKV_AWS_259: >-
+    No response-headers-policy reader exists, and one cannot be declared: the
+    cloudfront ListResponseHeadersPolicies response nests its items under
+    DistributionList-style wrapping (ResponseHeadersPolicyList.Items), while the
+    api spec's `collection` is a single top-level field name passed to
+    public_send. The check also needs four fields at once (max age >= 31536000
+    AND include_subdomains AND preload AND override).
+
+  CKV_AWS_310: >-
+    Origin groups are not exposed by aws_cloudfront_distribution, and the api
+    route is closed for the same nesting reason as CKV_AWS_259
+    (ListDistributions returns DistributionList.Items). The check also needs a
+    count over group members, which no satisfies verb provides.
+
+  CKV_AWS_374: >-
+    restrictions.geo_restriction.restriction_type is not among the readers
+    aws_cloudfront_distribution publishes, and the api route is closed by the
+    DistributionList.Items nesting. Reachable only via a custom reader.
+
+  # --- ELB ------------------------------------------------------------------
+  CKV_AWS_127: >-
+    aws_elb#certificate_id is an ARRAY of ssl_certificate_id, one per listener,
+    and the check needs every listener to have one AND for it to be an ACM ARN.
+    No per-element or prefix test exists in the schema.
+
+  CKV_AWS_376: >-
+    The check reads each listener's instance_protocol. aws_elb publishes
+    `protocols`, which is the FRONTEND listener protocol
+    (listener.protocol), not instance_protocol -- a different field with a
+    different meaning. Mapping to it would assert something the check does not.
+    It is also an array needing a per-element test.
+
+  # --- SNS / ECR policies ---------------------------------------------------
+  CKV_AWS_169: >-
+    Requires parsing the topic's Policy attribute for internet-accessible
+    actions (Checkov delegates to cloudsplaining). Policy-document analysis is
+    outside both schemas.
+
+  CKV_AWS_385: >-
+    Requires walking every Allow statement's AWS principals for external account
+    ARNs and checking whether each carries a condition. Policy-document
+    analysis, and a cross-resource one at that.
+
+  CKV_AWS_32: >-
+    Requires parsing the ECR repository policy for internet-accessible actions.
+    aws_ecr_repository_policy exposes has_statement?(criteria) and a statements
+    array, but the predicate takes arguments and the array needs per-element
+    logic.
+
+  # --- MSK ------------------------------------------------------------------
+  CKV_AWS_80: >-
+    The check passes if ANY of broker_logs.cloudwatch_logs, .firehose or .s3 is
+    enabled. A mapping names exactly one field and one verb, so a disjunction
+    across three fields cannot be stated. All three booleans are published in
+    the new aws_msk_cluster api spec, so this becomes a one-line mapping if the
+    schema grows an any_of form.
+
+  # --- QLDB -----------------------------------------------------------------
+  CKV_AWS_170: >-
+    Amazon QLDB has been retired and its service model is no longer present in
+    the current AWS SDKs -- botocore 1.43.24 does not know the service, and the
+    aws-sdk-qldb Ruby gem is correspondingly absent from the image. There is no
+    client to enumerate ledgers with, and no vendored inspec-aws resource
+    either.
+
+  CKV_AWS_172: >-
+    Same as CKV_AWS_170: no QLDB service model in the current SDKs.
+
+  # --- ACM ------------------------------------------------------------------
+  CKV_AWS_233: >-
+    lifecycle.create_before_destroy is a Terraform meta-argument governing
+    apply-time ordering. It has no representation in any AWS API, so there is
+    nothing in the deployed state to read.
+
+  CKV_AWS_234: >-
+    ACM ListCertificates returns a CertificateSummary that carries no
+    CertificateTransparencyLoggingPreference; the field is only on
+    DescribeCertificate, which requires CertificateArn and so cannot be an api
+    spec `list`. The existing aws_acm_certificate spec has the same ceiling.
+
+  # --- Comprehend -----------------------------------------------------------
+  CKV_AWS_267: >-
+    Mappable in mechanism but vacuous in outcome, exactly as CKV_AWS_245.
+    comprehend ListEntityRecognizers takes no required arguments and returns
+    ModelKmsKeyId per recogniser, but the only fitting verb is not_empty, and
+    the api reader rejects nil fields before asserting -- so a recogniser with
+    no model KMS key leaves scope and the control renders Not Applicable instead
+    of failing.
+
+  CKV_AWS_268: >-
+    Same as CKV_AWS_267, for VolumeKmsKeyId.
+
+  # --- Misc -----------------------------------------------------------------
+  CKV_AWS_192: >-
+    wafv2 ListWebACLs requires Scope (REGIONAL or CLOUDFRONT), so it cannot be
+    an api spec `list`. The check also needs to walk the ACL's rule statements
+    for the Log4Shell message-lookup pattern, which is nested-structure logic
+    rather than a field test.
+
+  CKV_AWS_219: >-
+    codepipeline ListPipelines returns only name, version, type, mode and
+    timestamps. The artifact store's encryption key is on GetPipeline, which
+    requires `name`, so the field is not reachable from a no-argument list.
+
+  CKV_AWS_262: >-
+    kendra ListIndices returns no encryption fields. ServerSideEncryptionConfiguration
+    .KmsKeyId is on DescribeIndex, which requires Id, so it is not reachable
+    from a no-argument list.
+
+  CKV_AWS_295: >-
+    The deployed state cannot answer this check even in principle. SecretKey is
+    write-only in DataSync: DescribeLocationObjectStorage returns AccessKey but
+    never the secret. The check is about a secret being present in the HCL,
+    which is an IaC-only property. DescribeLocationObjectStorage also requires
+    LocationArn.

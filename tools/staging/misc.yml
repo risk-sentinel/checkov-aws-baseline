@@ -1,0 +1,893 @@
+# Slice: misc — the 24 leftovers, plus the WAF/graph joins.
+#
+# What this slice actually found
+# ------------------------------
+# The brief said two of the five landed features might unlock more of this list
+# than the original research expected. Held against the code rather than against
+# the proposals, they unlock LESS, and one of them cannot be merged at all today.
+#
+#   `enumerate.exclude` unlocks NOTHING here. Every scoping problem in this
+#   slice is APPLICABILITY (engine == mysql, protocol in [HTTP, HTTPS], scheme ==
+#   internet-facing, kerberos configured), not "this row stopped being a deployed
+#   asset". tools/resource_map.yml's header says exclude is "NEVER to narrow a
+#   check to the population that would pass it", and using it for an engine
+#   filter is exactly that. Nine of the skips below are waiting on `where` /
+#   `when`, which did not land.
+#
+#   `membership` unlocks at most two — CKV2_AWS_39 and CKV2_AWS_21 — and both
+#   are blocked in the TOOLING rather than by the data, but NOT by the same
+#   thing. An earlier draft of this header said the merge gate was "the only
+#   thing blocking" either of them; that is true of CKV2_AWS_39 and false of
+#   CKV2_AWS_21.
+#
+#   BOTH are blocked by the merge gate. tools/merge_proposals.py was not updated
+#   when the shape landed: SHAPE_REQUIRED has no 'membership' entry, so
+#   `reader: membership` is refused as "not one of ['api','custom','policy',
+#   'singleton','stock']", and a membership mapping carries no `satisfies`, so it
+#   would then fall through to "satisfies 'equals' needs a value". Two lines fix
+#   that (add membership to SHAPE_REQUIRED and to VERBLESS_READERS); with those
+#   two lines applied to a throwaway copy, both drafts merge, render, and pass
+#   every static lint including tools/lint_api_paths.rb.
+#
+#   CKV2_AWS_21 NEEDS A THIRD CHANGE, in render_controls.py. Its right side is a
+#   TWO-STEP spec (list_groups -> get_group) and render_membership emits no
+#   parent-failure guard: `parent_guard_for` is wired into API_TEMPLATE only
+#   (render_controls.py ~line 1496) and MEMBERSHIP_TEMPLATE contains the string
+#   `parent` nowhere, so a rendered membership control never reads
+#   `parent_failures`. Verified on the rendered artefact, not inferred: with the
+#   gate patched in a throwaway copy, controls/CKV2_AWS_21.rb comes out with no
+#   occurrence of `parent_failures` at all. Nothing has exercised this because
+#   all three membership joins already live are one-step on both sides.
+#   Consequence: ONE throttled or denied GetGroup silently drops that group's
+#   whole membership from the right side, and every user in it then reports "not
+#   a member of any IAM group" — a finding manufactured out of an API error, in
+#   a control whose own template comment promises exactly that cannot happen.
+#   IAM's rate limit makes that the expected failure on a large account, not a
+#   corner case, and the failure is invisible: no assertion mentions it. Landing
+#   CKV2_AWS_21 needs render_membership to assert on each side's
+#   `parent_failures` and count them towards `applicable`, the way
+#   parent_guard_for already does for the api reader. Until that exists it stays
+#   skipped even if the gate is fixed.
+#
+#   render_controls.py, lint_resource_map.py and libraries/_checkov_membership.rb
+#   otherwise handle the shape correctly. The drafts are at the FOOT OF THIS
+#   FILE, as a comment block, so nothing is lost. They are listed under `skipped`
+#   with those reasons so the blockers are recorded rather than rediscovered.
+#
+# The two that DO merge use a shape that was already proven: the singleton that
+# CKV2_AWS_56 established, and the api reader.
+#
+# Everything below was resolved against the SDK models in the auditor image
+# (risksentinel/sparc-auditor:v0.5.0), not against memory. What could not be
+# resolved is skipped and says so.
+
+mappings:
+
+  # The AdministratorAccess twin of the already-merged CKV2_AWS_56, and merged
+  # for the same reason: `list_args` never landed, but the argument this check
+  # needs is a CONSTANT, so it does not need list_args at all.
+  CKV_AWS_274:
+    aws_iam_policy_attachment:
+      reader: singleton
+      resource: 'aws_iam_policy(policy_arn: "arn:#{input(''aws_partition'')}:iam::aws:policy/AdministratorAccess")'
+      property: attachment_count
+      satisfies: equals
+      value: 0
+      note: >-
+        WHY NOT THE PROPOSED SHAPE. tools/proposals/custom.yml files this under
+        `list_args`: iam:ListEntitiesForPolicy(PolicyArn=...AdministratorAccess)
+        plus a "collection_empty" assertion. Neither landed, and neither is
+        needed. ListEntitiesForPolicy takes a PolicyArn, but that arn is a
+        CONSTANT — the AWS-managed policy — not a discovered parent id, so there
+        is nothing for `args` or for `parent:` to supply. One call, one number.
+
+        FIELD CONFIRMED, not transliterated. vendor/.../libraries/aws_iam_policy.rb
+        takes require_any_of(policy_arn, policy_name), calls
+        iam_client.get_policy for an arn, and exposes `attachment_count` as an
+        attr_reader assigned from @resp.attachment_count. The member is
+        iam.Policy.AttachmentCount — confirmed as a member of the Policy shape in
+        the image's aws-sdk-iam, alongside permissions_boundary_usage_count — and
+        AWS populates it on every GetPolicy response. That last clause is the one
+        part taken from AWS's behaviour rather than from a model, so here is its
+        bound: the singleton shape does not nil-filter, so a nil AttachmentCount
+        would meet `should eq 0` and FAIL loudly rather than pass. Every way this
+        assumption can be wrong is red, not green — unlike the api reader, where
+        an absent member silently removes the row.
+        AttachmentCount is the number of IAM users, groups and roles the policy is
+        attached to, which is precisely the relationship Checkov forbids, so 0 is
+        the compliant value and anything else is the finding.
+
+        CAN IT FAIL. Yes, and it usually will: most accounts attach
+        AdministratorAccess to at least a break-glass role. That is a true
+        positive, not noise — Checkov flags the same attachment in HCL — but note
+        that the singleton shape enumerates nothing and therefore has no
+        exemption hook, so a deliberately-retained break-glass attachment cannot
+        be exempted per-ARN the way an enumerated asset can. It has to be argued
+        in the POA&M or the attachment moved to a scoped customer-managed policy.
+
+        WHY THIS TF TYPE. The catalogue lists six types for this check
+        (aws_iam_role, four *_policy_attachment types and
+        aws_ssoadmin_managed_policy_attachment). render_singleton keys on one, and
+        aws_iam_policy_attachment is the one CKV2_AWS_56 already uses for the same
+        assertion, so the two controls read alike. All six are still named in the
+        rendered control's `terraform_types` tag.
+
+        SSO IS COVERED, which the HCL check only partly is: an AWS-managed policy
+        attached to an IAM Identity Center permission set materialises as an
+        attachment on the provisioned AWSReservedSSO_* role, so it is counted here
+        even when no aws_ssoadmin_managed_policy_attachment exists in any HCL this
+        account's pipeline scans.
+
+        DELIBERATE EXCLUSION. iam.Policy carries AttachmentCount and
+        PermissionsBoundaryUsageCount as SEPARATE members and only the first is
+        read. A policy named as a permissions BOUNDARY constrains a principal
+        rather than granting to it, so a boundary that names AdministratorAccess
+        will not appear in this control. That is a decision, not an oversight.
+
+        KNOWN TEMPLATE WART, inherited from CKV2_AWS_56 and flagged rather than
+        hidden: SINGLETON_TEMPLATE opens with a fixed "is configured for this
+        account" assertion whose failure message reads "no account-level policy is
+        set". That prose was written for the IAM password policy; here `exists?`
+        is false only when GetPolicy could not be read at all. The posture is
+        still right (nothing assessed => loud failure) but the sentence describes
+        the wrong condition.
+
+        READ-FAILURE POSTURE, traced through the vendored code rather than
+        assumed, because a singleton has no unreadable_regions guard to fall back
+        on. aws_iam_policy makes THREE calls per instantiation: GetPolicy, then
+        ListEntitiesForPolicy and GetPolicyVersion, both unconditional. Every way
+        they can fail is red. A 403 on any of them: aws_backend#catch_aws_errors
+        raises Inspec::Exceptions::ResourceFailed, which InSpec rescues around the
+        constructor, and the "is configured for this account" expectation fails.
+        A non-403 ServiceError on GetPolicy (a wrong partition input yielding
+        NoSuchEntity, a throttle): warned and swallowed, @resp stays nil, the
+        early `return if @resp.nil?` leaves @arn nil, `exists?` is false, same
+        loud failure. A non-403 on ListEntitiesForPolicy: the swallowed nil then
+        meets `resp.policy_groups` and raises NoMethodError out of the
+        constructor, which reports as a control error. Ugly, but never a pass and
+        never a Not Applicable — the scanner role needs iam:GetPolicy,
+        iam:ListEntitiesForPolicy and iam:GetPolicyVersion for this control, and
+        will say so if it does not have them.
+
+  # `enumerate.where` did not land, so the proposal's stock mapping is
+  # unbuildable. It was also DANGEROUS, and the api reader answers the same
+  # question without the danger.
+  CKV_AWS_304:
+    aws_secretsmanager_secret_rotation:
+      reader: api
+      field: rotation_interval_days
+      satisfies: at_most
+      value: 90
+      note: >-
+        DIVERGES FROM THE PROPOSAL, which asked for the stock pair
+        aws_secretsmanager_secrets -> aws_secretsmanager_secret and named
+        `where: {rotation_enabled: true}` as the missing piece. `where` did not
+        land — but the stock shape is the wrong shape here regardless, and the
+        proposal says why in its own words: render_stock applies NO nil filter, a
+        secret with no rotation answers NullResponse, NullResponse#method_missing
+        returns self, and `should be <= 90` therefore gets a truthy object back
+        and PASSES. Every unrotated secret would have reported compliant. That is
+        the worst outcome this repo recognises, and it is not fixed by adding a
+        filter — it is fixed by using a reader whose rows are plain hashes.
+
+        WHY THE NIL DIRECTION IS NOW SAFE, AND WHY THE SCOPE IS CHECKOV'S SCOPE.
+        Under the api reader, nil_filter_for('at_most') emits
+        `.reject { |a| a[:rotation_interval_days].nil? }`, so a secret that
+        declares no day-based rotation schedule is OUT OF SCOPE rather than
+        passing. That is not a gap being papered over: CKV_AWS_304 is written
+        against the aws_secretsmanager_secret_rotation RESOURCE, so its population
+        is exactly "secrets that have a rotation schedule", and "is rotation
+        configured at all" is a DIFFERENT check — CKV2_AWS_57, which is already
+        live and asserts rotation_enabled == true through the stock pair. The two
+        together cover what one of them cannot.
+
+        FIELDS CONFIRMED AGAINST THE SDK MODEL IN THE IMAGE, not transliterated
+        from the Terraform argument (`rotation_rules { automatically_after_days }`
+        happens to line up here, but it was checked rather than assumed):
+        Aws::SecretsManager::Client.api.operation(:list_secrets) has no required
+        input members; its output member is `secret_list`; SecretListEntry carries
+        [arn, name, description, kms_key_id, rotation_enabled, rotation_lambda_arn,
+        rotation_rules, last_rotated_date, ...]; and RotationRules carries exactly
+        one member in this SDK build, `automatically_after_days`, an IntegerShape.
+        list_secrets is pageable (Aws::Pager, next_token), and each_page follows it.
+
+        WHAT I COULD NOT CONFIRM, stated rather than assumed. The SDK build in
+        this image predates ScheduleExpression/Duration on RotationRules, so a
+        secret rotating on a cron expression has no member here to read. AWS
+        documents AutomaticallyAfterDays as being "calculated from the rotation
+        schedule" in DescribeSecret and ListSecrets, which would make a
+        cron-rotated secret report a real interval — but that is documentation,
+        not something I could resolve against a model or observe without an
+        account. If AWS instead omits it, such a secret is nil and drops out of
+        scope: an UNDER-report, visible as a smaller population, never a pass.
+        The other unconfirmed direction is a secret whose rotation was cancelled
+        but whose RotationRules were retained; it would be assessed here and could
+        pass on a stale interval. It still fails CKV2_AWS_57, which is where "is
+        rotation on" is asked.
+
+        THE ONE FALSE-PASS DIRECTION, NAMED. Everything mechanical here is
+        confirmed — the call, its lack of required arguments, the collection
+        member, the nested path, pagination, and the fact that Aws::Structure#to_h
+        is a DEEP conversion so dig_path (which breaks on any non-Hash node) does
+        reach automatically_after_days; that last one was reproduced against a
+        stubbed client in the image rather than assumed. What is NOT confirmed is
+        the COMPOSITION of the in-scope population. If AWS ever reports
+        `RotationRules: {AutomaticallyAfterDays: 0}` for a secret that is not
+        rotating — rather than omitting the structure — then 0 <= 90 and every
+        such secret renders GREEN, with a result line claiming it rotates within
+        90 days. That is the failure mode this repo cares most about, and the
+        schema cannot express the fix: `at_most` is one comparison and there is no
+        range verb, so "1..90" is not writable, and `where: {rotation_enabled:
+        true}` — which is the correct scope and what tools/proposals/custom.yml
+        asked for — did not land.
+        WHAT MAKES IT TOLERABLE, and it is evidence rather than an argument: the
+        vendored pack's own live integration test for a non-rotating secret,
+        vendor/.../test/integration/verify/controls/aws_secretsmanager_secret.rb,
+        asserts `its("rotation_rules.automatically_after_days") { should be_empty }`,
+        and the unit fixtures set `rotation_rules = {}`. So inspec-aws's
+        maintainers, running against a real account, observed ABSENT rather than
+        zero. Second, the whole of that population is failed loudly and
+        separately by the live CKV2_AWS_57, so no account can be green on
+        rotation overall on the strength of this control alone. It is still the
+        weakest link in this slice: if a live exec shows a secret with
+        rotation_enabled false inside this control's population, downgrade this
+        mapping rather than reasoning about it again.
+
+        WHY A SECOND SPEC ON THE SAME LIST CALL. A live aws_secretsmanager_secret
+        spec already exists, and merge_proposals refuses any staging api spec whose
+        name is already live — deliberately, so a draft cannot silently redefine an
+        exec-validated one. So this declares aws_secretsmanager_secret_rotation,
+        which is also the Terraform type the catalogue names for this check and is
+        therefore the type render_api needs a spec for. Cost: one extra ListSecrets
+        walk per region. Folding the field into the live spec instead is a one-line
+        edit to tools/api_specs.yml, in its own commit, and would let this spec go.
+
+api_specs:
+
+  aws_secretsmanager_secret_rotation:
+    arn: arn
+    client: Aws::SecretsManager::Client
+    collection: secret_list
+    fields:
+      rotation_enabled: rotation_enabled
+      rotation_interval_days: rotation_rules.automatically_after_days
+    gem: aws-sdk-secretsmanager
+    id: name
+    list: list_secrets
+
+metadata:
+
+  CKV_AWS_274:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-6']
+    nist_r4: ['AC-3', 'AC-6']
+    cci: ['CCI-000213', 'CCI-002233']
+    ksi: ['KSI-IAM-CTL']
+    nist_source: agent-drafted
+    rationale: >-
+      AdministratorAccess grants every action on every resource. A principal
+      holding it is bounded by nothing the account can express — no resource
+      policy, no tag condition, no service scope — so least privilege is not
+      partially satisfied for it, it is absent. Asserting that nothing is attached
+      to the policy is the only test that can be made without evaluating what
+      every attached principal is actually for, and it is the same assertion
+      Checkov makes, taken against attachments that exist rather than attachments
+      that were written down.
+
+  CKV_AWS_304:
+    severity: medium
+    impact: 0.5
+    nist: ['IA-5', 'SC-12']
+    nist_r4: ['IA-5', 'SC-12']
+    cci: ['CCI-000196', 'CCI-002450']
+    ksi: ['KSI-IAM-CTL', 'KSI-SVC-KMG']
+    nist_source: agent-drafted
+    rationale: >-
+      Rotation that is enabled but scheduled a year out leaves the same unbounded
+      exposure window as no rotation at all: the interval, not the flag, is what
+      caps the time between a leak and its expiry. Ninety days is the ceiling
+      Checkov asserts and the one FedRAMP's authenticator-management expectations
+      are usually written to, so an interval longer than that is a control that
+      exists on paper and does not bind.
+    stronger: >-
+      Checkov reads the interval declared in an aws_secretsmanager_secret_rotation
+      block. This reads the interval Secrets Manager is actually holding, so it
+      also sees a schedule changed in the console, a secret created outside
+      Terraform, and a rotation whose interval was widened by hand after the last
+      apply.
+
+fixes:
+
+  CKV_AWS_274:
+    aws_iam_policy_attachment:
+      terraform: |
+        # Replace the AWS-managed AdministratorAccess attachment with a
+        # customer-managed policy scoped to what the principal actually does.
+        # There is no in-place "narrow AdministratorAccess" — the managed policy
+        # is owned by AWS and cannot be edited — so the fix is always a swap.
+        resource "aws_iam_policy" "platform_operate" {
+          name        = "platform-operate"
+          description = "Day-two operations for the platform team"
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect   = "Allow"
+              Action   = ["ecs:*", "logs:*", "cloudwatch:*", "ssm:GetParameter*"]
+              Resource = "*"
+              Condition = {
+                StringEquals = {
+                  "aws:RequestedRegion" = ["us-east-1"]
+                }
+              }
+            }]
+          })
+        }
+
+        resource "aws_iam_role_policy_attachment" "platform_operate" {
+          role       = aws_iam_role.platform.name
+          policy_arn = aws_iam_policy.platform_operate.arn
+        }
+
+        # If a break-glass administrator is genuinely required, give it its own
+        # role with a hard condition rather than leaving the managed policy on a
+        # day-to-day principal.
+        resource "aws_iam_role" "break_glass" {
+          name = "break-glass-admin"
+
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect    = "Allow"
+              Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
+              Action    = "sts:AssumeRole"
+              Condition = {
+                Bool           = { "aws:MultiFactorAuthPresent" = "true" }
+                NumericLessThan = { "aws:MultiFactorAuthAge" = "900" }
+              }
+            }]
+          })
+        }
+      cli: |
+        # Who holds it right now — roles, users and groups, in one call.
+        aws iam list-entities-for-policy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+        aws iam detach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+        aws iam detach-user-policy --user-name <user> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+        aws iam detach-group-policy --group-name <group> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+      note: >-
+        Create and attach the replacement BEFORE detaching, and verify the
+        principal can still do its job — a detach here can lock out the only
+        identity able to repair the account. Check IAM Identity Center too: an
+        attachment made through a permission set is re-provisioned onto the
+        AWSReservedSSO_* role after any manual detach, so it must be removed at
+        the permission set (aws_ssoadmin_managed_policy_attachment) or it returns
+        on the next sync. This control counts attachments and cannot be exempted
+        per principal, so a break-glass role that must keep the policy is an
+        accepted risk to record, not a finding to suppress.
+
+  CKV_AWS_304:
+    aws_secretsmanager_secret_rotation:
+      terraform: |
+        resource "aws_secretsmanager_secret" "db" {
+          name = "platform/db/master"
+        }
+
+        resource "aws_secretsmanager_secret_rotation" "db" {
+          secret_id           = aws_secretsmanager_secret.db.id
+          rotation_lambda_arn = aws_lambda_function.rotator.arn
+
+          rotation_rules {
+            # 90 is the ceiling, not the target. Pick the shortest interval the
+            # consuming application can tolerate a credential change at.
+            automatically_after_days = 30
+          }
+        }
+      cli: |
+        aws secretsmanager describe-secret --secret-id <name> --query 'RotationRules'
+        aws secretsmanager rotate-secret --secret-id <name> --rotation-rules AutomaticallyAfterDays=30
+      note: >-
+        Shortening the interval takes effect from the NEXT rotation, so a secret
+        that last rotated 300 days ago is not brought current by this change
+        alone — run `rotate-secret` once to force a rotation now. Secrets owned by
+        another service (OwningService set, e.g. an RDS-managed master password)
+        rotate under that service's schedule and should be exempted rather than
+        given a second rotator.
+
+skipped:
+
+  CKV2_AWS_39: >-
+    BLOCKED ONLY BY THE MERGE GATE, not by the data. The membership mapping is
+    complete, both api specs are field-confirmed against the SDK
+    (Route53 list_hosted_zones and list_query_logging_configs both take no
+    required arguments; HostedZone carries [id, name, caller_reference, config,
+    resource_record_set_count, linked_service, features] with config.private_zone
+    nested; QueryLoggingConfig carries [id, hosted_zone_id,
+    cloud_watch_logs_log_group_arn] and has NO arn member, so the join keys on
+    hosted_zone_id), and the identifier spaces are reconciled — left is
+    "/hostedzone/Z123" reduced by terminal_segment, right is the bare "Z123"
+    verbatim, both sides global so both key on the region literal "global".
+    tools/merge_proposals.py refuses it: SHAPE_REQUIRED has no 'membership' key,
+    so the reader is rejected as unknown, and a membership mapping carries no
+    `satisfies`, so it would then be told "satisfies 'equals' needs a value".
+    render_controls.render_membership, lint_resource_map.check_membership and
+    libraries/_checkov_membership.rb all support the shape; only the gate does
+    not. Fix is two lines in merge_proposals.py (add "membership" to
+    SHAPE_REQUIRED and to VERBLESS_READERS). Ready-to-merge draft is in the
+    comment block at the foot of tools/staging/misc.yml. One divergence to carry
+    with it: Route 53 accepts query-logging configurations for PUBLIC zones only,
+    and membership has no left-side scoping (gap_3), so every private hosted zone
+    will report uncovered. Checkov's own graph check has the same blind spot, so
+    this matches Checkov rather than exceeding it — but it is a known
+    false-finding class and should be said in the control, not discovered in the
+    results.
+
+  CKV2_AWS_21: >-
+    BLOCKED BY THE MERGE GATE **AND** BY A RENDERER GAP. An earlier version of
+    this entry said "blocked only by the merge gate, exactly as CKV2_AWS_39".
+    That was wrong, and wrong in the direction this repo cares about. The right
+    side is a two-step spec, and render_membership emits NO parent-failure
+    guard: parent_guard_for is wired into API_TEMPLATE only and
+    MEMBERSHIP_TEMPLATE never mentions `parent`, which was confirmed on the
+    rendered artefact — with the gate patched in a throwaway copy,
+    controls/CKV2_AWS_21.rb renders without a single occurrence of
+    `parent_failures`. So one GetGroup that throttles or is denied silently
+    removes that group's whole membership from the right side, and every user in
+    it is then reported "not a member of any IAM group": a total finding
+    manufactured from an API error, with nothing in the control saying so. IAM's
+    rate limit makes that likely on a large account rather than exotic. All
+    three membership joins already live are one-step on both sides, which is why
+    the gap has never bitten. DO NOT LAND THIS ON THE TWO-LINE GATE FIX ALONE —
+    it also needs render_membership to assert each side's `parent_failures` and
+    count them towards `applicable`, as parent_guard_for does for the api
+    reader. Everything else about the mapping is confirmed against the SDK in
+    the image: iam list_users and list_groups both take no required arguments;
+    get_group REQUIRES group_name, which is precisely the `parent:` shape (parent
+    list_groups -> groups -> group_name, arg group_name, child get_group ->
+    users); every one of list_users, list_groups and get_group is pageable
+    (Aws::Pager on marker/is_truncated), so a group with more than one page of
+    members is followed rather than truncated; and both the ListUsers `users`
+    member and the GetGroup `users` member are the SAME User shape carrying
+    [path, user_name, user_id, arn, ...]. So both sides speak the identical IAM
+    user ARN and the join is verbatim-to-verbatim with no reduction at all, which
+    is the strongest form this shape has. Corrects tools/proposals/graph.yml,
+    which concluded "no reader answers which groups is this user in" — true of
+    the vendored pack, but the question can be asked from the other side, and
+    get_group is reachable now that a child list call can take a parent id. The
+    draft is at the foot of this file, marked NOT READY: the gate fix unblocks
+    the merge, and the renderer gap above is what still has to be closed before
+    the control means what it says.
+
+  CKV_AWS_45: >-
+    Needs the `secret_scan` verb, which did not land, and is the only check in
+    the estate that wants a CLASSIFIER rather than a comparison: entropy and
+    pattern detection over every VALUE of a map-valued field. The data is
+    reachable — lambda ListFunctions returns FunctionConfiguration with
+    Environment.Variables and takes no required arguments — but no roll-up verb
+    substitutes: libraries/_checkov_collection.rb#step returns [] for any element
+    that is not a Hash, and CheckovCollection#elements treats a Hash as ONE
+    element rather than as its pairs, so neither the map nor its values can be
+    walked. Building it also needs a handling rule the other verbs do not: the
+    failure message must name the KEY and never echo the value, or the HDF
+    artefact becomes the leak it is reporting.
+
+  CKV_AWS_65: >-
+    Needs `args` on the child call — ecs DescribeClusters populates Settings only
+    when include: ['SETTINGS'] is passed — and tools/lint_api_specs.py lists
+    `args` by name as NOT IMPLEMENTED, refusing the key rather than ignoring it,
+    for exactly this reason: ignored, the field is nil for every cluster, the nil
+    filter removes every row, and the control renders Not Applicable. The
+    parent-id feature that landed does not substitute: `parent.id` supplies a
+    DISCOVERED id, not a literal, so there is nowhere for the include list to go.
+    The two-step spec itself would otherwise be clean (ListClusters takes no
+    required arguments and DescribeClusters takes the arns).
+
+  CKV_AWS_85: >-
+    Two blockers, and the first corrects the proposal. tools/proposals/custom.yml
+    says "api_specs already has an aws_docdb_cluster entry"; it does not — the
+    api_specs.yml header records aws-sdk-docdb as one of four gems REMOVED for
+    being absent from the image, and merge_proposals refuses a spec naming an
+    absent gem because the LoadError is rescued and reads as Not Applicable.
+    DocDB clusters do come back from rds DescribeDBClusters, but selecting them
+    needs `where: {engine: docdb}`, which did not land. Second, and independent:
+    enabled_cloudwatch_logs_exports is an array of plain STRINGS, and the
+    collection verbs that did land cannot judge it — a condition needs a `path`,
+    dig_all walks it with step(), and step returns [] for anything that is not a
+    Hash, so every element takes its when_absent verdict. With when_absent false
+    every cluster fails; with it true every cluster passes. `includes` on the
+    scalar side is no better: the nil filter drops exactly the clusters exporting
+    nothing, which is the failing population.
+
+  CKV_AWS_101: >-
+    Same two blockers as CKV_AWS_85 with Neptune in place of DocDB.
+    aws-sdk-neptune is likewise recorded in the api_specs.yml header as removed
+    for absence from the image; Neptune clusters are returned by rds
+    DescribeDBClusters but cannot be selected without `where: {engine: neptune}`;
+    and the audit log is again a string array that no landed verb can judge
+    without deciding every element by its when_absent default.
+
+  CKV_AWS_114: >-
+    Needs the `when` applicability predicate, which did not land — without it
+    every non-Kerberos EMR cluster fails a rule Checkov returns UNKNOWN for. More
+    importantly it should probably not be built even then: EMR requires Realm
+    whenever KerberosAttributes is supplied, so on a cluster that actually exists
+    the assertion is satisfied by construction and the control CANNOT FAIL, which
+    this repo treats as worse than no control. Checkov's version has teeth only
+    because HCL can omit an argument the API would have rejected. Two further
+    walls behind that: aws_emr_clusters registers no kerberos column and the
+    singular aws_emr_cluster assigns a fixed attr_reader list that does not
+    include kerberos_attributes, so nothing in the pack exposes the field.
+
+  CKV_AWS_143: >-
+    Needs a per-asset follow-up call (s3 GetObjectLockConfiguration(Bucket)) and
+    two spec keys that are named in tools/api_specs.yml as deliberately not
+    built: `region_field`, because S3 answers 301 unless a per-bucket call is
+    issued against the bucket's own region, and `absent_errors`, because
+    GetObjectLockConfiguration raises ObjectLockConfigurationNotFoundError when
+    lock was never enabled — which is the FAILING state and would otherwise be
+    recorded as a parent failure. The header is explicit that an S3 two-step spec
+    must not ship before region routing exists. The stock reader cannot stand in:
+    the vendored aws_s3_bucket makes second calls for encryption, versioning,
+    logging and lifecycle but has no object-lock method.
+
+  CKV_AWS_208: >-
+    Needs `version_at_least`, which did not land and which no existing verb
+    approximates — '10.9' sorts above '10.11' as a string and below it as a
+    version, so `matches` and `in_list` cannot stand in without enumerating every
+    acceptable version forever. It also needs a per-engine threshold (5.17 for
+    ActiveMQ, 3.11 for RabbitMQ) and therefore `where` on engine_type, also not
+    landed. Worth recording for whoever builds the verb: Checkov's own scoping is
+    buggy here — `if mq_type in 'ActiveMQ'` is a Python substring test, so an
+    engine_type of 'Active' or '' matches — and the deployed version should use
+    equality rather than reproducing that.
+
+  CKV_AWS_249: >-
+    Needs `field_compare(field_a, op, field_b)` — comparing two fields of the
+    SAME asset — which did not land and which nothing else approximates: every
+    verb in matcher_for compares a field to a literal written in the mapping, and
+    a roll-up condition compares an element's path to a literal too. It is also
+    still blocked on the aws_ecs_task_definitions enumerator described under
+    CKV_AWS_334, and on the task-definition REVISION call volume that
+    tools/api_specs.yml singles out as costing more than the rest of the profile
+    combined.
+
+  CKV_AWS_250: >-
+    Needs `version_at_least` for the same reason as CKV_AWS_208, and needs it
+    against a per-engine floor with per-branch exceptions (postgres >= 14, or
+    13.3+/12.7+/11.12+/10.17+/9.6.22+; aurora-postgresql >= 12, or 11.9+/10.14+),
+    which is a threshold TABLE rather than a value. Selecting the engines it
+    applies to needs `where` as well. Neither landed, and approximating a
+    segment-wise version comparison with `matches` would produce a control whose
+    verdict depends on string collation.
+
+  CKV_AWS_261: >-
+    Needs `when` to scope to HTTP/HTTPS target groups, which did not land — but
+    it should not be built even after that, and the reason is trap 3 rather than
+    a missing feature. ELBv2 assigns HealthCheckPath '/' by default for every
+    HTTP and HTTPS target group and health_check_enabled cannot be turned off for
+    them, so a deployed assertion that a health check is defined passes
+    everywhere and the control cannot fail. Checkov's check means something
+    against HCL, where the block can simply be omitted; its deployed restatement
+    means nothing. The useful deployed rule is a different assertion — that the
+    target group has healthy targets — and it should be raised as its own check
+    rather than smuggled in under this id.
+
+  CKV_AWS_296: >-
+    Needs `when` (the assertion differs for engine_name == 's3') and a
+    not_equals_default sub-verb, neither of which landed. The second is the real
+    wall: DMS substitutes the aws/dms managed key when none is given and always
+    reports a KmsKeyId, so `not_empty` on kms_key_id passes every endpoint in the
+    account — a control that cannot fail. Distinguishing a CMK from the
+    service-managed key is not a field comparison at all: the two have the same
+    ARN format, and the answer comes from kms:DescribeKey's KeyMetadata.KeyManager
+    (AWS vs CUSTOMER), a call on a DIFFERENT client. aws_api_assets builds one
+    client per spec, so even the two-step shape that landed cannot make it.
+
+  CKV_AWS_325: >-
+    Double-blocked, and both halves are the ones that did not land. `where` is
+    needed to scope to the MySQL-family engines — without it every Aurora
+    PostgreSQL cluster fails a rule Checkov explicitly returns UNKNOWN for — and
+    judging enabled_cloudwatch_logs_exports needs a verb where a nil or absent
+    array FAILS. As under CKV_AWS_85: the landed roll-up verbs cannot help,
+    because the array holds plain strings and _checkov_collection.rb#step returns
+    [] for a non-Hash element, so every element resolves to its when_absent
+    default and the control either always passes or always fails. `enumerate.exclude`
+    is not a substitute for the engine scope: resource_map.yml's header restricts
+    it to rows that stopped being deployed assets and forbids exactly this use.
+
+  CKV2_AWS_5: >-
+    Needs a LIST-VALUED join key, which the membership shape does not have and
+    which fails silently if faked. The only deployed evidence that a security
+    group is attached to anything is ec2 NetworkInterface.Groups, an ARRAY of
+    GroupIdentifier nested inside each ENI row. aws_api_assets#dig_path breaks
+    the walk at any node that is not a Hash, so a field path of 'groups.group_id'
+    reads nil for every ENI; naming 'groups' whole is worse, because
+    CheckovMembership#checkov_membership_key does `raw = "#{row[field]}"` and
+    would key every ENI on the STRING FORM of an array of structs, which matches
+    no security group id and reports every group unattached. The stock shape
+    cannot do it either: the singular aws_ec2_network_interface requires
+    network_interface_id and cannot be looked up by group id.
+
+  CKV2_AWS_16: >-
+    Needs a fixed-enum argument on the list call. application-autoscaling
+    DescribeScalableTargets REQUIRES ServiceNamespace, and both routes to it are
+    closed: aws_api_assets calls the list operation with no arguments at all, and
+    the vendored aws_application_autoscaling_scalable_targets runs
+    validate_parameters(required: %i(service_namespace)) and raises "service_namespace
+    must be provided" when the generated enumeration calls it as
+    <plural>(aws_region: region). `parent:` does not substitute — it supplies a
+    discovered parent id, and ServiceNamespace is a constant. The identifier
+    spaces would reconcile if it were reachable (DescribeScalableTargets keys on
+    ResourceId 'table/my-table', which terminal_segment reduces to the table name
+    aws_dynamodb_tables yields), so this is one enum argument away, not a
+    redesign.
+
+  CKV2_AWS_28: >-
+    Two independent blockers, and the SDK is not one of them — aws-sdk-wafv2 is in
+    the image. First, there is no wafv2 resource in the vendored pack (the only
+    WAF resources are WAF Classic, a different service with a different id space)
+    and aws_albs/aws_alb expose no WebACL association. Second, the call that
+    would answer it per load balancer, wafv2 GetWebACLForResource(ResourceArn), is
+    on a DIFFERENT CLIENT from the elbv2 call that enumerates the parents;
+    aws_api_assets builds exactly one client per spec and issues both the parent
+    and the child call on it, so the two-step feature that landed cannot span the
+    two services. wafv2 ListWebACLs is closed for the separate reason that it
+    requires Scope. It also wants a left-side scope (internet-facing only) that
+    membership does not have.
+
+  CKV2_AWS_31: >-
+    Needs a fixed-enum argument on the list call, on BOTH sides. wafv2
+    ListWebACLs and ListLoggingConfigurations each REQUIRE Scope (REGIONAL or
+    CLOUDFRONT), confirmed against the SDK input shapes, and aws_api_assets
+    invokes the list operation with no arguments. aws-sdk-wafv2 is in the image
+    and this is otherwise the cleanest join in the whole set — left speaks a
+    WebACL ARN, right keys on the same ARN, verbatim to verbatim with no
+    reduction — so it is the one to build first once a spec can declare a
+    constant argument. It would then also need running twice, once per Scope,
+    which is a shape question of its own.
+
+  CKV2_AWS_33: >-
+    Blocked at the SDK, the only check in this slice of which that is true:
+    aws-sdk-appsync is not in tools/image_gems.txt, and merge_proposals and
+    lint_api_specs both refuse a spec naming an absent gem because the LoadError
+    is rescued into unreadable_regions and the control reads as Not Applicable.
+    The wafv2 half carries the Scope blocker described under CKV2_AWS_31 on top
+    of that.
+
+  CKV2_AWS_47: >-
+    Three hops and an assertion about the MATCHED RIGHT ROW, which is the
+    membership shape's other declared gap: `every_left_covered` is the only
+    assertion implemented, and "follow the reference, then assert about what it
+    points at" is named in resource_map.yml's header as deliberately not built.
+    The rule names it needs (AWSManagedRulesAnonymousIpList,
+    AWSManagedRulesKnownBadInputsRuleSet) are only on GetWebACL(Name, Scope, Id) —
+    three arguments, one of them a fixed enum — never on ListWebACLs. Identifier
+    hazard worth recording for whoever does build it: CloudFront's
+    DistributionSummary.WebACLId is a WAFv2 ARN for wafv2 and a bare id for WAF
+    Classic, so the two sides do not always speak the same identifier even within
+    one account.
+
+  CKV2_AWS_76: >-
+    Same missing assertion form as CKV2_AWS_47 (assert about the referent's rule
+    names, not about the link) on top of the cross-client blocker described under
+    CKV2_AWS_28. Recorded because it is the closest of the WAF set: the
+    identifiers already line up — aws_albs.load_balancer_arns yields exactly the
+    ResourceArn that wafv2 GetWebACLForResource takes, and that call needs no
+    Scope — so what is missing is a spec that can issue a per-id LOOKUP against a
+    second service's client, plus the referent assertion.
+
+  CKV2_AWS_78: >-
+    Every blocker in CKV2_AWS_76 plus the absent aws-sdk-appsync gem from
+    CKV2_AWS_33. Neither side of the join is reachable in this image.
+
+# ---------------------------------------------------------------------------
+# MEMBERSHIP DRAFTS — ONE READY (CKV2_AWS_39), ONE NOT (CKV2_AWS_21)
+#
+# Held here as comments because tools/merge_proposals.py does not yet know the
+# `membership` reader — see the header. Both were validated against
+# render_controls.render_membership's required keys, against
+# lint_resource_map.check_membership's closed key sets and column checks, and
+# against the SDK models in risksentinel/sparc-auditor:v0.5.0. After adding
+# "membership" to merge_proposals.SHAPE_REQUIRED (with an empty required-key
+# tuple under "_self", since membership_side and render_membership do their own
+# validation) and to VERBLESS_READERS, both merge and render and pass every
+# static lint.
+#
+# THAT IS NOT ENOUGH FOR CKV2_AWS_21. Merging cleanly is not the same as being
+# right: its right side is a two-step spec and render_membership emits no
+# parent-failure guard, so a lost GetGroup subtree turns into "these users are
+# in no group" with nothing saying an API call failed. Land CKV2_AWS_39 on the
+# gate fix; land CKV2_AWS_21 only after render_membership asserts each side's
+# `parent_failures` and counts them towards `applicable`. Moving the CKV2_AWS_21
+# blocks up before then produces a control that passes every lint in this repo
+# and manufactures findings on a throttled account.
+#
+# To land CKV2_AWS_39: move the aws_route53_zone and
+# aws_route53_query_logging_config api_specs blocks and the CKV2_AWS_39 mapping
+# above the comment marker, delete its `skipped` entry, add its metadata block,
+# and re-run the dry run.
+#
+# api_specs:
+#
+#   aws_route53_zone:
+#     client: Aws::Route53::Client
+#     collection: hosted_zones
+#     fields:
+#       private_zone: config.private_zone
+#     gem: aws-sdk-route53
+#     id: id
+#     list: list_hosted_zones
+#     scope: global
+#
+#   aws_route53_query_logging_config:
+#     client: Aws::Route53::Client
+#     collection: query_logging_configs
+#     fields:
+#       hosted_zone_id: hosted_zone_id
+#     gem: aws-sdk-route53
+#     id: id
+#     list: list_query_logging_configs
+#     scope: global
+#
+#   aws_iam_user:
+#     arn: arn
+#     client: Aws::IAM::Client
+#     collection: users
+#     fields: {}
+#     gem: aws-sdk-iam
+#     id: user_name
+#     list: list_users
+#     scope: global
+#
+#   aws_iam_group_membership:
+#     arg: group_name
+#     arn: arn
+#     client: Aws::IAM::Client
+#     collection: users
+#     fields: {}
+#     gem: aws-sdk-iam
+#     id: user_name
+#     list: get_group
+#     parent:
+#       collection: groups
+#       id: group_name
+#       list: list_groups
+#     scope: global
+#
+# mappings:
+#
+#   CKV2_AWS_39:
+#     aws_route53_zone:
+#       reader: membership
+#       assert: every_left_covered
+#       match_region: true
+#       left:
+#         type: aws_route53_zone
+#         key: id
+#         key_form: terminal_segment
+#         noun: hosted zone
+#         noun_plural: hosted zones
+#       right:
+#         type: aws_route53_query_logging_config
+#         key: hosted_zone_id
+#         key_form: verbatim
+#         noun: Route 53 query logging configuration
+#       empty_right_means: >-
+#         no query logging configuration exists anywhere in this account, so no
+#         hosted zone's DNS queries are being logged at all. That is the worst
+#         case for this rule, not an absence of evidence, and every zone below is
+#         reported uncovered on purpose.
+#       divergence: >-
+#         Route 53 accepts a query logging configuration for PUBLIC hosted zones
+#         only, and this shape has no left-side scoping, so a PRIVATE hosted zone
+#         will always report uncovered. Checkov's graph check has the same blind
+#         spot, so this matches Checkov rather than exceeding it — but treat a
+#         private zone in these results as a known false finding until left-side
+#         `where` (graph.yml gap_3) exists. Resolver query logging is the
+#         mechanism that covers private zones and is a different API entirely.
+#       uncovered_message: no Route 53 query logging configuration names this zone
+#       note: >-
+#         KEY SPACES, said out loud because getting this wrong is silent. LEFT
+#         speaks HostedZone.Id, which Route 53 returns in the form
+#         "/hostedzone/Z0123456789ABCDEFGHIJ"; terminal_segment reduces it to
+#         "Z0123456789ABCDEFGHIJ". RIGHT speaks QueryLoggingConfig.HostedZoneId,
+#         which is already the bare "Z0123456789ABCDEFGHIJ", so it is taken
+#         verbatim. Both resolved against the SDK in the image: HostedZone carries
+#         [id, name, caller_reference, config, resource_record_set_count,
+#         linked_service, features] and QueryLoggingConfig carries [id,
+#         hosted_zone_id, cloud_watch_logs_log_group_arn]. QueryLoggingConfig has
+#         NO arn member, which is why the join cannot be the preferred ARN-to-ARN
+#         form and the left side has to be reduced instead.
+#         WHY terminal_segment IS SAFE HERE despite discarding account and region:
+#         a hosted zone id is globally unique and both sides come from the same
+#         Route 53 API, so there is no second service whose reduced key could
+#         collide. That is the condition resource_map.yml's header asks for; the
+#         `where` it suggests as the alternative guard is unnecessary rather than
+#         missing.
+#         REGION: both specs are scope: global, so both sides key on the literal
+#         "global" and match_region is a no-op that keeps the two scopes in
+#         agreement — lint_resource_map fails a region-paired join whose sides
+#         disagree about scope, which is exactly the check that would catch a
+#         later edit dropping `scope: global` from one of them.
+#         BOTH LIST CALLS TAKE NO REQUIRED ARGUMENTS (confirmed:
+#         list_hosted_zones input members are all optional, list_query_logging_configs
+#         takes an OPTIONAL hosted_zone_id), so aws_api_assets, which calls the
+#         list operation with no arguments, can reach both. Both paginate.
+#         `private_zone` is declared as a field even though nothing reads it: it
+#         is what a left-side `where` would filter on the day that lands, and
+#         having it on the row means the divergence above can be diagnosed from
+#         the results rather than from a second investigation.
+#
+#   CKV2_AWS_21:
+#     aws_iam_group_membership:
+#       reader: membership
+#       assert: every_left_covered
+#       match_region: true
+#       left:
+#         type: aws_iam_user
+#         key: arn
+#         key_form: verbatim
+#         noun: IAM user
+#       right:
+#         type: aws_iam_group_membership
+#         key: arn
+#         key_form: verbatim
+#         noun: IAM group membership
+#         noun_plural: IAM group memberships
+#       empty_right_means: >-
+#         no IAM group in this account has any members, so no user's permissions
+#         are administered through a group and every one of them is carrying its
+#         permissions directly. That is the condition this rule exists to catch,
+#         so it is reported as every user failing rather than as nothing to assess.
+#       uncovered_message: this IAM user is not a member of any IAM group
+#       note: >-
+#         KEY SPACES: both sides speak the SAME IAM user ARN, so this is
+#         verbatim-to-verbatim with no reduction — the strongest form this shape
+#         has, and the one resource_map.yml's header asks for. Confirmed against
+#         the SDK in the image: the `users` member of ListUsers and the `users`
+#         member of GetGroup are the same User shape, carrying [path, user_name,
+#         user_id, arn, create_date, password_last_used, permissions_boundary,
+#         tags].
+#         THE RIGHT SIDE IS THE TWO-STEP FEATURE. IAM has no call that answers
+#         "which groups is this user in" that the pack can reach — ListGroupsForUser
+#         appears nowhere in it — but the question can be asked from the group
+#         side, and GetGroup REQUIRES GroupName, which is exactly what `parent:`
+#         supplies. parent list_groups (no required arguments) -> groups ->
+#         group_name; arg group_name; child get_group -> users. This corrects
+#         tools/proposals/graph.yml, which concluded no reader could answer it.
+#         It is NOT the inverted check: enumerating groups and asserting each has
+#         members answers CKV2_AWS_14 and would pass an account whose users are
+#         all outside every group.
+#         PAGINATION: list_users, list_groups and get_group are all pageable
+#         (Aws::Pager on marker/is_truncated), and each_page follows the paginator,
+#         so a group with more than 100 members is not truncated. Had it been,
+#         the failure direction would have been a false FAIL — a user reported
+#         uncovered — which is the visible one.
+#         REGION: IAM is global, both specs declare scope: global, both sides key
+#         on "global".
+#         CALL VOLUME: one ListGroups plus one GetGroup per group, once (global
+#         scope, no region walk). IAM group populations are small; this is not the
+#         unbounded-parent case tools/api_specs.yml warns about.
+#         A LOST SUBTREE **IS** SILENT HERE, AND THIS IS WHY THE DRAFT IS NOT
+#         READY. An earlier version of this note claimed the opposite — that a
+#         failing GetGroup is recorded in parent_failures "which the generated
+#         control asserts on and counts towards applicability". It is recorded:
+#         aws_api_assets#children_of does append to @parent_failures. Nothing
+#         READS it. parent_guard_for is interpolated into API_TEMPLATE only
+#         (render_controls.py ~1496); MEMBERSHIP_TEMPLATE has no `parent`
+#         placeholder and render_membership passes none, so the rendered
+#         controls/CKV2_AWS_21.rb contains no occurrence of `parent_failures` —
+#         checked on the artefact after patching the gate in a throwaway copy,
+#         not inferred from reading the template. So a GetGroup that throttles
+#         (IAM's rate limit, a few hundred groups) or is denied drops that
+#         group's entire membership from the right side, and each of its users
+#         is reported "not a member of any IAM group". That is the manufactured
+#         total finding the membership template's own unreadable_regions guard
+#         exists to prevent, arriving through a third channel the template does
+#         not cover. It is the visible failure direction rather than a false
+#         pass, but it is still a control asserting something it did not
+#         measure. Prerequisite before this mapping is landed: render_membership
+#         must assert on each side's `parent_failures` and add them to
+#         `applicable`, mirroring parent_guard_for. All three membership joins
+#         live today are one-step on both sides, so this is a latent gap rather
+#         than a live bug — CKV2_AWS_21 would be the first join to hit it.

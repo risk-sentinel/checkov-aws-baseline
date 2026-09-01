@@ -1,0 +1,2862 @@
+# Two-step (parent -> child) API specs for checkov-aws-baseline.
+#
+# DRAFT DATA ONLY. Nothing here has been executed against AWS. Every operation
+# name, every input member, and every output member below was read out of
+# botocore's service-2.json in ~/.venvs/checkov-3.3.16 (see `confirmed:` on each
+# spec for the exact operation shapes consulted). Terraform argument names are
+# NOT used anywhere as field paths -- only API member names, snake_cased the way
+# the Ruby SDK exposes them.
+#
+# Read `notes:` FIRST. Five reader behaviours are required that today's
+# libraries/aws_api_assets.rb does not implement, and three sentinels
+# (_self / _parent / _response) appear in the specs below. A reader that ignores
+# them will produce rows that look right and are wrong.
+#
+# One structural constraint discovered while drafting: tools/render_controls.py
+# derives the api spec key from the mapping's terraform type
+# (`tf_type = next(iter(mapping))`), so an api_specs key MUST equal a terraform
+# resource type. That is why aws_elasticsearch_domain / aws_opensearch_domain and
+# aws_lb_listener / aws_alb_listener each appear twice with identical bodies, and
+# why three specs below REPLACE an existing single-call spec rather than sitting
+# alongside it (see notes.replacements).
+
+# ---------------------------------------------------------------------------
+api_specs:
+
+  # -- API Gateway v1 -------------------------------------------------------
+  # confirmed: apigateway.GetRestApis (no required input members; output
+  # `items` -> RestApi.id) and apigateway.GetStages (required `restApiId`;
+  # output `item` -> Stage). Note the child collection member is the SINGULAR
+  # `item`, not `items` -- an easy and silent mistake.
+  aws_api_gateway_stage:
+    gem: aws-sdk-apigateway
+    client: Aws::APIGateway::Client
+    parent:
+      list: get_rest_apis
+      collection: items
+      id: id
+    list: get_stages
+    arg: rest_api_id
+    collection: item
+    id: stage_name
+    scope: regional
+    fields:
+      tracing_enabled: tracing_enabled
+      cache_cluster_enabled: cache_cluster_enabled
+      cache_cluster_status: cache_cluster_status
+      access_log_destination_arn: access_log_settings.destination_arn
+      client_certificate_id: client_certificate_id
+      web_acl_arn: web_acl_arn
+      deployment_id: deployment_id
+
+  # -- API Gateway v2 (HTTP / WebSocket) ------------------------------------
+  # confirmed: apigatewayv2.GetApis (no required input; output `Items` ->
+  # Api.ApiId) and apigatewayv2.GetStages (required `ApiId`; output `Items` ->
+  # Stage). v2 has no cache and no xray member -- those checks are v1-only.
+  aws_apigatewayv2_stage:
+    gem: aws-sdk-apigatewayv2
+    client: Aws::ApiGatewayV2::Client
+    parent:
+      list: get_apis
+      collection: items
+      id: api_id
+    list: get_stages
+    arg: api_id
+    collection: items
+    id: stage_name
+    scope: regional
+    fields:
+      access_log_destination_arn: access_log_settings.destination_arn
+      client_certificate_id: client_certificate_id
+      default_route_logging_level: default_route_settings.logging_level
+      default_route_data_trace_enabled: default_route_settings.data_trace_enabled
+      auto_deploy: auto_deploy
+
+  # -- ECS task definitions --------------------------------------------------
+  # confirmed: ecs.ListTaskDefinitions (no required input; output
+  # `taskDefinitionArns` -> LIST OF STRINGS, hence parent.id: _self) and
+  # ecs.DescribeTaskDefinition (required `taskDefinition`; output
+  # `taskDefinition` -> a single TaskDefinition STRUCTURE, hence a
+  # structure-valued collection).
+  # pidMode and ipcMode are TASK-level members, confirmed in the TaskDefinition
+  # shape's member list -- Checkov looks for pidMode inside containerDefinitions,
+  # which is a Checkov bug (see notes.divergences).
+  # CALL VOLUME: this is the worst offender in the file. See notes.call_volume.
+  aws_ecs_task_definition:
+    gem: aws-sdk-ecs
+    client: Aws::ECS::Client
+    parent:
+      list: list_task_definitions
+      collection: task_definition_arns
+      id: _self
+    list: describe_task_definition
+    arg: task_definition
+    collection: task_definition
+    id: family
+    arn: task_definition_arn
+    scope: regional
+    fields:
+      family: family
+      revision: revision
+      status: status
+      network_mode: network_mode
+      pid_mode: pid_mode
+      ipc_mode: ipc_mode
+      task_role_arn: task_role_arn
+      execution_role_arn: execution_role_arn
+
+  # -- ECS clusters ----------------------------------------------------------
+  # confirmed: ecs.ListClusters (no required input; output `clusterArns` ->
+  # list of strings) and ecs.DescribeClusters (input `clusters` is a LIST, and
+  # `include` is a ClusterFieldList whose enum is
+  # [ATTACHMENTS, CONFIGURATIONS, SETTINGS, STATISTICS, TAGS]).
+  # ExecuteCommandLogging enum confirmed as [NONE, DEFAULT, OVERRIDE].
+  # BLOCKER-ISH: `configuration` and `settings` are omitted from the response
+  # unless include: ['CONFIGURATIONS','SETTINGS'] is passed. The schema has no
+  # slot for a constant child argument -- see notes.schema_gaps.constant_args.
+  aws_ecs_cluster:
+    gem: aws-sdk-ecs
+    client: Aws::ECS::Client
+    parent:
+      list: list_clusters
+      collection: cluster_arns
+      id: _self
+    list: describe_clusters
+    arg: clusters
+    collection: clusters
+    id: cluster_name
+    arn: cluster_arn
+    scope: regional
+    fields:
+      status: status
+      execute_command_logging: configuration.execute_command_configuration.logging
+      execute_command_kms_key_id: configuration.execute_command_configuration.kms_key_id
+      managed_storage_kms_key_id: configuration.managed_storage_configuration.kms_key_id
+
+  # -- EKS clusters ----------------------------------------------------------
+  # confirmed: eks.ListClusters (no required input; output `clusters` -> list of
+  # strings) and eks.DescribeCluster (required `name`; output `cluster` -> a
+  # single Cluster structure).
+  # This spec is also the repair for four entries tools/resource_map_derived.yml
+  # had to delete: CKV_AWS_37/39/58/339 were removed because
+  # `aws_eks_clusters.names` yields nil rows in an account with no EKS clusters
+  # and the singular stock resource then rejects a nil cluster_name. A reader
+  # that enumerates parents itself never constructs that nil.
+  aws_eks_cluster:
+    gem: aws-sdk-eks
+    client: Aws::EKS::Client
+    parent:
+      list: list_clusters
+      collection: clusters
+      id: _self
+    list: describe_cluster
+    arg: name
+    collection: cluster
+    id: name
+    arn: arn
+    scope: regional
+    fields:
+      version: version
+      status: status
+      endpoint_public_access: resources_vpc_config.endpoint_public_access
+      endpoint_private_access: resources_vpc_config.endpoint_private_access
+      public_access_cidrs: resources_vpc_config.public_access_cidrs
+      encryption_config: encryption_config
+      cluster_logging: logging.cluster_logging
+
+  # -- Elasticsearch / OpenSearch domains ------------------------------------
+  # confirmed: es.ListDomainNames (input has only the optional `EngineType`
+  # filter; output `DomainNames` -> DomainInfo.DomainName) and
+  # es.DescribeElasticsearchDomain (required `DomainName`; output
+  # `DomainStatus` -> a single ElasticsearchDomainStatus structure).
+  # The legacy `es` API answers for OpenSearch-engine domains too, which is why
+  # aws_opensearch_domain below is the same spec: the image has aws-sdk-
+  # elasticsearchservice and no aws-sdk-opensearchservice. TLSSecurityPolicy enum
+  # confirmed as [Policy-Min-TLS-1-0-2019-07, Policy-Min-TLS-1-2-2019-07,
+  # Policy-Min-TLS-1-2-PFS-2023-10].
+  aws_elasticsearch_domain:
+    gem: aws-sdk-elasticsearchservice
+    client: Aws::ElasticsearchService::Client
+    parent:
+      list: list_domain_names
+      collection: domain_names
+      id: domain_name
+    list: describe_elasticsearch_domain
+    arg: domain_name
+    collection: domain_status
+    id: domain_name
+    arn: arn
+    scope: regional
+    fields:
+      elasticsearch_version: elasticsearch_version
+      encryption_at_rest_enabled: encryption_at_rest_options.enabled
+      encryption_at_rest_kms_key_id: encryption_at_rest_options.kms_key_id
+      node_to_node_encryption_enabled: node_to_node_encryption_options.enabled
+      enforce_https: domain_endpoint_options.enforce_https
+      tls_security_policy: domain_endpoint_options.tls_security_policy
+      advanced_security_enabled: advanced_security_options.enabled
+      internal_user_database_enabled: advanced_security_options.internal_user_database_enabled
+      dedicated_master_enabled: elasticsearch_cluster_config.dedicated_master_enabled
+      dedicated_master_count: elasticsearch_cluster_config.dedicated_master_count
+      zone_awareness_enabled: elasticsearch_cluster_config.zone_awareness_enabled
+
+  aws_opensearch_domain:
+    gem: aws-sdk-elasticsearchservice
+    client: Aws::ElasticsearchService::Client
+    parent:
+      list: list_domain_names
+      collection: domain_names
+      id: domain_name
+    list: describe_elasticsearch_domain
+    arg: domain_name
+    collection: domain_status
+    id: domain_name
+    arn: arn
+    scope: regional
+    fields:
+      elasticsearch_version: elasticsearch_version
+      encryption_at_rest_enabled: encryption_at_rest_options.enabled
+      encryption_at_rest_kms_key_id: encryption_at_rest_options.kms_key_id
+      node_to_node_encryption_enabled: node_to_node_encryption_options.enabled
+      enforce_https: domain_endpoint_options.enforce_https
+      tls_security_policy: domain_endpoint_options.tls_security_policy
+      advanced_security_enabled: advanced_security_options.enabled
+      internal_user_database_enabled: advanced_security_options.internal_user_database_enabled
+      dedicated_master_enabled: elasticsearch_cluster_config.dedicated_master_enabled
+      dedicated_master_count: elasticsearch_cluster_config.dedicated_master_count
+      zone_awareness_enabled: elasticsearch_cluster_config.zone_awareness_enabled
+
+  # -- Transfer servers (the describe-per-item case named in the brief) -------
+  # confirmed: transfer.ListServers (no required input; output `Servers` ->
+  # ListedServer.ServerId/.Arn/.EndpointType/.IdentityProviderType) and
+  # transfer.DescribeServer (required `ServerId`; output `Server` -> a single
+  # DescribedServer structure carrying Protocols and SecurityPolicyName).
+  # Protocol enum confirmed as [SFTP, FTP, FTPS, AS2].
+  # REPLACES the existing single-call aws_transfer_server spec. Its two declared
+  # fields (endpoint_type, identity_provider_type) are both members of
+  # DescribedServer as well, so CKV_AWS_164 -- the only mapping that reads them
+  # -- keeps working unchanged. See notes.replacements.
+  aws_transfer_server:
+    gem: aws-sdk-transfer
+    client: Aws::Transfer::Client
+    parent:
+      list: list_servers
+      collection: servers
+      id: server_id
+    list: describe_server
+    arg: server_id
+    collection: server
+    id: server_id
+    arn: arn
+    scope: regional
+    fields:
+      protocols: protocols
+      security_policy_name: security_policy_name
+      endpoint_type: endpoint_type
+      identity_provider_type: identity_provider_type
+      logging_role: logging_role
+      state: state
+      structured_log_destinations: structured_log_destinations
+
+  # -- CodeBuild projects ----------------------------------------------------
+  # confirmed: codebuild.ListProjects (no required input; output `projects` ->
+  # list of strings) and codebuild.BatchGetProjects (required `names`, a LIST;
+  # output `projects` -> Project, carrying artifacts.encryptionDisabled,
+  # environment.privilegedMode, logsConfig.s3Logs.encryptionDisabled,
+  # logsConfig.cloudWatchLogs.status, encryptionKey).
+  # `names` accepts up to 100 per call, so this is the CHEAPEST child in the
+  # file: ceil(projects/100) calls per region, not one per project.
+  aws_codebuild_project:
+    gem: aws-sdk-codebuild
+    client: Aws::CodeBuild::Client
+    parent:
+      list: list_projects
+      collection: projects
+      id: _self
+    list: batch_get_projects
+    arg: names
+    collection: projects
+    id: name
+    arn: arn
+    scope: regional
+    fields:
+      artifacts_type: artifacts.type
+      artifacts_encryption_disabled: artifacts.encryption_disabled
+      s3_logs_status: logs_config.s3_logs.status
+      s3_logs_encryption_disabled: logs_config.s3_logs.encryption_disabled
+      cloudwatch_logs_status: logs_config.cloud_watch_logs.status
+      privileged_mode: environment.privileged_mode
+      encryption_key: encryption_key
+
+  # -- Lambda function URLs --------------------------------------------------
+  # confirmed: lambda.ListFunctions (no required input; output `Functions` ->
+  # FunctionConfiguration.FunctionName) and lambda.ListFunctionUrlConfigs
+  # (required `FunctionName`; output `FunctionUrlConfigs` -> FunctionUrlConfig
+  # with AuthType, InvokeMode, Cors.AllowOrigins/AllowMethods).
+  # Distinct spec key from the existing aws_lambda_function spec, which stays
+  # exactly as it is -- aws_lambda_function_url is its own terraform type.
+  # CALL VOLUME: one child call per function per region, and most functions have
+  # no URL. See notes.call_volume.
+  aws_lambda_function_url:
+    gem: aws-sdk-lambda
+    client: Aws::Lambda::Client
+    parent:
+      list: list_functions
+      collection: functions
+      id: function_name
+    list: list_function_url_configs
+    arg: function_name
+    collection: function_url_configs
+    id: function_url
+    arn: function_arn
+    scope: regional
+    fields:
+      auth_type: auth_type
+      invoke_mode: invoke_mode
+      cors_allow_origins: cors.allow_origins
+      cors_allow_methods: cors.allow_methods
+      cors_allow_credentials: cors.allow_credentials
+
+  # -- ELBv2 listeners -------------------------------------------------------
+  # confirmed: elbv2.DescribeLoadBalancers (no required input; output
+  # `LoadBalancers` -> LoadBalancer.LoadBalancerArn) and elbv2.DescribeListeners
+  # (output `Listeners` -> Listener with Protocol, Port, SslPolicy,
+  # DefaultActions, Certificates).
+  # DescribeListeners marks NEITHER LoadBalancerArn nor ListenerArns as required
+  # in botocore, but the API rejects a call with neither -- the parent id is
+  # mandatory in practice, which is exactly the two-step shape.
+  # Two identical specs because CKV_AWS_103/CKV2_AWS_74 declare both terraform
+  # type names and the renderer keys the spec off the terraform type.
+  aws_lb_listener:
+    gem: aws-sdk-elasticloadbalancingv2
+    client: Aws::ElasticLoadBalancingV2::Client
+    parent:
+      list: describe_load_balancers
+      collection: load_balancers
+      id: load_balancer_arn
+    list: describe_listeners
+    arg: load_balancer_arn
+    collection: listeners
+    id: listener_arn
+    arn: listener_arn
+    scope: regional
+    fields:
+      protocol: protocol
+      port: port
+      ssl_policy: ssl_policy
+      alpn_policy: alpn_policy
+      mutual_authentication_mode: mutual_authentication.mode
+
+  aws_alb_listener:
+    gem: aws-sdk-elasticloadbalancingv2
+    client: Aws::ElasticLoadBalancingV2::Client
+    parent:
+      list: describe_load_balancers
+      collection: load_balancers
+      id: load_balancer_arn
+    list: describe_listeners
+    arg: load_balancer_arn
+    collection: listeners
+    id: listener_arn
+    arn: listener_arn
+    scope: regional
+    fields:
+      protocol: protocol
+      port: port
+      ssl_policy: ssl_policy
+      alpn_policy: alpn_policy
+      mutual_authentication_mode: mutual_authentication.mode
+
+  # -- ACM certificate detail ------------------------------------------------
+  # confirmed: acm.ListCertificates (no required input; output
+  # `CertificateSummaryList` -> CertificateSummary.CertificateArn) and
+  # acm.DescribeCertificate (required `CertificateArn`; output `Certificate` ->
+  # a single CertificateDetail carrying Options.
+  # CertificateTransparencyLoggingPreference, enum [ENABLED, DISABLED]).
+  # REPLACES the existing single-call aws_acm_certificate spec. NOTE the field
+  # `in_use` (a boolean on CertificateSummary) has NO equivalent on
+  # CertificateDetail -- the detail member is `InUseBy`, a list of ARNs. No
+  # mapping currently reads `in_use`, so nothing breaks, but the rename is a
+  # real change and is listed under notes.replacements.
+  aws_acm_certificate:
+    gem: aws-sdk-acm
+    client: Aws::ACM::Client
+    parent:
+      list: list_certificates
+      collection: certificate_summary_list
+      id: certificate_arn
+    list: describe_certificate
+    arg: certificate_arn
+    collection: certificate
+    id: domain_name
+    arn: certificate_arn
+    scope: regional
+    fields:
+      transparency_logging: options.certificate_transparency_logging_preference
+      key_algorithm: key_algorithm
+      status: status
+      type: type
+      renewal_eligibility: renewal_eligibility
+      in_use_by: in_use_by
+      subject_alternative_names: subject_alternative_names
+      not_after: not_after
+
+  # -- Athena workgroup detail -----------------------------------------------
+  # confirmed: athena.ListWorkGroups (no required input; output `WorkGroups` ->
+  # WorkGroupSummary.Name) and athena.GetWorkGroup (required `WorkGroup`; output
+  # `WorkGroup` -> a single WorkGroup structure whose
+  # Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption is
+  # the field CKV_AWS_159 wants).
+  # REPLACES the existing single-call aws_athena_workgroup spec, whose only
+  # field (`state`) is also a WorkGroup member. Nothing reads that spec today --
+  # CKV_AWS_82 uses the stock reader.
+  # This is also the repair for CKV_AWS_159, which resource_map_derived.yml had
+  # to delete because "a nested probe chain raises instead of returning nil".
+  aws_athena_workgroup:
+    gem: aws-sdk-athena
+    client: Aws::Athena::Client
+    parent:
+      list: list_work_groups
+      collection: work_groups
+      id: name
+    list: get_work_group
+    arg: work_group
+    collection: work_group
+    id: name
+    scope: regional
+    fields:
+      state: state
+      encryption_option: configuration.result_configuration.encryption_configuration.encryption_option
+      encryption_kms_key: configuration.result_configuration.encryption_configuration.kms_key
+      enforce_workgroup_configuration: configuration.enforce_workgroup_configuration
+      publish_cloud_watch_metrics_enabled: configuration.publish_cloud_watch_metrics_enabled
+      minimum_encryption_enforced: configuration.enable_minimum_encryption_configuration
+
+  # -- Kinesis Firehose delivery streams -------------------------------------
+  # confirmed: firehose.ListDeliveryStreams (no required input; output
+  # `DeliveryStreamNames` -> list of strings) and firehose.DescribeDeliveryStream
+  # (required `DeliveryStreamName`; output `DeliveryStreamDescription` -> a
+  # single structure). DeliveryStreamEncryptionStatus enum confirmed as
+  # [ENABLED, ENABLING, ENABLING_FAILED, DISABLED, DISABLING, DISABLING_FAILED];
+  # KeyType enum as [AWS_OWNED_CMK, CUSTOMER_MANAGED_CMK]; DeliveryStreamType as
+  # [DirectPut, KinesisStreamAsSource, MSKAsSource, DatabaseAsSource].
+  aws_kinesis_firehose_delivery_stream:
+    gem: aws-sdk-firehose
+    client: Aws::Firehose::Client
+    parent:
+      list: list_delivery_streams
+      collection: delivery_stream_names
+      id: _self
+    list: describe_delivery_stream
+    arg: delivery_stream_name
+    collection: delivery_stream_description
+    id: delivery_stream_name
+    arn: delivery_stream_arn
+    scope: regional
+    fields:
+      delivery_stream_type: delivery_stream_type
+      delivery_stream_status: delivery_stream_status
+      encryption_status: delivery_stream_encryption_configuration.status
+      encryption_key_type: delivery_stream_encryption_configuration.key_type
+      encryption_key_arn: delivery_stream_encryption_configuration.key_arn
+
+  # -- S3 public access block ------------------------------------------------
+  # confirmed: s3.ListBuckets (no required input; output `Buckets` ->
+  # Bucket.Name and Bucket.BucketRegion) and s3.GetPublicAccessBlock (required
+  # `Bucket`; output `PublicAccessBlockConfiguration` -> a single structure with
+  # BlockPublicAcls / IgnorePublicAcls / BlockPublicPolicy / RestrictPublicBuckets).
+  # The child response carries no identifier of its own, hence id: _parent.
+  # CRITICAL: GetPublicAccessBlock RAISES NoSuchPublicAccessBlockConfiguration
+  # when no block is set, and that is precisely the FAILING state for
+  # CKV_AWS_53/54/55/56. A reader that files the error under
+  # `unreadable_regions` turns every genuinely-failing bucket into
+  # Not Applicable. See notes.reader_requirements.absent_is_not_unreadable.
+  aws_s3_bucket_public_access_block:
+    gem: aws-sdk-s3
+    client: Aws::S3::Client
+    parent:
+      list: list_buckets
+      collection: buckets
+      id: name
+    list: get_public_access_block
+    arg: bucket
+    collection: public_access_block_configuration
+    id: _parent
+    scope: global
+    fields:
+      block_public_acls: block_public_acls
+      ignore_public_acls: ignore_public_acls
+      block_public_policy: block_public_policy
+      restrict_public_buckets: restrict_public_buckets
+
+  # -- S3 replication configuration ------------------------------------------
+  # confirmed: s3.GetBucketReplication (required `Bucket`; output
+  # `ReplicationConfiguration` -> a single structure with Role and Rules).
+  # Raises ReplicationConfigurationNotFoundError when unset -- same absent-is-
+  # the-answer handling as the public access block above.
+  aws_s3_bucket_replication_configuration:
+    gem: aws-sdk-s3
+    client: Aws::S3::Client
+    parent:
+      list: list_buckets
+      collection: buckets
+      id: name
+    list: get_bucket_replication
+    arg: bucket
+    collection: replication_configuration
+    id: _parent
+    scope: global
+    fields:
+      role: role
+      rules: rules
+
+  # -- Route 53 DNSSEC -------------------------------------------------------
+  # confirmed: route53.ListHostedZones (no required input; output `HostedZones`
+  # -> HostedZone.Id, .Name, .Config.PrivateZone) and route53.GetDNSSEC
+  # (required `HostedZoneId`; output `Status` -> DNSSECStatus.ServeSignature,
+  # documented values SIGNING / NOT_SIGNING / DELETING / ACTION_NEEDED /
+  # INTERNAL_FAILURE -- a documented value set, not a botocore enum).
+  # GetDNSSEC rejects PRIVATE hosted zones; the check is scoped to public zones,
+  # so that rejection must yield an out-of-scope row, not an unreadable region.
+  # HostedZone.Id comes back as "/hostedzone/ZXXXX"; GetDNSSEC accepts that form.
+  aws_route53_zone:
+    gem: aws-sdk-route53
+    client: Aws::Route53::Client
+    parent:
+      list: list_hosted_zones
+      collection: hosted_zones
+      id: id
+    list: get_dnssec
+    arg: hosted_zone_id
+    collection: status
+    id: _parent
+    scope: global
+    fields:
+      serve_signature: serve_signature
+      status_message: status_message
+
+  # -- GuardDuty detectors ---------------------------------------------------
+  # confirmed: guardduty.ListDetectors (no required input; output `DetectorIds`
+  # -> list of strings) and guardduty.GetDetector (required `DetectorId`; the
+  # output shape is FLAT -- Status, FindingPublishingFrequency, DataSources,
+  # Features are top-level response members with no wrapper), hence
+  # collection: _response.
+  # This is the repair for CKV_AWS_238, which resource_map_derived.yml deleted
+  # because "aws_guardduty_detectors yields non-String ids".
+  aws_guardduty_detector:
+    gem: aws-sdk-guardduty
+    client: Aws::GuardDuty::Client
+    parent:
+      list: list_detectors
+      collection: detector_ids
+      id: _self
+    list: get_detector
+    arg: detector_id
+    collection: _response
+    id: _parent
+    scope: regional
+    fields:
+      status: status
+      finding_publishing_frequency: finding_publishing_frequency
+      s3_logs_status: data_sources.s3_logs.status
+      cloudtrail_status: data_sources.cloud_trail.status
+      dns_logs_status: data_sources.dns_logs.status
+      flow_logs_status: data_sources.flow_logs.status
+
+  # -- IAM role attached managed policies ------------------------------------
+  # confirmed: iam.ListRoles (no required input; output `Roles` ->
+  # Role.RoleName) and iam.ListAttachedRolePolicies (required `RoleName`; output
+  # `AttachedPolicies` -> AttachedPolicy.PolicyName / .PolicyArn).
+  # IAM is global, so this is N calls total, not N x regions.
+  aws_iam_role_policy_attachment:
+    gem: aws-sdk-iam
+    client: Aws::IAM::Client
+    parent:
+      list: list_roles
+      collection: roles
+      id: role_name
+    list: list_attached_role_policies
+    arg: role_name
+    collection: attached_policies
+    id: policy_name
+    arn: policy_arn
+    scope: global
+    fields:
+      policy_name: policy_name
+      policy_arn: policy_arn
+
+  # -- CloudTrail event data stores ------------------------------------------
+  # confirmed: cloudtrail.ListEventDataStores (no required input; output
+  # `EventDataStores` -> EventDataStore.EventDataStoreArn -- note the summary
+  # does NOT carry KmsKeyId) and cloudtrail.GetEventDataStore (required
+  # `EventDataStore`; FLAT output including KmsKeyId), hence collection:
+  # _response. The KmsKeyId omission from the list response is exactly why this
+  # check needs the second call.
+  aws_cloudtrail_event_data_store:
+    gem: aws-sdk-cloudtrail
+    client: Aws::CloudTrail::Client
+    parent:
+      list: list_event_data_stores
+      collection: event_data_stores
+      id: event_data_store_arn
+    list: get_event_data_store
+    arg: event_data_store
+    collection: _response
+    id: name
+    arn: event_data_store_arn
+    scope: regional
+    fields:
+      kms_key_id: kms_key_id
+      status: status
+      termination_protection_enabled: termination_protection_enabled
+      multi_region_enabled: multi_region_enabled
+      retention_period: retention_period
+
+  # -- CodePipeline ----------------------------------------------------------
+  # confirmed: codepipeline.ListPipelines (no required input; output `pipelines`
+  # -> PipelineSummary.name) and codepipeline.GetPipeline (required `name`;
+  # output `pipeline` -> a single PipelineDeclaration whose artifactStore.
+  # encryptionKey.{id,type} is the field CKV_AWS_219 wants).
+  aws_codepipeline:
+    gem: aws-sdk-codepipeline
+    client: Aws::CodePipeline::Client
+    parent:
+      list: list_pipelines
+      collection: pipelines
+      id: name
+    list: get_pipeline
+    arg: name
+    collection: pipeline
+    id: name
+    scope: regional
+    fields:
+      role_arn: role_arn
+      artifact_store_type: artifact_store.type
+      artifact_store_location: artifact_store.location
+      artifact_encryption_key_id: artifact_store.encryption_key.id
+      artifact_encryption_key_type: artifact_store.encryption_key.type
+
+# ---------------------------------------------------------------------------
+mappings:
+
+  CKV_AWS_73:
+    aws_api_gateway_stage:
+      reader: api
+      field: tracing_enabled
+      satisfies: equals
+      value: true
+
+  CKV_AWS_76:
+    aws_api_gateway_stage:
+      reader: api
+      field: access_log_destination_arn
+      satisfies: not_empty
+      note: >-
+        Terraform writes access_log_settings { destination_arn }; the API member
+        is Stage.AccessLogSettings.DestinationArn, confirmed from botocore
+        apigateway/GetStages. A stage with no access logging omits
+        AccessLogSettings entirely, so the chain is nil -- which is the failing
+        state for a presence check and is deliberately not filtered.
+    aws_apigatewayv2_stage:
+      reader: api
+      field: access_log_destination_arn
+      satisfies: not_empty
+      note: >-
+        Same member name on the v2 Stage shape (AccessLogSettings.DestinationArn),
+        confirmed from botocore apigatewayv2/GetStages.
+
+  CKV_AWS_120:
+    aws_api_gateway_stage:
+      reader: api
+      field: cache_cluster_enabled
+      satisfies: equals
+      value: true
+
+  CKV2_AWS_51:
+    aws_api_gateway_stage:
+      reader: api
+      field: client_certificate_id
+      satisfies: not_empty
+      note: >-
+        The graph check is "client_certificate_id exists". Stage.ClientCertificateId
+        is the deployed equivalent and is absent (nil) when no client certificate
+        is attached.
+    aws_apigatewayv2_stage:
+      reader: api
+      field: client_certificate_id
+      satisfies: not_empty
+
+  CKV_AWS_335:
+    aws_ecs_task_definition:
+      reader: api
+      field: pid_mode
+      satisfies: not_equals
+      value: host
+      note: >-
+        API DIVERGENCE. Checkov reads pidMode from inside container_definitions,
+        but pidMode is a TASK-level member -- confirmed from the botocore ecs
+        TaskDefinition shape member list, where pidMode sits next to family and
+        networkMode and does not appear in ContainerDefinition at all. Checkov's
+        check can therefore never fire; this one can. A task definition that does
+        not set pidMode returns nil, which is filtered out of scope rather than
+        read as a passing value.
+
+  CKV_AWS_223:
+    aws_ecs_cluster:
+      reader: api
+      field: execute_command_logging
+      satisfies: in_list
+      value: [DEFAULT, OVERRIDE]
+      note: >-
+        ExecuteCommandLogging enum is [NONE, DEFAULT, OVERRIDE] (botocore ecs),
+        so in_list of the two non-NONE values is the exact inverse of Checkov's
+        forbidden-value list. A cluster with no executeCommandConfiguration at all
+        returns nil here and is scoped out -- correct, because ECS Exec is not in
+        use on it. REQUIRES include: ['CONFIGURATIONS'] on DescribeClusters; see
+        notes.schema_gaps.constant_args.
+
+  CKV_AWS_39:
+    aws_eks_cluster:
+      reader: api
+      field: endpoint_public_access
+      satisfies: equals
+      value: false
+
+  CKV_AWS_58:
+    aws_eks_cluster:
+      reader: api
+      field: encryption_config
+      satisfies: not_empty
+      note: >-
+        Checkov asserts encryption_config[0].resources == ["secrets"]. EKS
+        EncryptionConfig accepts only "secrets" as a resource value, so a
+        non-empty encryptionConfig and "secrets encryption is on" are the same
+        statement in practice. Stated here rather than assumed, because the
+        equivalence is an EKS fact and not a schema one.
+
+  CKV_AWS_339:
+    aws_eks_cluster:
+      reader: api
+      field: version
+      satisfies: in_list
+      value: ['1.29', '1.30', '1.31', '1.32', '1.33', '1.34', '1.35']
+      note: >-
+        The supported-version list is copied verbatim from Checkov 3.3.16's
+        EKSPlatformVersion.get_expected_values(). It is a moving target and must
+        be revisited on every Checkov bump -- a stale list fails clusters that
+        are in fact current.
+
+  CKV_AWS_247:
+    aws_elasticsearch_domain:
+      reader: api
+      field: encryption_at_rest_kms_key_id
+      satisfies: not_empty
+    aws_opensearch_domain:
+      reader: api
+      field: encryption_at_rest_kms_key_id
+      satisfies: not_empty
+      note: >-
+        Terraform writes encrypt_at_rest { kms_key_id }; the API member is
+        EncryptionAtRestOptions.KmsKeyId, confirmed from botocore
+        es/DescribeElasticsearchDomain.
+
+  CKV2_AWS_52:
+    aws_elasticsearch_domain:
+      reader: api
+      field: advanced_security_enabled
+      satisfies: equals
+      value: true
+    aws_opensearch_domain:
+      reader: api
+      field: advanced_security_enabled
+      satisfies: equals
+      value: true
+
+  CKV2_AWS_59:
+    aws_elasticsearch_domain:
+      reader: api
+      field: dedicated_master_enabled
+      satisfies: equals
+      value: true
+    aws_opensearch_domain:
+      reader: api
+      field: dedicated_master_enabled
+      satisfies: equals
+      value: true
+
+  CKV_AWS_318:
+    aws_elasticsearch_domain:
+      reader: api
+      field: dedicated_master_count
+      satisfies: at_least
+      value: 3
+    aws_opensearch_domain:
+      reader: api
+      field: dedicated_master_count
+      satisfies: at_least
+      value: 3
+      note: >-
+        DedicatedMasterCount is omitted when dedicated masters are off, so a
+        domain with no dedicated masters returns nil and is scoped out of this
+        control by the nil filter. CKV2_AWS_59 is the control that catches that
+        domain; the two are complementary and both are needed.
+
+  CKV_AWS_357:
+    aws_transfer_server:
+      reader: api
+      field: protocols
+      satisfies: excludes
+      value: FTP
+      note: >-
+        Protocols is on DescribeServer, not ListServers -- this is the
+        describe-per-item case. The Protocol enum is [SFTP, FTP, FTPS, AS2], so
+        excluding the exact string FTP is precise and does not accidentally match
+        FTPS.
+
+  CKV_AWS_380:
+    aws_transfer_server:
+      reader: api
+      field: security_policy_name
+      satisfies: not_equals
+      value: TransferSecurityPolicy-2018-11
+      note: >-
+        Checkov passes any explicitly-set security_policy_name and fails only the
+        Terraform default. DescribeServer always returns SecurityPolicyName, so
+        the deployed assertion is the named-policy comparison rather than a
+        presence check. AWS publishes newer weak policies over time; this asserts
+        only that the 2018-11 baseline is not in force.
+
+  CKV_AWS_78:
+    aws_codebuild_project:
+      reader: api
+      field: artifacts_encryption_disabled
+      satisfies: not_equals
+      value: true
+      note: >-
+        Checkov also returns UNKNOWN for artifacts.type == NO_ARTIFACTS. Here a
+        NO_ARTIFACTS project simply has no encryptionDisabled member, so it is
+        nil and the nil filter scopes it out -- the same outcome by a different
+        route.
+
+  CKV_AWS_311:
+    aws_codebuild_project:
+      reader: api
+      field: s3_logs_encryption_disabled
+      satisfies: not_equals
+      value: true
+      note: >-
+        Terraform writes logs_config { s3_logs { encryption_disabled } }; the API
+        member is Project.LogsConfig.S3Logs.EncryptionDisabled, confirmed from
+        botocore codebuild/BatchGetProjects. Projects with S3 logging off have no
+        S3Logs.EncryptionDisabled and are scoped out.
+
+  CKV_AWS_316:
+    aws_codebuild_project:
+      reader: api
+      field: privileged_mode
+      satisfies: equals
+      value: false
+
+  CKV_AWS_258:
+    aws_lambda_function_url:
+      reader: api
+      field: auth_type
+      satisfies: not_equals
+      value: NONE
+      note: >-
+        Terraform's argument is authorization_type; the API member is
+        FunctionUrlConfig.AuthType, confirmed from botocore
+        lambda/ListFunctionUrlConfigs. Only functions that actually have a URL
+        produce a row, so a function without one is absent rather than passing.
+
+  CKV2_AWS_75:
+    aws_lambda_function_url:
+      reader: api
+      field: cors_allow_origins
+      satisfies: excludes
+      value: '*'
+      note: >-
+        Lambda expresses an open CORS origin as the literal list element "*"
+        (Cors.AllowOrigins is a list of strings), so excluding the exact element
+        is the right test rather than a substring match.
+
+  CKV_AWS_103:
+    aws_lb_listener:
+      reader: api
+      field: ssl_policy
+      satisfies: matches
+      value: ^ELBSecurityPolicy-(FS-1-2|TLS-1-2|TLS13)
+      note: >-
+        The prefixes come from Checkov's own graph definition
+        (AppLoadBalancerTLS12.json) -- ELBSecurityPolicy-FS-1-2,
+        ELBSecurityPolicy-TLS-1-2, ELBSecurityPolicy-TLS13. Scoping falls out of
+        the data: HTTP, TCP, UDP and TCP_UDP listeners have no SslPolicy member,
+        so they are nil and the nil filter removes them, which is exactly the
+        "protocol not in (HTTPS, TLS) passes" branch of the graph check.
+    aws_alb_listener:
+      reader: api
+      field: ssl_policy
+      satisfies: matches
+      value: ^ELBSecurityPolicy-(FS-1-2|TLS-1-2|TLS13)
+
+  CKV2_AWS_74:
+    aws_lb_listener:
+      reader: api
+      field: ssl_policy
+      satisfies: not_in_list
+      value: [ELBSecurityPolicy-2016-08, ELBSecurityPolicy-2015-05, ELBSecurityPolicy-TLS-1-0-2015-04,
+        ELBSecurityPolicy-TLS-1-1-2017-01, ELBSecurityPolicy-2015-03, ELBSecurityPolicy-2015-02,
+        ELBSecurityPolicy-2014-10, ELBSecurityPolicy-Default, ELBSecurityPolicy-2014-01]
+      note: >-
+        The nine forbidden policies are copied verbatim from Checkov's
+        LBWeakCiphers.json. Same nil scoping as CKV_AWS_103.
+    aws_alb_listener:
+      reader: api
+      field: ssl_policy
+      satisfies: not_in_list
+      value: [ELBSecurityPolicy-2016-08, ELBSecurityPolicy-2015-05, ELBSecurityPolicy-TLS-1-0-2015-04,
+        ELBSecurityPolicy-TLS-1-1-2017-01, ELBSecurityPolicy-2015-03, ELBSecurityPolicy-2015-02,
+        ELBSecurityPolicy-2014-10, ELBSecurityPolicy-Default, ELBSecurityPolicy-2014-01]
+
+  CKV_AWS_234:
+    aws_acm_certificate:
+      reader: api
+      field: transparency_logging
+      satisfies: equals
+      value: ENABLED
+      note: >-
+        Options.CertificateTransparencyLoggingPreference is on DescribeCertificate
+        only -- ListCertificates' CertificateSummary does not carry it. Enum is
+        [ENABLED, DISABLED]. IMPORTED certificates omit Options entirely and are
+        scoped out by the nil filter, which matches Checkov's
+        missing_block_result=PASSED.
+
+  CKV_AWS_159:
+    aws_athena_workgroup:
+      reader: api
+      field: encryption_option
+      satisfies: not_empty
+      note: >-
+        Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption
+        is only on GetWorkGroup, not on the ListWorkGroups summary -- which is
+        why the earlier single-call attempt "raised instead of returning nil" and
+        had to be deleted from resource_map_derived.yml. Any of SSE_S3 / SSE_KMS /
+        CSE_KMS is a pass; absent encryption is the failure.
+
+  CKV_AWS_240:
+    aws_kinesis_firehose_delivery_stream:
+      reader: api
+      field: encryption_status
+      satisfies: in_list
+      value: [ENABLED, ENABLING]
+      note: >-
+        REVIEW THIS ONE. Checkov returns UNKNOWN for a stream with a
+        kinesis_source_configuration, because such a stream inherits encryption
+        from the source Kinesis stream. The deployed shape gives us
+        DeliveryStreamType (KinesisStreamAsSource) to detect that case, but the
+        mapping schema has no way to scope a control by a second field, so a
+        Kinesis-sourced stream will report DISABLED and FAIL here. That is a
+        known false positive until a scoping mechanism exists -- see
+        notes.schema_gaps.conditional_scope.
+
+  CKV_AWS_241:
+    aws_kinesis_firehose_delivery_stream:
+      reader: api
+      field: encryption_key_type
+      satisfies: equals
+      value: CUSTOMER_MANAGED_CMK
+      note: >-
+        KeyType enum is [AWS_OWNED_CMK, CUSTOMER_MANAGED_CMK]. A stream with no
+        SSE at all omits DeliveryStreamEncryptionConfiguration, so KeyType is nil
+        and the stream is scoped out of THIS control -- CKV_AWS_240 is the one
+        that fails it. Same Kinesis-source caveat as CKV_AWS_240.
+
+  CKV_AWS_53:
+    aws_s3_bucket_public_access_block:
+      reader: api
+      field: block_public_acls
+      satisfies: equals
+      value: true
+
+  CKV_AWS_54:
+    aws_s3_bucket_public_access_block:
+      reader: api
+      field: block_public_policy
+      satisfies: equals
+      value: true
+
+  CKV_AWS_55:
+    aws_s3_bucket_public_access_block:
+      reader: api
+      field: ignore_public_acls
+      satisfies: equals
+      value: true
+
+  CKV_AWS_56:
+    aws_s3_bucket_public_access_block:
+      reader: api
+      field: restrict_public_buckets
+      satisfies: equals
+      value: true
+      note: >-
+        All four read PublicAccessBlockConfiguration members whose names match
+        the Terraform argument names exactly (confirmed from botocore
+        s3/GetPublicAccessBlock). The whole value of these four controls depends
+        on the reader turning NoSuchPublicAccessBlockConfiguration into a row of
+        nils rather than an unreadable region -- a bucket with no block set is
+        the population these checks exist to find.
+
+  CKV_AWS_144:
+    aws_s3_bucket_replication_configuration:
+      reader: api
+      field: rules
+      satisfies: not_empty
+      note: >-
+        DIVERGENCE, deliberately weaker than the check's name. This asserts that
+        replication is configured; it does not prove the destination bucket is in
+        a different region, because Destination.Bucket is an ARN and S3 bucket
+        ARNs are region-less. Proving cross-REGION would need a second lookup of
+        the destination bucket's region, which is a third level.
+
+  CKV2_AWS_38:
+    aws_route53_zone:
+      reader: api
+      field: serve_signature
+      satisfies: equals
+      value: SIGNING
+      note: >-
+        GetDNSSEC's Status.ServeSignature is documented (botocore route53) as
+        SIGNING / NOT_SIGNING / DELETING / ACTION_NEEDED / INTERNAL_FAILURE. The
+        check is scoped to PUBLIC hosted zones; GetDNSSEC rejects private zones,
+        so the reader must record that rejection as an out-of-scope row rather
+        than an unreadable region.
+
+  CKV2_AWS_3:
+    aws_guardduty_detector:
+      reader: api
+      field: status
+      satisfies: equals
+      value: ENABLED
+      note: >-
+        The graph check also covers aws_guardduty_organization_configuration,
+        which this does not -- org-level auto-enable is a management-account fact
+        and is not visible from a member account's GetDetector.
+
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      reader: api
+      field: status
+      satisfies: equals
+      value: ENABLED
+      note: >-
+        Terraform's argument is `enable` (a boolean); the API member is
+        GetDetector.Status, a string whose enum is [ENABLED, DISABLED],
+        confirmed from botocore guardduty. This replaces the entry
+        resource_map_derived.yml deleted for yielding non-String ids.
+
+  CKV_AWS_274:
+    aws_iam_role_policy_attachment:
+      reader: api
+      field: policy_name
+      satisfies: not_equals
+      value: AdministratorAccess
+      note: >-
+        DIVERGENCE. Checkov matches the policy ARN. This matches PolicyName
+        because the ARN is partition-specific (arn:aws:... vs arn:aws-us-gov:...)
+        and this profile is asserted in both partitions. The trade-off is that a
+        customer-managed policy that someone named AdministratorAccess also
+        fails -- which is arguably the right answer, but it is a difference and
+        not an accident. Covers role attachments only; user and group
+        attachments need their own specs (ListUsers/ListAttachedUserPolicies,
+        ListGroups/ListAttachedGroupPolicies) built to the same shape.
+
+  CKV2_AWS_56:
+    aws_iam_role_policy_attachment:
+      reader: api
+      field: policy_name
+      satisfies: not_equals
+      value: IAMFullAccess
+      note: Same partition rationale and same role-only scope as CKV_AWS_274.
+
+  CKV_AWS_294:
+    aws_cloudtrail_event_data_store:
+      reader: api
+      field: kms_key_id
+      satisfies: not_empty
+      note: >-
+        ListEventDataStores' summary does not carry KmsKeyId at all -- confirmed
+        against the botocore cloudtrail EventDataStore shape -- so this check is
+        unreachable without the second call. GetEventDataStore's output is flat,
+        which is the collection: _response case.
+
+  CKV_AWS_219:
+    aws_codepipeline:
+      reader: api
+      field: artifact_encryption_key_id
+      satisfies: not_empty
+      note: >-
+        REVIEW THIS ONE. A cross-region pipeline declares artifactStores (a map
+        keyed by region) instead of artifactStore, so artifactStore is absent and
+        artifact_encryption_key_id is nil -- which, for a presence check, is the
+        failing state. Such a pipeline would fail here even if every regional
+        store is CMK-encrypted. The map shape is not expressible as a dotted
+        path; see notes.schema_gaps.map_keyed.
+
+# ---------------------------------------------------------------------------
+metadata:
+
+  CKV_AWS_73:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-2', 'AU-12', 'SI-4']
+    nist_r4: ['AU-2', 'AU-12', 'SI-4']
+    cci: ['CCI-000130', 'CCI-000169']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Without X-Ray tracing an API Gateway stage produces no per-request span, so
+      a latency anomaly or an abused route cannot be reconstructed after the fact.
+
+  CKV_AWS_76:
+    severity: high
+    impact: 0.7
+    nist: ['AU-2', 'AU-3', 'AU-12']
+    nist_r4: ['AU-2', 'AU-3', 'AU-12']
+    cci: ['CCI-000130', 'CCI-000131', 'CCI-000169']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      A stage with no access log destination keeps no record of who called which
+      route. There is nothing to review after an incident and nothing to feed
+      detection.
+    stronger: >-
+      Checkov reads the access_log_settings block in HCL. This reads GetStages, so
+      a stage whose logging was switched off in the console after deploy is
+      assessed too.
+
+  CKV_AWS_120:
+    severity: low
+    impact: 0.3
+    nist: ['SC-5', 'CP-2']
+    nist_r4: ['SC-5', 'CP-2']
+    cci: ['CCI-002385']
+    ksi: ['KSI-RPL-ABO']
+    rationale: >-
+      Stage caching absorbs repeated identical requests before they reach the
+      backend, which is the difference between a traffic spike and an outage.
+
+  CKV2_AWS_51:
+    severity: medium
+    impact: 0.5
+    nist: ['IA-3', 'SC-8', 'AC-3']
+    nist_r4: ['IA-3', 'SC-8', 'AC-3']
+    cci: ['CCI-000778', 'CCI-002418']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      A client certificate is how the backend proves a request actually came
+      through API Gateway. Without one, anything that learns the backend URL can
+      call it directly and bypass the gateway's authorizers and throttling.
+
+  CKV_AWS_335:
+    severity: high
+    impact: 0.7
+    nist: ['AC-6', 'SC-39', 'CM-7']
+    nist_r4: ['AC-6', 'SC-39', 'CM-7']
+    cci: ['CCI-000381', 'CCI-002233']
+    ksi: ['KSI-CNA-CAP']
+    rationale: >-
+      pidMode host puts the container in the host's process namespace, where it
+      can see and signal every other process on the instance, including other
+      tenants' containers. Container isolation stops meaning anything.
+    stronger: >-
+      Checkov looks for pidMode inside container_definitions, where the ECS API
+      never puts it, so the IaC check cannot fire at all. This reads the
+      task-level member and therefore actually assesses the setting.
+
+  CKV_AWS_223:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-2', 'AU-12', 'AC-6 (9)']
+    nist_r4: ['AU-2', 'AU-12', 'AU-14']
+    cci: ['CCI-000130', 'CCI-000169', 'CCI-002234']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      ECS Exec is an interactive shell into a running container. With logging set
+      to NONE there is no record of who opened one or what they typed, which is
+      the single highest-value audit trail a container platform has.
+
+  CKV_AWS_39:
+    severity: high
+    impact: 0.7
+    nist: ['SC-7', 'AC-3', 'AC-17']
+    nist_r4: ['SC-7', 'AC-3', 'AC-17']
+    cci: ['CCI-001097', 'CCI-002314']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A public EKS API server endpoint puts the cluster control plane on the
+      internet, where credential stuffing and CVE scanning reach it directly
+      rather than having to get into the VPC first.
+
+  CKV_AWS_58:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)', 'SC-12']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Without envelope encryption, Kubernetes Secrets sit in etcd protected only
+      by the disk encryption AWS applies to the managed control plane. A KMS
+      provider adds a key the cluster operator controls and can revoke.
+
+  CKV_AWS_339:
+    severity: medium
+    impact: 0.5
+    nist: ['SI-2', 'SI-2 (2)', 'CM-2']
+    nist_r4: ['SI-2', 'SI-2 (2)', 'CM-2']
+    cci: ['CCI-001227', 'CCI-002605']
+    ksi: ['KSI-CMT-CFG']
+    rationale: >-
+      An EKS version past end of standard support stops receiving Kubernetes
+      security patches, and extended support ends with a forced upgrade at a time
+      AWS chooses rather than one the team plans.
+
+  CKV_AWS_247:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28', 'SC-28 (1)', 'SC-12']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      Service-owned keys cannot be disabled, rotated on demand, or revoked by the
+      account. A customer-managed key makes "destroy the data by destroying the
+      key" an option the account actually holds.
+
+  CKV2_AWS_52:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-6', 'IA-2']
+    nist_r4: ['AC-3', 'AC-6', 'IA-2']
+    cci: ['CCI-000213', 'CCI-002165']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      Without fine-grained access control, authorisation stops at the domain
+      access policy: any principal that can reach the domain can read every index
+      in it. FGAC is what makes per-index and per-document restriction possible.
+
+  CKV2_AWS_59:
+    severity: medium
+    impact: 0.5
+    nist: ['CP-10', 'SC-5', 'CP-2']
+    nist_r4: ['CP-10', 'SC-5', 'CP-2']
+    cci: ['CCI-000553', 'CCI-002385']
+    ksi: ['KSI-RPL-RCY']
+    rationale: >-
+      Without dedicated master nodes, cluster-management work competes with search
+      and indexing on the data nodes, so a query storm can take the cluster's
+      control functions down with it.
+
+  CKV_AWS_318:
+    severity: medium
+    impact: 0.5
+    nist: ['CP-10', 'SC-5', 'CP-2']
+    nist_r4: ['CP-10', 'SC-5', 'CP-2']
+    cci: ['CCI-000553', 'CCI-002385']
+    ksi: ['KSI-RPL-RCY']
+    rationale: >-
+      Three dedicated masters is the smallest count that gives a quorum tolerant
+      of one failure. One or two masters means a single node loss is a
+      split-brain or a total control-plane loss.
+
+  CKV_AWS_357:
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)', 'IA-5 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002422']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      Plain FTP sends credentials and file contents in cleartext. Anything on the
+      path reads both, and the "transfer" in Transfer Family is exactly the data
+      the boundary exists to protect.
+    stronger: >-
+      Protocols is not on ListServers. Checkov reads the Terraform argument;
+      this reads DescribeServer, so a protocol added by hand after deploy is
+      assessed too.
+
+  CKV_AWS_380:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-8', 'SC-13', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-13']
+    cci: ['CCI-002418', 'CCI-002450']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      TransferSecurityPolicy-2018-11 still offers key exchange and cipher suites
+      that later policies dropped. Staying on it means the server negotiates down
+      to whatever a weak client asks for.
+
+  CKV_AWS_78:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Build artifacts routinely contain the whole application, its config, and
+      whatever the build pulled in. Disabling artifact encryption leaves that in
+      S3 in the clear.
+
+  CKV_AWS_311:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28', 'SC-28 (1)', 'AU-9']
+    nist_r4: ['SC-28', 'SC-28 (1)', 'AU-9']
+    cci: ['CCI-001199', 'CCI-000162']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Build logs capture environment variables, resolved config, and error output.
+      Unencrypted in S3 they are a convenient, indexed record of the build's
+      secrets.
+
+  CKV_AWS_316:
+    severity: high
+    impact: 0.7
+    nist: ['AC-6', 'CM-7', 'SC-39']
+    nist_r4: ['AC-6', 'CM-7']
+    cci: ['CCI-000381', 'CCI-002233']
+    ksi: ['KSI-CNA-CAP']
+    rationale: >-
+      Privileged mode gives the build container the host's capabilities and device
+      access. Any dependency the build executes -- and a build executes all of
+      them -- gets root on the build fleet.
+
+  CKV_AWS_258:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'IA-2', 'SC-7']
+    nist_r4: ['AC-3', 'IA-2', 'SC-7']
+    cci: ['CCI-000213', 'CCI-000804']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      AuthType NONE makes the function URL an unauthenticated public HTTPS
+      endpoint. Anyone with the URL invokes the function, on the account's bill
+      and with the function's execution role.
+
+  CKV2_AWS_75:
+    severity: medium
+    impact: 0.5
+    nist: ['AC-4', 'SC-7', 'AC-3']
+    nist_r4: ['AC-4', 'SC-7', 'AC-3']
+    cci: ['CCI-001414', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A wildcard CORS origin lets any website in a victim's browser call the
+      function URL with that browser's credentials and read the response.
+
+  CKV_AWS_103:
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)', 'SC-13']
+    nist_r4: ['SC-8', 'SC-8 (1)', 'SC-13']
+    cci: ['CCI-002418', 'CCI-002422', 'CCI-002450']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      A listener on a pre-TLS-1.2 policy will negotiate TLS 1.0 or 1.1 with any
+      client that asks, so the weakest client on the internet sets the security of
+      the connection.
+    stronger: >-
+      Checkov reads the ssl_policy argument on the listener resource. This reads
+      DescribeListeners, so a listener created outside Terraform -- or one whose
+      policy was changed in the console -- is assessed on the same footing.
+
+  CKV2_AWS_74:
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-13', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-13']
+    cci: ['CCI-002418', 'CCI-002450']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      The named legacy policies carry CBC and RC4-era suites and 3DES. They exist
+      only for clients that should no longer be reaching a FedRAMP boundary.
+
+  CKV_AWS_234:
+    severity: low
+    impact: 0.3
+    nist: ['AU-2', 'SI-4', 'CM-6']
+    nist_r4: ['AU-2', 'SI-4']
+    cci: ['CCI-000130', 'CCI-000366']
+    ksi: ['KSI-MLA-OSM']
+    rationale: >-
+      Certificate transparency logging is how a mis-issued certificate for the
+      organisation's domain becomes discoverable. Opting out removes the
+      organisation's own ability to detect it.
+
+  CKV_AWS_159:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Athena query results land in S3 and contain whatever the query selected --
+      often the most sensitive rows in the lake, extracted and concentrated. An
+      unencrypted result location undoes the source table's protection.
+
+  CKV_AWS_240:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Firehose buffers records at rest before delivery. Without server-side
+      encryption that buffer holds the stream's payload unprotected.
+
+  CKV_AWS_241:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28 (1)', 'SC-12', 'SC-13']
+    nist_r4: ['SC-28 (1)', 'SC-12']
+    cci: ['CCI-002475', 'CCI-001199']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      An AWS-owned key cannot be audited, rotated, or revoked by the account.
+      A customer-managed key puts the stream's data under a key the account
+      controls the lifecycle of.
+
+  CKV_AWS_53:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-21', 'SC-7']
+    nist_r4: ['AC-3', 'AC-21', 'SC-7']
+    cci: ['CCI-000213', 'CCI-001414']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      Without BlockPublicAcls, any principal that can PutObjectAcl can make an
+      individual object world-readable, one object at a time, without ever
+      touching the bucket policy.
+
+  CKV_AWS_54:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-21', 'SC-7']
+    nist_r4: ['AC-3', 'AC-21', 'SC-7']
+    cci: ['CCI-000213', 'CCI-001414']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      Without BlockPublicPolicy, a bucket policy granting Principal "*" is
+      accepted and takes effect immediately. This is the setting that refuses the
+      policy at write time rather than after the exposure.
+
+  CKV_AWS_55:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-21', 'SC-7']
+    nist_r4: ['AC-3', 'AC-21', 'SC-7']
+    cci: ['CCI-000213', 'CCI-001414']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      IgnorePublicAcls neutralises public ACLs that already exist on objects,
+      which is the difference between blocking new exposure and ending the
+      exposure already in place.
+
+  CKV_AWS_56:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-21', 'SC-7']
+    nist_r4: ['AC-3', 'AC-21', 'SC-7']
+    cci: ['CCI-000213', 'CCI-001414']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      RestrictPublicBuckets stops a cross-account or anonymous principal from
+      using a public policy even where one survives, limiting the blast radius to
+      principals inside the account.
+
+  CKV_AWS_144:
+    severity: low
+    impact: 0.3
+    nist: ['CP-9', 'CP-6', 'CP-10']
+    nist_r4: ['CP-9', 'CP-6']
+    cci: ['CCI-000535', 'CCI-000539']
+    ksi: ['KSI-RPL-RCY']
+    rationale: >-
+      Replication keeps a second copy of the objects outside the failure domain of
+      the source bucket, so a regional impairment or a destructive action in one
+      place is not the end of the data.
+
+  CKV2_AWS_38:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-20', 'SC-21', 'SC-8']
+    nist_r4: ['SC-20', 'SC-21']
+    cci: ['CCI-002462', 'CCI-002465']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      Without DNSSEC signing, a resolver has no way to tell an authentic answer
+      for the zone from a forged one, so cache poisoning can redirect the
+      organisation's own domain names.
+
+  CKV2_AWS_3:
+    severity: high
+    impact: 0.7
+    nist: ['SI-4', 'SI-4 (4)', 'AU-6']
+    nist_r4: ['SI-4', 'SI-4 (4)', 'AU-6']
+    cci: ['CCI-001253', 'CCI-002656']
+    ksi: ['KSI-MLA-OSM']
+    rationale: >-
+      GuardDuty is the account's continuous threat detection. A region without an
+      enabled detector produces no findings at all, which reads as "no threats"
+      and is in fact "no looking".
+
+  CKV_AWS_238:
+    severity: high
+    impact: 0.7
+    nist: ['SI-4', 'SI-4 (4)', 'AU-6']
+    nist_r4: ['SI-4', 'SI-4 (4)', 'AU-6']
+    cci: ['CCI-001253', 'CCI-002656']
+    ksi: ['KSI-MLA-OSM']
+    rationale: >-
+      A detector that exists but is suspended is worse than none: the resource is
+      present, so inventory looks complete, while no analysis is running.
+
+  CKV_AWS_274:
+    severity: high
+    impact: 0.7
+    nist: ['AC-6', 'AC-6 (2)', 'AC-6 (10)', 'AC-2 (7)']
+    nist_r4: ['AC-6', 'AC-6 (2)', 'AC-6 (10)']
+    cci: ['CCI-000225', 'CCI-002233', 'CCI-002235']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      AdministratorAccess is Allow "*" on "*". Attaching it abandons least
+      privilege entirely and makes every subsequent authorisation control on that
+      identity decorative.
+
+  CKV2_AWS_56:
+    severity: high
+    impact: 0.7
+    nist: ['AC-6', 'AC-6 (2)', 'AC-5']
+    nist_r4: ['AC-6', 'AC-6 (2)', 'AC-5']
+    cci: ['CCI-000225', 'CCI-002233']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      IAMFullAccess lets the holder grant itself anything else, so it is
+      AdministratorAccess one API call later. It is a privilege-escalation
+      primitive, not a scoped permission.
+
+  CKV_AWS_294:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-9', 'SC-28', 'SC-28 (1)']
+    nist_r4: ['AU-9', 'SC-28', 'SC-28 (1)']
+    cci: ['CCI-000162', 'CCI-001199']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      An event data store holds the account's audit history. A customer-managed
+      key means access to that history is gated by a key policy the account
+      controls, independently of the CloudTrail permissions.
+
+  CKV_AWS_219:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-28', 'SC-28 (1)', 'SC-12']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      Pipeline artifacts carry source, build output, and deployment configuration
+      between stages. A customer-managed key keeps that under a key the account
+      can audit and revoke.
+
+# ---------------------------------------------------------------------------
+fixes:
+
+  CKV_AWS_73:
+    aws_api_gateway_stage:
+      terraform: |
+        resource "aws_api_gateway_stage" "example" {
+          rest_api_id           = aws_api_gateway_rest_api.example.id
+          deployment_id         = aws_api_gateway_deployment.example.id
+          stage_name            = "prod"
+          xray_tracing_enabled  = true
+        }
+      cli: |
+        aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/tracingEnabled,value=true
+
+  CKV_AWS_76:
+    aws_api_gateway_stage:
+      terraform: |
+        resource "aws_cloudwatch_log_group" "apigw" {
+          name              = "/aws/apigateway/example"
+          retention_in_days = 365
+        }
+
+        resource "aws_api_gateway_stage" "example" {
+          rest_api_id   = aws_api_gateway_rest_api.example.id
+          deployment_id = aws_api_gateway_deployment.example.id
+          stage_name    = "prod"
+
+          access_log_settings {
+            destination_arn = aws_cloudwatch_log_group.apigw.arn
+            format          = jsonencode({ requestId = "$context.requestId", ip = "$context.identity.sourceIp", status = "$context.status" })
+          }
+        }
+      cli: |
+        aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<log-group-arn> op=replace,path=/accessLogSettings/format,value='$context.requestId'
+    aws_apigatewayv2_stage:
+      terraform: |
+        resource "aws_apigatewayv2_stage" "example" {
+          api_id      = aws_apigatewayv2_api.example.id
+          name        = "prod"
+          auto_deploy = true
+
+          access_log_settings {
+            destination_arn = aws_cloudwatch_log_group.apigw.arn
+            format          = jsonencode({ requestId = "$context.requestId", status = "$context.status" })
+          }
+        }
+      cli: |
+        aws apigatewayv2 update-stage --api-id <api-id> --stage-name prod --access-log-settings DestinationArn=<log-group-arn>,Format='$context.requestId'
+
+  CKV_AWS_120:
+    aws_api_gateway_stage:
+      note: Caching bills per hour for the cache cluster size chosen, so this is a cost decision as well as a resilience one.
+      terraform: |
+        resource "aws_api_gateway_stage" "example" {
+          rest_api_id           = aws_api_gateway_rest_api.example.id
+          deployment_id         = aws_api_gateway_deployment.example.id
+          stage_name            = "prod"
+          cache_cluster_enabled = true
+          cache_cluster_size    = "0.5"
+        }
+      cli: |
+        aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/cacheClusterEnabled,value=true op=replace,path=/cacheClusterSize,value=0.5
+
+  CKV2_AWS_51:
+    aws_api_gateway_stage:
+      terraform: |
+        resource "aws_api_gateway_client_certificate" "example" {
+          description = "backend mTLS"
+        }
+
+        resource "aws_api_gateway_stage" "example" {
+          rest_api_id           = aws_api_gateway_rest_api.example.id
+          deployment_id         = aws_api_gateway_deployment.example.id
+          stage_name            = "prod"
+          client_certificate_id = aws_api_gateway_client_certificate.example.id
+        }
+      cli: |
+        aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/clientCertificateId,value=<client-cert-id>
+    aws_apigatewayv2_stage:
+      terraform: |
+        resource "aws_apigatewayv2_stage" "example" {
+          api_id                = aws_apigatewayv2_api.example.id
+          name                  = "prod"
+          client_certificate_id = aws_api_gateway_client_certificate.example.id
+        }
+      cli: |
+        aws apigatewayv2 update-stage --api-id <api-id> --stage-name prod --client-certificate-id <client-cert-id>
+
+  CKV_AWS_335:
+    aws_ecs_task_definition:
+      note: >-
+        pid_mode is a task-level argument in Terraform too. Omitting it is the fix;
+        the API default is the task's own namespace.
+      terraform: |
+        resource "aws_ecs_task_definition" "example" {
+          family                   = "app"
+          network_mode             = "awsvpc"
+          requires_compatibilities = ["FARGATE"]
+          cpu                      = 512
+          memory                   = 1024
+          execution_role_arn       = aws_iam_role.execution.arn
+          task_role_arn            = aws_iam_role.task.arn
+
+          # pid_mode deliberately unset -- "host" would share the instance namespace
+          container_definitions = jsonencode([{
+            name                   = "app"
+            image                  = "${aws_ecr_repository.app.repository_url}:1.0.0"
+            essential              = true
+            readonlyRootFilesystem = true
+          }])
+        }
+      cli: |
+        aws ecs register-task-definition --cli-input-json file://taskdef.json   # re-register with pidMode removed; task definition revisions are immutable
+
+  CKV_AWS_223:
+    aws_ecs_cluster:
+      terraform: |
+        resource "aws_ecs_cluster" "example" {
+          name = "app"
+
+          configuration {
+            execute_command_configuration {
+              kms_key_id = aws_kms_key.ecs_exec.arn
+              logging    = "OVERRIDE"
+
+              log_configuration {
+                cloud_watch_encryption_enabled = true
+                cloud_watch_log_group_name     = aws_cloudwatch_log_group.ecs_exec.name
+              }
+            }
+          }
+        }
+      cli: |
+        aws ecs update-cluster --cluster app --configuration executeCommandConfiguration={logging=OVERRIDE,kmsKeyId=<key-arn>,logConfiguration={cloudWatchLogGroupName=<log-group>,cloudWatchEncryptionEnabled=true}}
+
+  CKV_AWS_39:
+    aws_eks_cluster:
+      note: >-
+        Turning the public endpoint off requires the operators and any CI runner to
+        reach the API server from inside the VPC -- a VPN, Direct Connect, or an
+        in-VPC runner. Do that first or the cluster becomes unmanageable.
+      terraform: |
+        resource "aws_eks_cluster" "example" {
+          name     = "app"
+          role_arn = aws_iam_role.eks.arn
+
+          vpc_config {
+            subnet_ids              = var.private_subnet_ids
+            endpoint_public_access  = false
+            endpoint_private_access = true
+          }
+        }
+      cli: |
+        aws eks update-cluster-config --name app --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true
+
+  CKV_AWS_58:
+    aws_eks_cluster:
+      note: >-
+        Envelope encryption cannot be removed once enabled, and existing Secrets are
+        re-encrypted only when next written. Force a rewrite of existing Secrets after enabling.
+      terraform: |
+        resource "aws_eks_cluster" "example" {
+          name     = "app"
+          role_arn = aws_iam_role.eks.arn
+
+          encryption_config {
+            resources = ["secrets"]
+            provider {
+              key_arn = aws_kms_key.eks.arn
+            }
+          }
+
+          vpc_config {
+            subnet_ids = var.private_subnet_ids
+          }
+        }
+      cli: |
+        aws eks associate-encryption-config --cluster-name app --encryption-config '[{"resources":["secrets"],"provider":{"keyArn":"<key-arn>"}}]'
+
+  CKV_AWS_339:
+    aws_eks_cluster:
+      terraform: |
+        resource "aws_eks_cluster" "example" {
+          name     = "app"
+          role_arn = aws_iam_role.eks.arn
+          version  = "1.33"
+
+          vpc_config {
+            subnet_ids = var.private_subnet_ids
+          }
+        }
+      cli: |
+        aws eks update-cluster-version --name app --kubernetes-version 1.33
+
+  CKV_AWS_247:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "logs"
+
+          encrypt_at_rest {
+            enabled    = true
+            kms_key_id = aws_kms_key.search.arn
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name logs --encryption-at-rest-options Enabled=true,KmsKeyId=<key-arn>
+    aws_opensearch_domain:
+      note: Encryption at rest cannot be enabled on an existing domain in place; the domain must be recreated and reindexed.
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "logs"
+
+          encrypt_at_rest {
+            enabled    = true
+            kms_key_id = aws_kms_key.search.arn
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name logs --encryption-at-rest-options Enabled=true,KmsKeyId=<key-arn>
+
+  CKV2_AWS_52:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "logs"
+
+          advanced_security_options {
+            enabled                        = true
+            internal_user_database_enabled = false
+            master_user_options {
+              master_user_arn = aws_iam_role.search_admin.arn
+            }
+          }
+
+          domain_endpoint_options {
+            enforce_https       = true
+            tls_security_policy = "Policy-Min-TLS-1-2-2019-07"
+          }
+
+          node_to_node_encryption { enabled = true }
+          encrypt_at_rest         { enabled = true }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name logs --advanced-security-options Enabled=true,InternalUserDatabaseEnabled=false,MasterUserOptions={MasterUserARN=<role-arn>}
+    aws_opensearch_domain:
+      note: FGAC requires node-to-node encryption, encryption at rest, and enforce_https to be on; enabling it alone is rejected.
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "logs"
+
+          advanced_security_options {
+            enabled = true
+            master_user_options {
+              master_user_arn = aws_iam_role.search_admin.arn
+            }
+          }
+
+          node_to_node_encryption { enabled = true }
+          encrypt_at_rest         { enabled = true }
+          domain_endpoint_options { enforce_https = true }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name logs --advanced-security-options Enabled=true,MasterUserOptions={MasterUserARN=<role-arn>}
+
+  CKV2_AWS_59:
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "logs"
+
+          cluster_config {
+            instance_type            = "r6g.large.elasticsearch"
+            instance_count           = 3
+            dedicated_master_enabled = true
+            dedicated_master_type    = "m6g.large.elasticsearch"
+            dedicated_master_count   = 3
+            zone_awareness_enabled   = true
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name logs --elasticsearch-cluster-config DedicatedMasterEnabled=true,DedicatedMasterType=m6g.large.elasticsearch,DedicatedMasterCount=3
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "logs"
+
+          cluster_config {
+            instance_count           = 3
+            dedicated_master_enabled = true
+            dedicated_master_type    = "m6g.large.search"
+            dedicated_master_count   = 3
+            zone_awareness_enabled   = true
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name logs --cluster-config DedicatedMasterEnabled=true,DedicatedMasterType=m6g.large.search,DedicatedMasterCount=3
+
+  CKV_AWS_318:
+    aws_elasticsearch_domain:
+      note: Three is the supported quorum size; AWS accepts 3 or 5 dedicated masters, never 2 or 4.
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "logs"
+
+          cluster_config {
+            dedicated_master_enabled = true
+            dedicated_master_count   = 3
+            dedicated_master_type    = "m6g.large.elasticsearch"
+          }
+        }
+      cli: |
+        aws es update-elasticsearch-domain-config --domain-name logs --elasticsearch-cluster-config DedicatedMasterEnabled=true,DedicatedMasterCount=3
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "logs"
+
+          cluster_config {
+            dedicated_master_enabled = true
+            dedicated_master_count   = 3
+            dedicated_master_type    = "m6g.large.search"
+          }
+        }
+      cli: |
+        aws opensearch update-domain-config --domain-name logs --cluster-config DedicatedMasterEnabled=true,DedicatedMasterCount=3
+
+  CKV_AWS_357:
+    aws_transfer_server:
+      note: Removing FTP breaks any client still using it; FTPS is the drop-in replacement and keeps the same commands over TLS.
+      terraform: |
+        resource "aws_transfer_server" "example" {
+          identity_provider_type = "SERVICE_MANAGED"
+          endpoint_type          = "VPC"
+          protocols              = ["SFTP", "FTPS"]
+          certificate            = aws_acm_certificate.transfer.arn
+          security_policy_name   = "TransferSecurityPolicy-2024-01"
+
+          endpoint_details {
+            vpc_id     = var.vpc_id
+            subnet_ids = var.private_subnet_ids
+          }
+        }
+      cli: |
+        aws transfer update-server --server-id <server-id> --protocols SFTP FTPS --certificate <acm-cert-arn>
+
+  CKV_AWS_380:
+    aws_transfer_server:
+      note: Newer policies drop older key exchange algorithms; confirm every SFTP client supports them before switching.
+      terraform: |
+        resource "aws_transfer_server" "example" {
+          protocols            = ["SFTP"]
+          security_policy_name = "TransferSecurityPolicy-2024-01"
+        }
+      cli: |
+        aws transfer update-server --server-id <server-id> --security-policy-name TransferSecurityPolicy-2024-01
+
+  CKV_AWS_78:
+    aws_codebuild_project:
+      terraform: |
+        resource "aws_codebuild_project" "example" {
+          name         = "app"
+          service_role = aws_iam_role.codebuild.arn
+
+          artifacts {
+            type                = "S3"
+            location            = aws_s3_bucket.artifacts.bucket
+            encryption_disabled = false
+          }
+
+          environment {
+            compute_type = "BUILD_GENERAL1_SMALL"
+            image        = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+            type         = "LINUX_CONTAINER"
+          }
+
+          source { type = "CODEPIPELINE" }
+        }
+      cli: |
+        aws codebuild update-project --name app --artifacts type=S3,location=<bucket>,encryptionDisabled=false
+
+  CKV_AWS_311:
+    aws_codebuild_project:
+      terraform: |
+        resource "aws_codebuild_project" "example" {
+          name         = "app"
+          service_role = aws_iam_role.codebuild.arn
+
+          logs_config {
+            s3_logs {
+              status              = "ENABLED"
+              location            = "${aws_s3_bucket.build_logs.id}/logs"
+              encryption_disabled = false
+            }
+          }
+        }
+      cli: |
+        aws codebuild update-project --name app --logs-config s3Logs={status=ENABLED,location=<bucket>/logs,encryptionDisabled=false}
+
+  CKV_AWS_316:
+    aws_codebuild_project:
+      note: >-
+        Privileged mode is usually there to build container images. Replace it with
+        a rootless builder (buildah, kaniko) or a CodeBuild reserved-capacity fleet
+        rather than simply flipping the flag on a build that needs it.
+      terraform: |
+        resource "aws_codebuild_project" "example" {
+          name         = "app"
+          service_role = aws_iam_role.codebuild.arn
+
+          environment {
+            compute_type    = "BUILD_GENERAL1_SMALL"
+            image           = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+            type            = "LINUX_CONTAINER"
+            privileged_mode = false
+          }
+
+          source    { type = "CODEPIPELINE" }
+          artifacts { type = "CODEPIPELINE" }
+        }
+      cli: |
+        aws codebuild update-project --name app --environment type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0,privilegedMode=false
+
+  CKV_AWS_258:
+    aws_lambda_function_url:
+      note: AWS_IAM auth means callers must SigV4-sign the request; a browser front end needs a signing proxy or an API Gateway in front instead.
+      terraform: |
+        resource "aws_lambda_function_url" "example" {
+          function_name      = aws_lambda_function.app.function_name
+          authorization_type = "AWS_IAM"
+        }
+      cli: |
+        aws lambda update-function-url-config --function-name app --auth-type AWS_IAM
+
+  CKV2_AWS_75:
+    aws_lambda_function_url:
+      terraform: |
+        resource "aws_lambda_function_url" "example" {
+          function_name      = aws_lambda_function.app.function_name
+          authorization_type = "AWS_IAM"
+
+          cors {
+            allow_origins = ["https://app.example.com"]
+            allow_methods = ["GET", "POST"]
+            allow_headers = ["content-type", "authorization"]
+            max_age       = 300
+          }
+        }
+      cli: |
+        aws lambda update-function-url-config --function-name app --cors AllowOrigins=https://app.example.com,AllowMethods=GET,AllowMethods=POST
+
+  CKV_AWS_103:
+    aws_lb_listener:
+      terraform: |
+        resource "aws_lb_listener" "https" {
+          load_balancer_arn = aws_lb.example.arn
+          port              = 443
+          protocol          = "HTTPS"
+          ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+          certificate_arn   = aws_acm_certificate.example.arn
+
+          default_action {
+            type             = "forward"
+            target_group_arn = aws_lb_target_group.example.arn
+          }
+        }
+      cli: |
+        aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06
+    aws_alb_listener:
+      terraform: |
+        resource "aws_alb_listener" "https" {
+          load_balancer_arn = aws_alb.example.arn
+          port              = 443
+          protocol          = "HTTPS"
+          ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+          certificate_arn   = aws_acm_certificate.example.arn
+
+          default_action {
+            type             = "forward"
+            target_group_arn = aws_alb_target_group.example.arn
+          }
+        }
+      cli: |
+        aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06
+
+  CKV2_AWS_74:
+    aws_lb_listener:
+      note: ELBSecurityPolicy-2016-08 is the ELBv2 default, so a listener that never set ssl_policy explicitly is on a weak policy.
+      terraform: |
+        resource "aws_lb_listener" "https" {
+          load_balancer_arn = aws_lb.example.arn
+          port              = 443
+          protocol          = "HTTPS"
+          ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
+          certificate_arn   = aws_acm_certificate.example.arn
+
+          default_action {
+            type             = "forward"
+            target_group_arn = aws_lb_target_group.example.arn
+          }
+        }
+      cli: |
+        aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-2021-06
+    aws_alb_listener:
+      terraform: |
+        resource "aws_alb_listener" "https" {
+          load_balancer_arn = aws_alb.example.arn
+          port              = 443
+          protocol          = "HTTPS"
+          ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
+          certificate_arn   = aws_acm_certificate.example.arn
+
+          default_action {
+            type             = "forward"
+            target_group_arn = aws_alb_target_group.example.arn
+          }
+        }
+      cli: |
+        aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-2021-06
+
+  CKV_AWS_234:
+    aws_acm_certificate:
+      note: Transparency logging cannot be changed on an issued certificate; the certificate must be reissued.
+      terraform: |
+        resource "aws_acm_certificate" "example" {
+          domain_name       = "app.example.com"
+          validation_method = "DNS"
+
+          options {
+            certificate_transparency_logging_preference = "ENABLED"
+          }
+
+          lifecycle {
+            create_before_destroy = true
+          }
+        }
+      cli: |
+        aws acm update-certificate-options --certificate-arn <cert-arn> --options CertificateTransparencyLoggingPreference=ENABLED
+
+  CKV_AWS_159:
+    aws_athena_workgroup:
+      terraform: |
+        resource "aws_athena_workgroup" "example" {
+          name = "analytics"
+
+          configuration {
+            enforce_workgroup_configuration = true
+
+            result_configuration {
+              output_location = "s3://${aws_s3_bucket.athena.id}/results/"
+
+              encryption_configuration {
+                encryption_option = "SSE_KMS"
+                kms_key_arn       = aws_kms_key.athena.arn
+              }
+            }
+          }
+        }
+      cli: |
+        aws athena update-work-group --work-group analytics --configuration-updates ResultConfigurationUpdates={OutputLocation=s3://<bucket>/results/,EncryptionConfiguration={EncryptionOption=SSE_KMS,KmsKey=<key-arn>}},EnforceWorkGroupConfiguration=true
+
+  CKV_AWS_240:
+    aws_kinesis_firehose_delivery_stream:
+      note: >-
+        Server-side encryption is not available on a stream whose source is a
+        Kinesis data stream -- encrypt the source stream instead. Enabling SSE is
+        asynchronous; the status passes through ENABLING first.
+      terraform: |
+        resource "aws_kinesis_firehose_delivery_stream" "example" {
+          name        = "app-logs"
+          destination = "extended_s3"
+
+          server_side_encryption {
+            enabled  = true
+            key_type = "CUSTOMER_MANAGED_CMK"
+            key_arn  = aws_kms_key.firehose.arn
+          }
+
+          extended_s3_configuration {
+            role_arn   = aws_iam_role.firehose.arn
+            bucket_arn = aws_s3_bucket.logs.arn
+          }
+        }
+      cli: |
+        aws firehose start-delivery-stream-encryption --delivery-stream-name app-logs --delivery-stream-encryption-configuration-input KeyType=CUSTOMER_MANAGED_CMK,KeyARN=<key-arn>
+
+  CKV_AWS_241:
+    aws_kinesis_firehose_delivery_stream:
+      terraform: |
+        resource "aws_kinesis_firehose_delivery_stream" "example" {
+          name        = "app-logs"
+          destination = "extended_s3"
+
+          server_side_encryption {
+            enabled  = true
+            key_type = "CUSTOMER_MANAGED_CMK"
+            key_arn  = aws_kms_key.firehose.arn
+          }
+
+          extended_s3_configuration {
+            role_arn   = aws_iam_role.firehose.arn
+            bucket_arn = aws_s3_bucket.logs.arn
+          }
+        }
+      cli: |
+        aws firehose start-delivery-stream-encryption --delivery-stream-name app-logs --delivery-stream-encryption-configuration-input KeyType=CUSTOMER_MANAGED_CMK,KeyARN=<key-arn>
+
+  CKV_AWS_53:
+    aws_s3_bucket_public_access_block:
+      note: All four settings are one API call; fixing one without the others leaves an open path.
+      terraform: |
+        resource "aws_s3_bucket_public_access_block" "example" {
+          bucket                  = aws_s3_bucket.example.id
+          block_public_acls       = true
+          ignore_public_acls      = true
+          block_public_policy     = true
+          restrict_public_buckets = true
+        }
+      cli: |
+        aws s3api put-public-access-block --bucket <name> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+  CKV_AWS_54:
+    aws_s3_bucket_public_access_block:
+      terraform: |
+        resource "aws_s3_bucket_public_access_block" "example" {
+          bucket                  = aws_s3_bucket.example.id
+          block_public_acls       = true
+          ignore_public_acls      = true
+          block_public_policy     = true
+          restrict_public_buckets = true
+        }
+      cli: |
+        aws s3api put-public-access-block --bucket <name> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+  CKV_AWS_55:
+    aws_s3_bucket_public_access_block:
+      terraform: |
+        resource "aws_s3_bucket_public_access_block" "example" {
+          bucket                  = aws_s3_bucket.example.id
+          block_public_acls       = true
+          ignore_public_acls      = true
+          block_public_policy     = true
+          restrict_public_buckets = true
+        }
+      cli: |
+        aws s3api put-public-access-block --bucket <name> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+  CKV_AWS_56:
+    aws_s3_bucket_public_access_block:
+      note: Consider the account-level block (s3control put-public-access-block) as well; it applies to buckets created later.
+      terraform: |
+        resource "aws_s3_bucket_public_access_block" "example" {
+          bucket                  = aws_s3_bucket.example.id
+          block_public_acls       = true
+          ignore_public_acls      = true
+          block_public_policy     = true
+          restrict_public_buckets = true
+        }
+      cli: |
+        aws s3api put-public-access-block --bucket <name> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+  CKV_AWS_144:
+    aws_s3_bucket_replication_configuration:
+      note: >-
+        Replication requires versioning on both buckets and an IAM role Firehose-style
+        trusted by s3.amazonaws.com. Existing objects are not replicated unless batch
+        replication is run separately.
+      terraform: |
+        resource "aws_s3_bucket_replication_configuration" "example" {
+          bucket = aws_s3_bucket.source.id
+          role   = aws_iam_role.replication.arn
+
+          rule {
+            id     = "all-objects"
+            status = "Enabled"
+
+            destination {
+              bucket        = aws_s3_bucket.replica.arn
+              storage_class = "STANDARD_IA"
+
+              encryption_configuration {
+                replica_kms_key_id = aws_kms_key.replica.arn
+              }
+            }
+
+            delete_marker_replication { status = "Enabled" }
+          }
+        }
+      cli: |
+        aws s3api put-bucket-replication --bucket <source-bucket> --replication-configuration file://replication.json
+
+  CKV2_AWS_38:
+    aws_route53_zone:
+      note: >-
+        DNSSEC signing needs an asymmetric ECC_NIST_P256 KMS key in us-east-1, and the
+        DS record must be published at the registrar. Enabling signing without the DS
+        record is harmless; publishing a DS record without working signing takes the
+        domain offline.
+      terraform: |
+        resource "aws_kms_key" "dnssec" {
+          customer_master_key_spec = "ECC_NIST_P256"
+          key_usage                = "SIGN_VERIFY"
+          deletion_window_in_days  = 7
+        }
+
+        resource "aws_route53_key_signing_key" "example" {
+          hosted_zone_id             = aws_route53_zone.example.id
+          key_management_service_arn = aws_kms_key.dnssec.arn
+          name                       = "example-ksk"
+        }
+
+        resource "aws_route53_hosted_zone_dnssec" "example" {
+          depends_on     = [aws_route53_key_signing_key.example]
+          hosted_zone_id = aws_route53_key_signing_key.example.hosted_zone_id
+        }
+      cli: |
+        aws route53 enable-hosted-zone-dnssec --hosted-zone-id <zone-id>
+
+  CKV2_AWS_3:
+    aws_guardduty_detector:
+      note: GuardDuty is per-region; enable it in every region in use, not only the primary.
+      terraform: |
+        resource "aws_guardduty_detector" "example" {
+          enable                       = true
+          finding_publishing_frequency = "FIFTEEN_MINUTES"
+
+          datasources {
+            s3_logs { enable = true }
+            kubernetes { audit_logs { enable = true } }
+            malware_protection {
+              scan_ec2_instance_with_findings { ebs_volumes { enable = true } }
+            }
+          }
+        }
+      cli: |
+        aws guardduty create-detector --enable --finding-publishing-frequency FIFTEEN_MINUTES
+
+  CKV_AWS_238:
+    aws_guardduty_detector:
+      terraform: |
+        resource "aws_guardduty_detector" "example" {
+          enable = true
+        }
+      cli: |
+        aws guardduty update-detector --detector-id <detector-id> --enable
+
+  CKV_AWS_274:
+    aws_iam_role_policy_attachment:
+      note: >-
+        Replace the attachment rather than deleting it -- generate the least-privilege
+        policy from the role's Access Advisor / CloudTrail history first, or the role
+        breaks the moment the attachment goes.
+      terraform: |
+        data "aws_iam_policy_document" "scoped" {
+          statement {
+            effect    = "Allow"
+            actions   = ["s3:GetObject", "s3:PutObject"]
+            resources = ["${aws_s3_bucket.app.arn}/*"]
+          }
+        }
+
+        resource "aws_iam_policy" "scoped" {
+          name   = "app-scoped"
+          policy = data.aws_iam_policy_document.scoped.json
+        }
+
+        resource "aws_iam_role_policy_attachment" "example" {
+          role       = aws_iam_role.app.name
+          policy_arn = aws_iam_policy.scoped.arn
+        }
+      cli: |
+        aws iam detach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+  CKV2_AWS_56:
+    aws_iam_role_policy_attachment:
+      note: If the role genuinely administers IAM, scope it with a permissions boundary and deny iam:CreatePolicyVersion on the boundary itself.
+      terraform: |
+        resource "aws_iam_role_policy_attachment" "example" {
+          role       = aws_iam_role.app.name
+          policy_arn = aws_iam_policy.scoped_iam_readonly.arn
+        }
+      cli: |
+        aws iam detach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+  CKV_AWS_294:
+    aws_cloudtrail_event_data_store:
+      note: The KMS key policy must allow cloudtrail.amazonaws.com to GenerateDataKey and Decrypt, or the store stops ingesting.
+      terraform: |
+        resource "aws_cloudtrail_event_data_store" "example" {
+          name                           = "audit"
+          retention_period               = 2557
+          multi_region_enabled           = true
+          termination_protection_enabled = true
+          kms_key_id                     = aws_kms_key.cloudtrail.arn
+        }
+      cli: |
+        aws cloudtrail update-event-data-store --event-data-store <eds-arn> --kms-key-id <key-arn>
+
+  CKV_AWS_219:
+    aws_codepipeline:
+      note: The key policy must allow the CodePipeline service role and every CodeBuild/CodeDeploy role that reads artifacts.
+      terraform: |
+        resource "aws_codepipeline" "example" {
+          name     = "app"
+          role_arn = aws_iam_role.codepipeline.arn
+
+          artifact_store {
+            location = aws_s3_bucket.artifacts.bucket
+            type     = "S3"
+
+            encryption_key {
+              id   = aws_kms_key.pipeline.arn
+              type = "KMS"
+            }
+          }
+
+          stage {
+            name = "Source"
+            action {
+              name             = "Source"
+              category         = "Source"
+              owner            = "AWS"
+              provider         = "CodeStarSourceConnection"
+              version          = "1"
+              output_artifacts = ["source"]
+              configuration = {
+                ConnectionArn    = var.connection_arn
+                FullRepositoryId = var.repository
+                BranchName       = "main"
+              }
+            }
+          }
+        }
+      cli: |
+        aws codepipeline update-pipeline --cli-input-json file://pipeline.json   # there is no partial update; get-pipeline, edit artifactStore.encryptionKey, put back
+
+# ---------------------------------------------------------------------------
+skipped:
+
+  # -- parent needs a parent, or a third level ------------------------------
+  CKV_AWS_59: >-
+    aws_api_gateway_method authorization. Reaching a method is GetRestApis ->
+    GetResources(restApiId) -> GetMethod(restApiId, resourceId, httpMethod): three
+    levels, and the third call takes two arguments. GetResources can inline
+    resourceMethods but only when `embed=["methods"]` is passed, which is a
+    constant argument the schema has no slot for.
+  CKV2_AWS_53: Same three-level aws_api_gateway_method path as CKV_AWS_59.
+  CKV2_AWS_70: Same three-level aws_api_gateway_method path as CKV_AWS_59.
+  CKV_AWS_332: >-
+    ECS service platform version needs ListClusters -> ListServices(cluster) ->
+    DescribeServices(cluster, services): three levels, and the third takes two
+    arguments.
+  CKV_AWS_265: >-
+    Keyspaces table encryption needs ListKeyspaces -> ListTables(keyspaceName) ->
+    GetTable(keyspaceName, tableName): three levels, and encryptionSpecification
+    is only on the third.
+  CKV2_AWS_29: >-
+    API Gateway protected by WAF. GetStages does return webAclArn, so the data is
+    reachable, but the graph check exempts PRIVATE endpoint types and WAF cannot
+    be attached to a private REST API at all. Asserting web_acl_arn is set would
+    fail every private API. Scoping it needs the parent RestApi's
+    endpointConfiguration.types alongside the child's webAclArn, which is a
+    parent-field-in-the-child-row capability the schema does not have.
+
+  # -- the child returns a policy document or another JSON blob -------------
+  CKV_AWS_301: >-
+    lambda.GetPolicy(FunctionName) returns `Policy`, a JSON string. The two-step
+    shape is right (ListFunctions -> GetPolicy) but every assertion here is
+    "does any statement have Principal *", which is policy-document parsing, not
+    field extraction. Needs a policy-document reader, not this one.
+  CKV_AWS_364: Same lambda.GetPolicy JSON-string problem as CKV_AWS_301.
+  CKV_AWS_32: >-
+    ecr.GetRepositoryPolicy(repositoryName) returns `policyText`, a JSON string.
+    Parent DescribeRepositories is fine; the assertion is policy parsing.
+  CKV_AWS_33: kms.GetKeyPolicy(KeyId) returns `Policy`, a JSON string.
+  CKV_AWS_169: sns.GetTopicAttributes returns the policy as the Attributes["Policy"] JSON string.
+  CKV_AWS_385: Same sns.GetTopicAttributes policy-string problem as CKV_AWS_169.
+  CKV_AWS_168: sqs.GetQueueAttributes returns the policy as Attributes["Policy"], a JSON string.
+  CKV_AWS_171: >-
+    emr.DescribeSecurityConfiguration(Name) returns `SecurityConfiguration` as a
+    JSON STRING, not a structure. Matching EnableAtRestEncryption inside it with a
+    regex would be a brittle control that looks precise.
+  CKV_AWS_350: Same emr.DescribeSecurityConfiguration JSON-string problem as CKV_AWS_171.
+  CKV_AWS_257: >-
+    codecommit.GetApprovalRuleTemplate returns approvalRuleTemplateContent as a
+    JSON string; the "at least 2 approvals" number lives inside it.
+
+  # -- the assertion needs to cross a list of structures --------------------
+  CKV_AWS_334: >-
+    ECS container privileged. The field is
+    taskDefinition.containerDefinitions[].privileged -- one value per container.
+    dig_path walks hashes only, so there is no path expression for "no element of
+    this list has privileged true". (Also worth recording: Checkov reads
+    `privilege`, which is not a member of ContainerDefinition at all; the API
+    member is `privileged`.)
+  CKV_AWS_336: >-
+    ECS readonlyRootFilesystem, same containerDefinitions[] fan-out as CKV_AWS_334.
+  CKV_AWS_97: >-
+    ECS EFS transit encryption lives at
+    taskDefinition.volumes[].efsVolumeConfiguration.transitEncryption -- same
+    list fan-out.
+  CKV_AWS_37: >-
+    EKS control-plane logging is cluster.logging.clusterLogging[], a list of
+    {types:[...], enabled:bool}. "All five log types enabled" is a fan-out over a
+    list of structures whose own member is a list.
+  CKV_AWS_38: >-
+    EKS public access CIDRs. cluster.resourcesVpcConfig.publicAccessCidrs is a
+    list of strings and the assertion is "does not contain 0.0.0.0/0". `excludes`
+    would express that -- but it is only meaningful when endpointPublicAccess is
+    true, and scoping on a second field is not expressible (see
+    notes.schema_gaps.conditional_scope).
+  CKV_AWS_249: >-
+    ECS task role vs execution role. Both are plain members of TaskDefinition, but
+    the assertion compares two fields to each other, and every `satisfies` in
+    render_controls.py compares one field to a literal.
+  CKV_AWS_57: >-
+    S3 bucket ACL. GetBucketAcl returns Grants[], and the check is "no grant whose
+    Grantee.URI is the AllUsers or AuthenticatedUsers group" -- a fan-out over a
+    list of nested structures.
+  CKV_AWS_145: >-
+    S3 SSE-KMS. GetBucketEncryption returns
+    ServerSideEncryptionConfiguration.Rules[], and SSEAlgorithm sits inside
+    rules[0].ApplyServerSideEncryptionByDefault. dig_path has no array index.
+  CKV_AWS_300: >-
+    S3 abort-incomplete-multipart-upload. GetBucketLifecycleConfiguration returns
+    Rules[]; the assertion is a property of some rule, not of the list.
+  CKV2_AWS_20: >-
+    ALB HTTP-to-HTTPS redirect. The evidence is
+    listener.defaultActions[].redirectConfig.protocol -- a list of action
+    structures. `default_actions` as a whole is not the assertion.
+  CKV2_AWS_71: >-
+    ACM wildcard domains. DescribeCertificate gives subjectAlternativeNames, but
+    the test is a SUBSTRING match for "*" inside each element. `excludes` tests
+    for the exact element "*", which is not the same thing.
+
+  # -- the child response is keyed by a map, not a list ---------------------
+  CKV_AWS_84: >-
+    Elasticsearch domain logging. The evidence is
+    DomainStatus.LogPublishingOptions, a MAP keyed by log type (INDEX_SLOW_LOGS,
+    SEARCH_SLOW_LOGS, ES_APPLICATION_LOGS, AUDIT_LOGS) whose values are
+    {CloudWatchLogsLogGroupArn, Enabled}. A dotted path cannot select a map entry.
+  CKV_AWS_317: Same LogPublishingOptions map, specifically the AUDIT_LOGS entry.
+  CKV_AWS_65: >-
+    ECS container insights. DescribeClusters returns `settings` as a LIST of
+    {name, value} pairs, so the value is selected by matching name ==
+    "containerInsights" -- a keyed lookup, not a path.
+  CKV_AWS_312: >-
+    Elastic Beanstalk enhanced health. Two problems: the value lives in
+    OptionSettings[], a list of {Namespace, OptionName, Value} needing a keyed
+    lookup; and DescribeConfigurationSettings requires ApplicationName plus
+    EITHER TemplateName or EnvironmentName -- botocore marks only ApplicationName
+    required, but the API rejects a call with neither of the other two, so the
+    parent/child pair does not actually work.
+  CKV_AWS_340: Same Elastic Beanstalk OptionSettings + two-argument-child problem as CKV_AWS_312.
+  CKV_AWS_105: >-
+    Redshift require_ssl. The pair is DescribeClusterParameterGroups ->
+    DescribeClusterParameters(ParameterGroupName), which fits the shape exactly --
+    but each row is one parameter, and the control must assert on the row where
+    parameterName == "require_ssl" and ignore the other ~50. There is no row
+    selector in the mapping schema. See notes.schema_gaps.row_selector.
+  CKV2_AWS_27: Same parameter-row-selector problem, on rds.DescribeDBClusterParameters.
+  CKV2_AWS_30: Same parameter-row-selector problem, on rds.DescribeDBParameters.
+  CKV2_AWS_69: Same parameter-row-selector problem, on rds.DescribeDBParameters.
+
+  # -- the child response has no collection at all --------------------------
+  CKV_AWS_115: >-
+    Lambda reserved concurrency. lambda.GetFunctionConcurrency(FunctionName)
+    returns a single scalar member, ReservedConcurrentExecutions, with no
+    structure and no list to point `collection` at. ListFunctions does not carry
+    it, so there is no single-call alternative either.
+
+  # -- the control would be structurally unfailable --------------------------
+  CKV2_AWS_64: >-
+    "KMS key policy is defined". ListKeys -> GetKeyPolicy(KeyId) works, but AWS
+    requires every CMK to have a key policy, so `policy` is never empty and the
+    control would pass for every key in every account while assessing nothing.
+    That is the silence-as-success shape, not coverage.
+  CKV_AWS_147: >-
+    "CodeBuild project encrypted using CMK". BatchGetProjects always returns
+    encryptionKey -- it defaults to the account's alias/aws/s3 key -- so
+    not_empty always passes. The real assertion is "not the AWS-managed default",
+    which is an account- and partition-specific ARN with no portable literal.
+  CKV_AWS_224: >-
+    "ECS Exec logging encrypted with CMK". kmsKeyId is absent on every cluster
+    that does not use ECS Exec, and nil is the failing state for a presence
+    check, so every ordinary cluster would fail. It is only meaningful where
+    CKV_AWS_223 already applies -- conditional scope again.
+
+  # -- constant child argument the schema cannot carry ----------------------
+  CKV_AWS_27: >-
+    SQS encryption. ListQueues -> GetQueueAttributes(QueueUrl) is the right pair,
+    and Attributes is a string-keyed hash the reader's dig_path could walk, but
+    GetQueueAttributes returns NOTHING unless AttributeNames is passed. The
+    schema has no slot for that constant. Same blocker for CKV2_AWS_73.
+  CKV_AWS_112: >-
+    "SSM document is not public". ListDocuments -> DescribeDocumentPermission
+    requires PermissionType="Share" as well as Name -- a constant second
+    argument. Same for CKV_AWS_113 and CKV_AWS_303.
+
+  # -- gem not in the image -------------------------------------------------
+  CKV_AWS_22: aws-sdk-sagemaker is not in the image's gem list. Same for CKV_AWS_98, 122, 187, 306, 307, 367, 368, 369, 370, 371, 372.
+  CKV_AWS_193: aws-sdk-appsync is not in the image's gem list. Same for CKV_AWS_194, 214, 215.
+  CKV_AWS_242: aws-sdk-mwaa is not in the image's gem list. Same for CKV_AWS_243 and CKV_AWS_244.
+  CKV_AWS_253: aws-sdk-dlm is not in the image's gem list. Same for CKV_AWS_254, 255, 256.
+  CKV_AWS_90: aws-sdk-docdb is not in the declared gem list, so docdb parameter groups are out of reach. Same for CKV_AWS_104.
+  CKV_AWS_170: aws-sdk-qldb is not in the image's gem list. Same for CKV_AWS_172.
+  CKV_AWS_262: aws-sdk-kendra is not in the image's gem list.
+  CKV_AWS_263: aws-sdk-appflow is not in the image's gem list. Same for CKV_AWS_264.
+  CKV_AWS_267: aws-sdk-comprehend is not in the image's gem list. Same for CKV_AWS_268.
+  CKV_AWS_269: aws-sdk-connect is not in the image's gem list. Same for CKV_AWS_270.
+
+  # -- reachable in one call, so it does not belong in this tranche ---------
+  CKV_AWS_23: >-
+    ec2.DescribeSecurityGroupRules takes no required arguments and returns every
+    rule in the region with Description, CidrIpv4, FromPort and ToPort. This and
+    CKV_AWS_24/25/260/277/382 are single-call work for tools/api_specs.yml, not
+    parent/child work.
+  CKV_AWS_229: >-
+    ec2.DescribeNetworkAcls takes no required arguments and embeds Entries.
+    Single-call, like CKV_AWS_230/231/232/352.
+  CKV_AWS_261: >-
+    elbv2.DescribeTargetGroups takes no required arguments. Single-call, like
+    CKV_AWS_378.
+  CKV_AWS_210: batch.DescribeJobDefinitions takes no required arguments. Single-call.
+  CKV_AWS_329: efs.DescribeAccessPoints takes no required arguments. Single-call, like CKV_AWS_330.
+  CKV_AWS_94: glue.GetDataCatalogEncryptionSettings takes no required arguments. Single-call.
+  CKV_AWS_99: glue.GetSecurityConfigurations takes no required arguments. Single-call.
+  CKV_AWS_9_note: >-
+    NOT SKIPPED, RESOLVED ELSEWHERE. iam.GetAccountPasswordPolicy takes no
+    arguments and returns one structure -- an account singleton, neither
+    single-call-list nor parent/child. A concurrent branch in this working tree
+    (commit fa0ba45, "eight comparison verbs and a singleton reader") added a
+    `singleton` reader and mapped CKV_AWS_9/10/11/12/13/14/15 with it while this
+    file was being drafted. Recorded here only so a reviewer does not re-open it
+    as a parent/child candidate.
+  CKV_AWS_62: >-
+    iam.GetAccountAuthorizationDetails takes no required arguments and returns
+    every policy document in the account in one paginated call. That is the right
+    tool for the whole IAM policy-document tranche
+    (CKV_AWS_62/63/286/287/288/289/290/355, CKV2_AWS_40) and it is single-call
+    plus a policy parser, not parent/child.
+
+  # -- other -----------------------------------------------------------------
+  CKV_AWS_208: >-
+    MQ broker version currency. mq.ListBrokers -> mq.DescribeBroker(BrokerId)
+    works and DescribeBroker carries EngineVersion, but the assertion is a
+    per-engine table of currently-supported versions that AWS moves every few
+    months, and the comparison is semver, not membership. A stale in_list here
+    fails brokers that are in fact current.
+  CKV_AWS_175: >-
+    wafv2.ListWebACLs requires `Scope` (REGIONAL|CLOUDFRONT) -- not a parent id
+    but a constant -- and GetWebACL then needs Name, Scope AND Id together. Three
+    arguments on the child. Same for CKV_AWS_192 and CKV_AWS_342.
+  CKV_AWS_392: >-
+    s3control.ListAccessPoints requires AccountId. It is not a parent resource
+    id, it is the caller's own account, which the reader already knows -- but the
+    schema has no way to say "pass the account id here".
+
+# ---------------------------------------------------------------------------
+notes:
+
+  sentinels:
+    summary: >-
+      Three sentinel values appear in the specs above because the two-step shape
+      needs to say things the one-step schema never had to. They are proposals,
+      not existing conventions. A reader that treats them as literal field names
+      will silently produce rows of nils.
+    _self: >-
+      `parent.id: _self`. The parent's collection is a list of SCALARS, not
+      structures, so the item itself is the argument. Used by
+      ecs.ListTaskDefinitions (taskDefinitionArns), ecs.ListClusters
+      (clusterArns), eks.ListClusters (clusters), guardduty.ListDetectors
+      (detectorIds), codebuild.ListProjects (projects), and
+      firehose.ListDeliveryStreams (deliveryStreamNames). Six of twenty-two specs
+      -- common enough that it is not an edge case.
+    _parent: >-
+      `id: _parent`. The child item carries no identifier of its own, so the row's
+      id is the parent id that produced it. Used by s3 GetPublicAccessBlock and
+      GetBucketReplication (the response describes a bucket but never names it),
+      route53 GetDNSSEC, and guardduty GetDetector.
+    _response: >-
+      `collection: _response`. The child response has NO wrapper member -- the
+      fields are top-level members of the response itself. Used by
+      guardduty.GetDetector and cloudtrail.GetEventDataStore. Distinct from the
+      structure case below, where there is a wrapper.
+
+  reader_requirements:
+    collection_may_be_a_structure: >-
+      Today libraries/aws_api_assets.rb does `Array(page.public_send(collection))`
+      and iterates. Eleven of the twenty-two specs point `collection` at a single
+      STRUCTURE rather than a list: transfer `server`, eks `cluster`, es
+      `domain_status`, ecs `task_definition`, acm `certificate`, athena
+      `work_group`, firehose `delivery_stream_description`, codepipeline
+      `pipeline`, s3 `public_access_block_configuration` and
+      `replication_configuration`, route53 `status`. `Array()` on an Aws::Structure
+      does NOT return [struct] -- Aws structs are Struct subclasses and respond to
+      to_a, so Array() flattens them into their member VALUES. The reader must
+      branch on the response member's type, and it must do so explicitly rather
+      than relying on Array().
+    absent_is_not_unreadable: >-
+      Several child calls raise rather than returning an empty answer when the
+      thing is not configured, and in most of those cases "not configured" IS the
+      finding. These must produce a row with nil fields, not an entry in
+      unreadable_regions -- otherwise the failing population renders as Not
+      Applicable, which is this repo's documented silence-as-success failure mode.
+      The concrete error classes: s3 NoSuchPublicAccessBlockConfiguration
+      (CKV_AWS_53/54/55/56 -- the whole point of those four controls),
+      s3 ReplicationConfigurationNotFoundError (CKV_AWS_144), route53
+      DNSSECNotFound / InvalidArgument on a private zone (CKV2_AWS_38, out of
+      scope rather than failing), lambda ResourceNotFoundException from
+      ListFunctionUrlConfigs, transfer/eks/athena ResourceNotFoundException from a
+      parent deleted between the two calls. Everything else -- AccessDenied,
+      throttling, networking -- stays an unreadable region.
+    parent_child_race: >-
+      A parent can be deleted between the list and the describe. That is a
+      not-found on the child and must be dropped from the row set, not recorded
+      as unreadable: it is neither a finding nor a permission problem.
+    pagination_on_both_calls: >-
+      Both legs paginate. The parent legs that matter: ecs.ListTaskDefinitions
+      (100/page), lambda.ListFunctions (50/page), s3.ListBuckets (1000/page since
+      the 2024 pagination change -- the old unpaginated behaviour is gone),
+      iam.ListRoles (100/page). The child legs that paginate:
+      elbv2.DescribeListeners, iam.ListAttachedRolePolicies,
+      lambda.ListFunctionUrlConfigs, redshift/rds DescribeParameters. The aws-sdk
+      response is enumerable when the operation has a paginator, and the existing
+      reader already relies on that; the child call must do the same rather than
+      reading page one and stopping.
+    parent_id_forms: >-
+      route53's HostedZone.Id comes back as "/hostedzone/Z0123..." and GetDNSSEC
+      accepts that form, so no stripping is needed -- but the ROW id will contain
+      the prefix, which matters for exemption matching. ecs.ListClusters and
+      ecs.ListTaskDefinitions return full ARNs; DescribeClusters and
+      DescribeTaskDefinition accept ARNs. lambda.ListFunctions returns bare
+      function names, which ListFunctionUrlConfigs accepts.
+
+  schema_gaps:
+    constant_args: >-
+      The schema has `arg` for the parent id and nothing else. Three specs need a
+      constant alongside it: ecs.DescribeClusters needs
+      include: ['CONFIGURATIONS','SETTINGS'] or configuration and settings are
+      simply absent from the response (this silently voids CKV_AWS_223);
+      sqs.GetQueueAttributes needs AttributeNames: ['All'] or the Attributes map
+      comes back empty; ssm.DescribeDocumentPermission needs
+      PermissionType: 'Share'. A `args:` map of literal extra parameters would
+      cover all three and would have unblocked CKV_AWS_27, CKV2_AWS_73,
+      CKV_AWS_112, CKV_AWS_113 and CKV_AWS_303 as well.
+    batch_args: >-
+      Two children take a LIST where the schema implies a scalar:
+      ecs.DescribeClusters(clusters:) and codebuild.BatchGetProjects(names:).
+      Both accept up to 100 ids per call, which turns N calls into N/100. The
+      reader needs to know that `arg` is batchable for these two, and how large a
+      batch the operation allows. Expressing it as `batch: 100` on the spec would
+      be enough. Without it these still work one id at a time, just 100x more
+      expensively.
+    row_selector: >-
+      Parameter-group checks are the cleanest possible fit for the parent/child
+      shape and are still unmappable, because each child row is one parameter and
+      the control must assert only on the row whose parameterName matches. A
+      `where: {parameter_name: require_ssl}` on the MAPPING would unlock
+      CKV_AWS_105, CKV2_AWS_27, CKV2_AWS_30 and CKV2_AWS_69 with no reader change
+      beyond a filter. The same mechanism would handle
+      ecs settings[name=containerInsights] (CKV_AWS_65) and beanstalk
+      OptionSettings (CKV_AWS_312, CKV_AWS_340).
+    conditional_scope: >-
+      Several checks are only meaningful when a SECOND field has a particular
+      value: CKV_AWS_240/241 do not apply to a KinesisStreamAsSource firehose;
+      CKV_AWS_224 only applies where ECS Exec logging is on; CKV_AWS_38 only
+      applies where the EKS public endpoint is enabled; CKV2_AWS_29 only applies
+      to non-PRIVATE API endpoints. Today the only scoping mechanism is the nil
+      filter, which happens to do the right thing surprisingly often (see
+      CKV_AWS_103, CKV_AWS_223, CKV_AWS_318, CKV_AWS_234) but cannot express
+      "skip this row when field X equals Y". CKV_AWS_240 is mapped above WITH a
+      known false positive precisely so the gap is visible rather than quietly
+      dropped.
+    list_fan_out: >-
+      dig_path walks hashes only. Nine checks are blocked purely on "assert
+      something about every element of a list of structures": CKV_AWS_334, 336,
+      97, 37, 57, 145, 300, CKV2_AWS_20, CKV2_AWS_71. A `[]` segment in the field
+      path -- container_definitions[].readonly_root_filesystem yielding an array
+      of values -- plus an `all_equal` / `none_equal` satisfies would clear all
+      nine. It is the single highest-yield extension in this file and it is
+      deliberately NOT used above, because half-implementing it would ship
+      controls that look finished.
+    map_keyed: >-
+      Distinct from list fan-out: LogPublishingOptions (es), Attributes (sqs/sns),
+      RouteSettings (apigatewayv2) and artifactStores (codepipeline) are MAPS
+      keyed by a meaningful string. dig_path already falls back from symbol to
+      string keys, so `attributes.KmsMasterKeyId` would in fact resolve -- but
+      only for maps whose keys are known constants. Where the key set is open
+      (artifactStores keyed by region) no path works.
+    two_field_comparison: >-
+      Every `satisfies` compares one field to a literal. CKV_AWS_249 (task role
+      must differ from execution role) needs field-to-field, which is one more
+      matcher (`not_equals_field`) and no reader change.
+
+  call_volume:
+    summary: >-
+      Six of these specs multiply cleanly by region count. At 17 commercial
+      regions with an unfiltered region walk, the numbers below are per SCAN, and
+      several of them are large enough to matter for both runtime and API
+      throttling. Every one of them is correct; three of them are also expensive
+      enough to want an input to bound them.
+    worst_ecs_task_definitions: >-
+      THE PROBLEM CASE. ListTaskDefinitions returns every ACTIVE REVISION of every
+      family, not one per family. A team deploying ten services several times a
+      day accumulates thousands of active revisions within months, and the spec as
+      written issues one DescribeTaskDefinition per revision per region. A
+      realistic mid-size account is 2,000-20,000 calls. ECS DescribeTaskDefinition
+      is not a high-limit API. Two mitigations, neither expressible in the schema
+      today: (a) list_task_definition_families -> one ListTaskDefinitions per
+      family with sort=DESC, max_results=1 -> one DescribeTaskDefinition, which is
+      three levels but bounded by family count; (b) an input capping revisions per
+      family. RECOMMENDATION: do not ship the aws_ecs_task_definition spec without
+      one of these, or accept that CKV_AWS_335 costs more than every other control
+      in the profile combined.
+    lambda_function_urls: >-
+      One ListFunctionUrlConfigs per function per region. A few hundred functions
+      x 17 regions is a few thousand calls, and the great majority return an empty
+      list because most functions have no URL. There is no cheaper path --
+      ListFunctions does not indicate whether a URL exists. Bounding the region
+      list is the only real lever.
+    s3_per_bucket_calls: >-
+      TWO specs both walk every bucket: GetPublicAccessBlock and
+      GetBucketReplication. 500 buckets is 1,000 calls. Worse, both are declared
+      scope: global because ListBuckets is global -- but each per-bucket call must
+      be issued against the BUCKET's region or S3 answers with a 301
+      PermanentRedirect. ListBuckets now returns Bucket.BucketRegion (confirmed in
+      the botocore s3 Buckets shape), so the reader can build the right regional
+      client per bucket. It must actually do that; the global-scope reader as it
+      stands builds one client and would 301 on most buckets. If further S3
+      sub-resource specs are added later (ACL, encryption, lifecycle, policy) they
+      should share ONE bucket walk rather than each re-listing.
+    iam_roles: >-
+      One ListAttachedRolePolicies per role, IAM being global so no region
+      multiplier. A mature account has 200-800 roles once service-linked roles are
+      counted, so 200-800 calls. IAM's rate limit is low; this is the one spec
+      most likely to see throttling, and the reader needs retry-with-backoff
+      rather than treating a throttle as an unreadable region.
+    cheap_ones: >-
+      codebuild.BatchGetProjects takes 100 names per call -- ceil(projects/100)
+      per region. ecs.DescribeClusters takes 100 cluster arns per call. Both are
+      effectively free. apigateway/apigatewayv2 stages, eks clusters, es domains,
+      transfer servers, athena workgroups, firehose streams, guardduty detectors,
+      cloudtrail event data stores, codepipeline pipelines and elbv2 listeners are
+      all one call per parent with parent counts that are small by nature
+      (typically single or low double digits per region).
+
+  divergences:
+    summary: Where the API member name or shape is not what the Terraform argument name suggests. All confirmed against botocore.
+    items:
+      - "ECS pidMode: Checkov reads it from container_definitions; the botocore TaskDefinition shape puts pidMode at task level, alongside family and networkMode. It is not a ContainerDefinition member at all, so Checkov's CKV_AWS_335 cannot fire. The deployed control can."
+      - "ECS privileged: Checkov's CKV_AWS_334 reads a key called `privilege`. The ContainerDefinition member is `privileged`. Another check that cannot fire as written."
+      - "API Gateway GetStages returns its collection in the SINGULAR member `item`, while GetRestApis uses `items`. Getting this backwards yields an empty row set and a green control."
+      - "Lambda function URL: Terraform's argument is authorization_type; the API member is AuthType."
+      - "Elasticsearch: Terraform's encrypt_at_rest maps to EncryptionAtRestOptions; cluster_config maps to ElasticsearchClusterConfig (note the Elasticsearch prefix even for OpenSearch-engine domains)."
+      - "CodeBuild: Terraform's logs_config { s3_logs { encryption_disabled } } maps to Project.LogsConfig.S3Logs.EncryptionDisabled; the Ruby SDK snake_cases cloudWatchLogs to cloud_watch_logs, not cloudwatch_logs."
+      - "ACM: CertificateSummary (ListCertificates) has InUse, a boolean; CertificateDetail (DescribeCertificate) has InUseBy, a list of ARNs. Different member, different type, same idea."
+      - "Transfer: ListedServer and DescribedServer share EndpointType and IdentityProviderType, but Protocols and SecurityPolicyName exist only on DescribedServer."
+      - "CloudTrail: the EventDataStore summary from ListEventDataStores omits KmsKeyId entirely; only GetEventDataStore returns it."
+      - "GuardDuty and CloudTrail GetEventDataStore both return FLAT responses with no wrapper member, unlike every other describe in this file."
+      - "elbv2.DescribeListeners marks neither LoadBalancerArn nor ListenerArns as required in botocore, but the API rejects a call with neither. Botocore's `required` list is not a complete statement of what the API demands -- the Elastic Beanstalk case (CKV_AWS_312) is the same trap and there it kills the spec."
+
+  replacements:
+    summary: >-
+      tools/render_controls.py derives the api spec key from the mapping's
+      terraform type, so a spec key must equal a terraform resource type and there
+      can be only one spec per type. Three specs above therefore REPLACE an
+      existing single-call entry in tools/api_specs.yml rather than sitting
+      beside it. Each was checked against every mapping that reads it.
+    aws_transfer_server: >-
+      SAFE. The existing spec declares endpoint_type and identity_provider_type;
+      both are members of DescribedServer as well. The only mapping that reads
+      them is CKV_AWS_164 (endpoint_type, in_list), which is unaffected.
+    aws_athena_workgroup: >-
+      SAFE. The existing spec declares only `state`, which is a WorkGroup member
+      too. No mapping reads the api spec at all -- CKV_AWS_82 uses the stock
+      reader.
+    aws_acm_certificate: >-
+      CHECK BEFORE MERGING. No mapping reads this spec today, so nothing breaks
+      now, but the field `in_use` disappears: CertificateDetail has no boolean
+      InUse, only InUseBy (a list). Anything written against `in_use` in the
+      future would need `in_use_by` with a not_empty instead.
+    duplicated_specs: >-
+      aws_elasticsearch_domain / aws_opensearch_domain and aws_lb_listener /
+      aws_alb_listener are byte-identical pairs, for the same key-equals-type
+      reason. If the renderer ever learns an `alias_of:` key, four specs become
+      two. Until then the duplication is load-bearing, and the two halves of each
+      pair must be edited together.

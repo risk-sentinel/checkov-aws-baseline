@@ -1,0 +1,892 @@
+# batch4 — 61 checks. 11 mapped, 50 skipped.
+#
+# Every property below was confirmed either in the vendored resource source
+# (vendor/8d70ebd.../libraries/*.rb) or against the botocore service model for
+# the operation the resource calls. Ruby SDK member names are the underscored
+# form of the API member (CloudWatchLogsRoleArn -> cloud_watch_logs_role_arn),
+# which is what create_resource_methods defines and what its('...') sends.
+#
+# Two renderer facts drove several skips, both verified in
+# tools/render_controls.py:
+#   * render_stock/render_api take `next(iter(mapping))` — ONE tf type per
+#     check is rendered, so a second type in the mapping is silently dropped.
+#   * matcher_for supports only equals / not_empty / empty / greater_than /
+#     in_list. `equals` with a STRING value renders `should eq immutable`
+#     (bare, lower-cased Ruby identifier) — see controls/CKV_AWS_51.rb:73 and
+#     controls/CKV_AWS_136.rb:77, both currently broken. String comparisons
+#     below therefore use in_list with a one-element list.
+
+mappings:
+
+  # --- CloudTrail (stock: aws_cloudtrail_trails -> aws_cloudtrail_trail) ---
+  #
+  # Plural registers :trail_arns and :names; the singular requires :trail_name,
+  # so ids must be `names`. The singular exposes explicit attr_readers only —
+  # it does NOT call create_resource_methods — so only the readers and the
+  # predicate methods below exist. sns_topic_name is NOT among them (see the
+  # CKV_AWS_252 skip).
+
+  CKV_AWS_251:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: names}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: "logging?"
+        satisfies: equals
+        value: true
+      note: >-
+        `logging?` calls GetTrailStatus, which DescribeTrails does not return.
+        Stronger than the IaC check: enable_logging in HCL is the requested
+        state, is_logging is whether the trail is delivering right now.
+
+  CKV_AWS_35:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: names}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: "encrypted?"
+        satisfies: equals
+        value: true
+      note: >-
+        `encrypted?` is `!@kms_key_id.nil?` on the resource. Asserting
+        kms_key_id with not_empty would raise NoMethodError on nil, because
+        this resource sets it through an attr_reader rather than through
+        create_resource_methods (whose NullResponse answers empty?).
+
+  CKV_AWS_36:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: names}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: "log_file_validation_enabled"
+        satisfies: equals
+        value: true
+
+  CKV_AWS_67:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: names}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: "is_multi_region_trail"
+        satisfies: equals
+        value: true
+
+  # --- Default VPC (stock: aws_vpcs -> aws_vpc) ---
+
+  CKV_AWS_148:
+    aws_default_vpc:
+      reader: stock
+      enumerate: {resource: aws_vpcs, ids: vpc_ids}
+      assert:
+        resource: aws_vpc
+        arg: vpc_id
+        property: "is_default"
+        satisfies: equals
+        value: false
+      note: >-
+        Checkov fails any `aws_default_vpc` block in HCL. The deployed
+        equivalent is stronger and different: AWS creates a default VPC in
+        every region of a new account whether or not Terraform ever mentions
+        one, so this asserts that no VPC in scope is the default VPC. aws_vpc
+        deletes the two association sets and passes the rest of DescribeVpcs
+        through create_resource_methods, so :is_default is a real method.
+
+  # --- Network Firewall (stock) ---
+  #
+  # InSpec's resource names carry an underscore the Terraform type does not:
+  # tf aws_networkfirewall_firewall -> inspec aws_network_firewall_firewall.
+  # Both singulars call create_resource_methods on the WHOLE DescribeX
+  # response, so the top-level method is the response wrapper and the fields
+  # are one or two levels down — hence the dotted properties. rspec-its
+  # (1.3.1, bundled in the image) splits a dotted attribute and chains #send,
+  # so the dotted form is evaluated, not treated as one method name.
+
+  CKV_AWS_344:
+    aws_networkfirewall_firewall:
+      reader: stock
+      enumerate: {resource: aws_network_firewall_firewalls, ids: firewall_names}
+      assert:
+        resource: aws_network_firewall_firewall
+        arg: firewall_name
+        property: "firewall.delete_protection"
+        satisfies: equals
+        value: true
+      note: >-
+        DescribeFirewall returns Firewall.DeleteProtection; the TF argument is
+        the top-level `delete_protection`. Always populated (defaults false),
+        so a false here is a real finding rather than an unexpressed setting.
+
+  CKV_AWS_345:
+    aws_networkfirewall_firewall:
+      reader: stock
+      enumerate: {resource: aws_network_firewall_firewalls, ids: firewall_names}
+      assert:
+        resource: aws_network_firewall_firewall
+        arg: firewall_name
+        property: "firewall.encryption_configuration.key_id"
+        satisfies: not_empty
+      note: >-
+        A firewall on the AWS-owned key returns EncryptionConfiguration with
+        Type=AWS_OWNED_KMS_KEY and no KeyId, so the missing key is the finding.
+        A missing level answers with NullResponse, whose empty? is true, so the
+        assertion fails rather than erroring. The check also names
+        aws_networkfirewall_rule_group; render_stock renders only the first
+        mapped type, so the rule-group half is NOT covered here — it needs its
+        own check id or a renderer that iterates types.
+
+  CKV_AWS_346:
+    aws_networkfirewall_firewall_policy:
+      reader: stock
+      enumerate: {resource: aws_network_firewall_firewall_policies, ids: names}
+      assert:
+        resource: aws_network_firewall_firewall_policy
+        arg: firewall_policy_name
+        property: "firewall_policy_response.encryption_configuration.key_id"
+        satisfies: not_empty
+      note: >-
+        DescribeFirewallPolicy splits the response: the policy RULES are under
+        FirewallPolicy, but EncryptionConfiguration is under
+        FirewallPolicyResponse. Reading it from `firewall_policy` returns
+        NullResponse for every policy and would fail all of them.
+
+  # --- types inspec-aws does not ship (api_specs below) ---
+
+  CKV_AWS_140:
+    aws_rds_global_cluster:
+      reader: api
+      field: storage_encrypted
+      satisfies: equals
+      value: true
+
+  CKV_AWS_239:
+    aws_dax_cluster:
+      reader: api
+      field: cluster_endpoint_encryption_type
+      satisfies: in_list
+      value: ['TLS']
+      note: >-
+        in_list with one element rather than `equals: TLS` on purpose:
+        matcher_for renders equals as `should eq {value.lower()}`, which for a
+        string emits a bare Ruby identifier. in_list quotes it.
+
+  CKV_AWS_47:
+    aws_dax_cluster:
+      reader: api
+      field: sse_status
+      satisfies: in_list
+      value: ['ENABLED']
+
+api_specs:
+
+  aws_rds_global_cluster:
+    gem: aws-sdk-rds
+    client: Aws::RDS::Client
+    list: describe_global_clusters
+    collection: global_clusters
+    id: global_cluster_identifier
+    arn: global_cluster_arn
+    scope: regional
+    fields:
+      storage_encrypted: storage_encrypted
+      engine: engine
+      deletion_protection: deletion_protection
+    # DescribeGlobalClusters takes no required arguments (botocore: required
+    # members []). Deliberately regional, not global: global-cluster calls are
+    # served from the primary region, so a single default-region call can
+    # return an empty list and render Not Applicable for an account that has
+    # them. The region walk repeats a global cluster once per region — noise,
+    # not a wrong answer. aws-sdk-rds is already required by aws_backend.rb.
+
+  aws_dax_cluster:
+    gem: aws-sdk-dax
+    client: Aws::DAX::Client
+    list: describe_clusters
+    collection: clusters
+    id: cluster_name
+    arn: cluster_arn
+    scope: regional
+    fields:
+      cluster_endpoint_encryption_type: cluster_endpoint_encryption_type
+      sse_status: sse_description.status
+      node_type: node_type
+    # DescribeClusters takes no required arguments. SSEDescription is the
+    # Ruby member sse_description (aws-sdk-ruby underscores SSEDescription the
+    # way DynamoDB's sse_specification is underscored), and its Status is
+    # ENABLED or DISABLED. aws-sdk-dax is NOT in aws_backend.rb's require list,
+    # but neither are aws-sdk-memorydb, aws-sdk-athena or aws-sdk-networkfirewall,
+    # which api_specs.yml already depends on — the image is assumed to carry the
+    # full aws-sdk set. Worth confirming once in the image before merge: a
+    # missing gem is rescued into unreadable_regions and renders as no assets.
+
+metadata:
+
+  CKV_AWS_251:
+    severity: high
+    impact: 0.7
+    nist: ['AU-2', 'AU-12']
+    nist_r4: ['AU-2', 'AU-12']
+    cci: ['CCI-000169', 'CCI-000172']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      A trail that exists but is stopped produces no record of what happened
+      while it was stopped, and the gap is invisible in the console until
+      someone goes looking for the events that should be there.
+    stronger: >-
+      Checkov reads enable_logging, the state Terraform asked for. This reads
+      GetTrailStatus, the state the trail is actually in — a trail stopped by
+      hand after the apply reports the same HCL and a different answer.
+
+  CKV_AWS_35:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-9', 'SC-28', 'SC-28 (1)']
+    nist_r4: ['AU-9', 'SC-28', 'SC-28 (1)']
+    cci: ['CCI-000162', 'CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Without SSE-KMS the log objects are readable by anyone who can read the
+      bucket. With a CMK, reading them additionally requires a decrypt grant on
+      the key, so bucket access alone does not disclose the audit record.
+
+  CKV_AWS_36:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-9', 'SI-7']
+    nist_r4: ['AU-9', 'SI-7']
+    cci: ['CCI-000162', 'CCI-002696']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      Log file validation writes a signed digest of each delivered log file.
+      Without it, a log file that was altered or removed after delivery is
+      indistinguishable from one that was never written.
+
+  CKV_AWS_67:
+    severity: high
+    impact: 0.7
+    nist: ['AU-2', 'AU-12']
+    nist_r4: ['AU-2', 'AU-12']
+    cci: ['CCI-000169', 'CCI-000172']
+    ksi: ['KSI-MLA-LOG']
+    rationale: >-
+      A single-region trail records nothing in the other enabled regions, and
+      an unused region is where activity is least likely to be noticed. Only a
+      multi-region trail follows the account into a region nobody watches.
+
+  CKV_AWS_148:
+    what: any aws_default_vpc resource is declared at all
+    severity: medium
+    impact: 0.5
+    nist: ['SC-7', 'CM-7']
+    nist_r4: ['SC-7', 'CM-7']
+    cci: ['CCI-001097', 'CCI-000381']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A default VPC ships with a public subnet in every availability zone, an
+      internet gateway and a security group that allows all traffic between its
+      members. An instance launched without an explicit subnet lands there.
+    stronger: >-
+      Checkov flags the Terraform resource. AWS creates a default VPC in every
+      region of a new account regardless of Terraform, so this asserts against
+      the VPCs that exist rather than against the ones HCL mentions.
+
+  CKV_AWS_344:
+    severity: low
+    impact: 0.3
+    nist: ['CM-3', 'SC-7']
+    nist_r4: ['CM-3', 'SC-7']
+    cci: ['CCI-000318', 'CCI-001097']
+    ksi: ['KSI-CMT-CFG']
+    rationale: >-
+      Delete protection is what stops a single API call from removing the
+      inspection point in front of a subnet. Without it the firewall can be
+      deleted faster than the traffic loss is noticed.
+
+  CKV_AWS_345:
+    severity: low
+    impact: 0.3
+    nist: ['SC-12', 'SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-12', 'SC-28', 'SC-28 (1)']
+    cci: ['CCI-002450', 'CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      The firewall's stored configuration includes the rules and the addresses
+      they name. On the AWS-owned key that material is encrypted but the key is
+      outside the account, so its use cannot be audited or revoked here.
+
+  CKV_AWS_346:
+    severity: low
+    impact: 0.3
+    nist: ['SC-12', 'SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-12', 'SC-28', 'SC-28 (1)']
+    cci: ['CCI-002450', 'CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      A firewall policy is a description of what the boundary permits. Holding
+      it under a customer managed key keeps its use inside the account's own
+      key grants and CloudTrail record.
+
+  CKV_AWS_140:
+    what: storage_encrypted is true on the global cluster
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A global cluster's encryption is fixed at creation and inherited by every
+      secondary it replicates into. An unencrypted global cluster therefore
+      writes plaintext storage in every region it reaches, and the only fix is
+      to build a new one.
+
+  CKV_AWS_239:
+    severity: high
+    impact: 0.7
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    rationale: >-
+      DAX sits in front of DynamoDB and returns the same items. With the
+      cluster endpoint left unencrypted, those items and the requests for them
+      cross the VPC in cleartext.
+
+  CKV_AWS_47:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A DAX cluster holds a copy of the table items it caches, and encryption
+      at rest is off unless it was set at creation. The cached copy is then the
+      unencrypted one even where the source table is encrypted.
+
+fixes:
+
+  CKV_AWS_251:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_cloudtrail" "org" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          enable_logging                = true
+          is_multi_region_trail         = true
+          enable_log_file_validation    = true
+          include_global_service_events = true
+          kms_key_id                    = aws_kms_key.trail.arn
+        }
+      cli: |
+        aws cloudtrail start-logging --name org-trail
+
+  CKV_AWS_35:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_kms_key" "trail" {
+          description         = "CloudTrail log encryption"
+          enable_key_rotation = true
+        }
+
+        resource "aws_cloudtrail" "org" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          kms_key_id                    = aws_kms_key.trail.arn
+          is_multi_region_trail         = true
+          enable_log_file_validation    = true
+          include_global_service_events = true
+        }
+      cli: |
+        aws cloudtrail update-trail --name org-trail --kms-key-id <key-arn>
+      note: >-
+        The key policy must let cloudtrail.amazonaws.com call GenerateDataKey*
+        for this trail's ARN, or delivery stops silently. Log files already
+        delivered stay under whatever protection they were written with.
+
+  CKV_AWS_36:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_cloudtrail" "org" {
+          name                       = "org-trail"
+          s3_bucket_name             = aws_s3_bucket.trail.id
+          enable_log_file_validation = true
+          is_multi_region_trail      = true
+        }
+      cli: |
+        aws cloudtrail update-trail --name org-trail --enable-log-file-validation
+      note: >-
+        Digests begin at the moment validation is turned on. Files delivered
+        before that cannot be validated retroactively.
+
+  CKV_AWS_67:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_cloudtrail" "org" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          is_multi_region_trail         = true
+          include_global_service_events = true
+          enable_log_file_validation    = true
+        }
+      cli: |
+        aws cloudtrail update-trail --name org-trail --is-multi-region-trail --include-global-service-events
+
+  CKV_AWS_148:
+    aws_default_vpc:
+      terraform: |
+        # There is no Terraform that removes a default VPC: `aws_default_vpc`
+        # ADOPTS the existing one, and destroying that resource only drops it
+        # from state. Manage the workload's own VPC instead, and delete the
+        # default out of band.
+        resource "aws_vpc" "app" {
+          cidr_block           = "10.0.0.0/16"
+          enable_dns_hostnames = true
+
+          tags = {
+            Name = "app"
+          }
+        }
+      cli: |
+        aws ec2 delete-vpc --vpc-id <default-vpc-id> --region <region>
+      note: >-
+        Delete the default VPC in every enabled region, not just the one you
+        work in, and detach or delete its internet gateway, subnets and route
+        tables first. Anything already launched into it must be moved before
+        the delete will succeed.
+
+  CKV_AWS_344:
+    aws_networkfirewall_firewall:
+      terraform: |
+        resource "aws_networkfirewall_firewall" "edge" {
+          name                = "edge"
+          firewall_policy_arn = aws_networkfirewall_firewall_policy.edge.arn
+          vpc_id              = aws_vpc.app.id
+          delete_protection   = true
+
+          subnet_mapping {
+            subnet_id = aws_subnet.firewall.id
+          }
+        }
+      cli: |
+        aws network-firewall update-firewall-delete-protection --firewall-name edge --delete-protection
+
+  CKV_AWS_345:
+    aws_networkfirewall_firewall:
+      terraform: |
+        resource "aws_kms_key" "nfw" {
+          description         = "Network Firewall configuration encryption"
+          enable_key_rotation = true
+        }
+
+        resource "aws_networkfirewall_firewall" "edge" {
+          name                = "edge"
+          firewall_policy_arn = aws_networkfirewall_firewall_policy.edge.arn
+          vpc_id              = aws_vpc.app.id
+
+          encryption_configuration {
+            key_id = aws_kms_key.nfw.arn
+            type   = "CUSTOMER_KMS"
+          }
+
+          subnet_mapping {
+            subnet_id = aws_subnet.firewall.id
+          }
+        }
+      cli: |
+        aws network-firewall associate-firewall-policy --firewall-name edge --encryption-configuration KeyId=<key-arn>,Type=CUSTOMER_KMS
+    aws_networkfirewall_rule_group:
+      terraform: |
+        resource "aws_networkfirewall_rule_group" "block" {
+          name     = "block"
+          type     = "STATEFUL"
+          capacity = 100
+
+          encryption_configuration {
+            key_id = aws_kms_key.nfw.arn
+            type   = "CUSTOMER_KMS"
+          }
+
+          rule_group {
+            rules_source {
+              rules_string = "drop tcp any any -> any 23 (msg:\"telnet\"; sid:1;)"
+            }
+          }
+        }
+      cli: |
+        aws network-firewall update-rule-group --rule-group-name block --type STATEFUL --encryption-configuration KeyId=<key-arn>,Type=CUSTOMER_KMS --update-token <token>
+      note: >-
+        This profile assesses the firewall, not the rule group: the renderer
+        emits one resource type per control. The rule-group half needs its own
+        control before it is claimed.
+
+  CKV_AWS_346:
+    aws_networkfirewall_firewall_policy:
+      terraform: |
+        resource "aws_networkfirewall_firewall_policy" "edge" {
+          name = "edge"
+
+          encryption_configuration {
+            key_id = aws_kms_key.nfw.arn
+            type   = "CUSTOMER_KMS"
+          }
+
+          firewall_policy {
+            stateless_default_actions          = ["aws:forward_to_sfe"]
+            stateless_fragment_default_actions = ["aws:forward_to_sfe"]
+
+            stateful_rule_group_reference {
+              resource_arn = aws_networkfirewall_rule_group.block.arn
+            }
+          }
+        }
+      cli: |
+        aws network-firewall update-firewall-policy --firewall-policy-name edge --encryption-configuration KeyId=<key-arn>,Type=CUSTOMER_KMS --update-token <token>
+
+  CKV_AWS_140:
+    aws_rds_global_cluster:
+      terraform: |
+        resource "aws_rds_global_cluster" "app" {
+          global_cluster_identifier = "app-global"
+          engine                    = "aurora-postgresql"
+          engine_version            = "15.17"
+          database_name             = "app"
+          storage_encrypted         = true
+          deletion_protection       = true
+        }
+      note: >-
+        There is no in-place fix and no CLI equivalent. StorageEncrypted is set
+        when the global cluster is created and cannot be modified afterwards:
+        remediation means creating an encrypted global cluster and migrating
+        into it, which is a data move, not a configuration change.
+
+  CKV_AWS_239:
+    aws_dax_cluster:
+      terraform: |
+        resource "aws_dax_cluster" "cache" {
+          cluster_name                     = "cache"
+          iam_role_arn                     = aws_iam_role.dax.arn
+          node_type                        = "dax.r5.large"
+          replication_factor               = 3
+          cluster_endpoint_encryption_type = "TLS"
+
+          server_side_encryption {
+            enabled = true
+          }
+        }
+      note: >-
+        No in-place fix. cluster_endpoint_encryption_type is fixed at creation;
+        the Terraform change replaces the cluster, and clients must move to the
+        cluster's encrypted (dax://) endpoint at the same time.
+
+  CKV_AWS_47:
+    aws_dax_cluster:
+      terraform: |
+        resource "aws_dax_cluster" "cache" {
+          cluster_name       = "cache"
+          iam_role_arn       = aws_iam_role.dax.arn
+          node_type          = "dax.r5.large"
+          replication_factor = 3
+
+          server_side_encryption {
+            enabled = true
+          }
+        }
+      note: >-
+        No in-place fix. Encryption at rest can only be enabled when the
+        cluster is created, so the Terraform change replaces the cluster. The
+        cache repopulates from DynamoDB, so no data is lost in the replacement.
+
+skipped:
+
+  # --- API Gateway: nothing under a REST API can be enumerated account-wide ---
+  # aws_api_gateway_stages requires rest_api_id, aws_api_gateway_stage requires
+  # rest_api_id AND stage_name (the assert schema has one `arg`),
+  # aws_api_gateway_methods requires rest_api_id + resource_id + http_method,
+  # aws_api_gateway_deployments requires rest_api_id. Verified in the vendored
+  # source; tools/lint_resource_map.py rejects a plural with required params.
+  # apigateway has no account-wide GetStages/GetMethods either, so no api spec
+  # can reach them: a spec's list op must take no required arguments.
+
+  CKV_AWS_120: >-
+    aws_api_gateway_stages requires rest_api_id and aws_api_gateway_stage
+    requires rest_api_id plus stage_name, so stages cannot be enumerated for an
+    account and the assert schema has only one `arg`. The apigateway API has no
+    account-wide stage listing, so an api spec cannot reach cache_cluster_enabled
+    either. Needs a two-level reader (get_rest_apis -> get_stages).
+  CKV_AWS_73: >-
+    Same as CKV_AWS_120 — xray_tracing_enabled lives on a stage, and stages are
+    only enumerable per rest_api_id.
+  CKV_AWS_76: >-
+    Same as CKV_AWS_120 for aws_api_gateway_stage. The check also covers
+    aws_apigatewayv2_stage, whose GetStages likewise requires ApiId, so neither
+    half is reachable.
+  CKV_AWS_225: >-
+    aws_api_gateway_method_settings is not a resource in its own right: the
+    settings are the methodSettings map on a stage, reachable only through
+    get_stage(rest_api_id, stage_name). No stock resource and no account-wide
+    list operation.
+  CKV_AWS_276: >-
+    Same as CKV_AWS_225 (data_trace_enabled is a per-stage methodSettings key).
+    It is also a forbidden-value check, and matcher_for has no not_equals.
+  CKV_AWS_308: >-
+    Same as CKV_AWS_225 (cache_data_encrypted is a per-stage methodSettings key).
+  CKV_AWS_59: >-
+    Per-method authorization. aws_api_gateway_methods requires rest_api_id,
+    resource_id and http_method, so methods cannot be enumerated at all. The
+    logic is also a disjunction — authorization != NONE OR api_key_required —
+    which the single-property assert schema cannot express.
+  CKV2_AWS_70: >-
+    Same enumeration wall and same disjunction as CKV_AWS_59.
+  CKV_AWS_217: >-
+    Not an AWS property. lifecycle/create_before_destroy is a Terraform
+    meta-argument; it never reaches the API and the deployed deployment has no
+    field that reflects it. Nothing to assess.
+  CKV_AWS_237: >-
+    Same as CKV_AWS_217 — lifecycle/create_before_destroy on the REST API is a
+    Terraform meta-argument with no deployed counterpart.
+
+  # --- ECS ---
+
+  CKV_AWS_65: >-
+    Container Insights lives in the cluster's settings[], which DescribeClusters
+    returns only when called with include: ['SETTINGS']. The vendored
+    aws_ecs_cluster passes no include and exposes no settings method, and an api
+    spec cannot help: ecs list_clusters returns bare ARN strings, and
+    aws_api_assets calls item.to_h on each element.
+  CKV_AWS_223: >-
+    execute_command_configuration is under the cluster's configuration, which
+    DescribeClusters returns only with include: ['CONFIGURATIONS']. Same wall as
+    CKV_AWS_65, plus it is a forbidden-value check (logging != NONE) and
+    matcher_for has no not_equals.
+  CKV_AWS_224: >-
+    Conjunction across three nested fields — execute_command logging not NONE
+    AND kms_key_id set AND (cloud_watch_encryption_enabled OR
+    s3_bucket_encryption_enabled). Not expressible as one property against one
+    value, and the fields need include: ['CONFIGURATIONS'] besides.
+  CKV_AWS_249: >-
+    Compares two fields of the same resource (execution_role_arn vs
+    task_role_arn). The assert schema compares one property against a constant.
+  CKV_AWS_332: >-
+    aws_ecs_services enumerates only the default cluster unless given one, and
+    aws_ecs_service requires both service and cluster (two args). Worse, the
+    assertion would be wrong even if it ran: a Fargate service that requested
+    LATEST reports the RESOLVED version (e.g. "1.4.0") in DescribeServices, so
+    platform_version == 'LATEST' would fail every conforming service.
+  CKV_AWS_334: >-
+    `privileged` is per container inside containerDefinitions[]. The vendored
+    container_definitions_privilegeds returns an array of booleans, and the
+    schema has no "none of these is true" satisfies.
+  CKV_AWS_335: >-
+    pidMode == 'host' is a forbidden value and matcher_for has no not_equals.
+    aws_ecs_task_definitions is unusable as an enumerator besides — its single
+    registered column, task_definition_arns, holds one ARRAY of ARNs per API
+    page, so the ids list is an array of arrays.
+  CKV_AWS_336: >-
+    readonly_root_filesystem is per container; the resource returns an array
+    and the schema has no all-elements-true satisfies. Same enumeration problem
+    as CKV_AWS_335.
+  CKV_AWS_97: >-
+    transit_encryption is per EFS volume inside volumes[]. Array assertion,
+    plus the same aws_ecs_task_definitions enumeration problem.
+
+  # --- Security groups ---
+
+  CKV_AWS_24: >-
+    The deployed test is aws_security_group#allow_in?(ipv4_range: '0.0.0.0/0',
+    port: 22) — a matcher that takes arguments. The stock template renders
+    its('<property>'), which can only send a bare method name. This needs a
+    dedicated reader (the aws_compute_assets shape) exposing a precomputed
+    column such as open_ingress_ports, not a stock mapping.
+  CKV_AWS_25: >-
+    Same as CKV_AWS_24, port 3389.
+  CKV_AWS_260: >-
+    Same as CKV_AWS_24, port 80.
+  CKV_AWS_277: >-
+    Same as CKV_AWS_24, all ports (-1).
+  CKV_AWS_382: >-
+    Same as CKV_AWS_24 on the egress side (allow_out?), all ports.
+
+  # --- AppSync ---
+
+  CKV_AWS_193: >-
+    BLOCKED ONLY BY THE RENDERER, and the block is being removed in the working
+    tree right now (nil_filter_for in tools/render_controls.py). As rendered
+    today the api control drops assets whose field is nil, and log_config is
+    nil exactly when logging is off — the violation — so every unlogged API
+    renders Not Applicable instead of failing. Once nil_filter_for lands,
+    promote this verbatim:
+      api spec aws_appsync_graphql_api — gem aws-sdk-appsync,
+      client Aws::AppSync::Client, list list_graphql_apis (no required
+      arguments), collection graphql_apis, id name, arn arn, scope regional,
+      fields: cloudwatch_logs_role_arn: log_config.cloud_watch_logs_role_arn,
+      field_log_level: log_config.field_log_level.
+      Mapping: field cloudwatch_logs_role_arn, satisfies not_empty.
+    Note the divergence: the TF argument is log_config[0].cloudwatch_logs_role_arn
+    but the Ruby SDK member is cloud_watch_logs_role_arn.
+  CKV_AWS_194: >-
+    Same api spec as CKV_AWS_193 (field field_log_level, satisfies in_list,
+    value ['ALL','ERROR']). Held back for a narrower reason that nil_filter_for
+    does NOT fix: in_list is a value comparison, so an API with no log_config at
+    all stays nil-filtered and renders Not Applicable. That case is the one
+    CKV_AWS_193 fails on, so promoting both together loses nothing — promoting
+    194 alone would leave the worst offender silent.
+  CKV_AWS_214: >-
+    appsync GetApiCache requires apiId, and there is no ListApiCaches, so API
+    caches cannot be enumerated for an account. No stock resource either.
+  CKV_AWS_215: >-
+    Same as CKV_AWS_214.
+
+  # --- Redshift ---
+
+  CKV_AWS_105: >-
+    require_ssl is a PARAMETER inside the parameter group, returned by
+    DescribeClusterParameters. The vendored
+    aws_redshift_cluster_parameter_group calls
+    describe_cluster_parameter_groups, which returns only name, family,
+    description and tags — the parameters are not in the response. Note also
+    the naming divergence: tf aws_redshift_parameter_group maps to the API's
+    ClusterParameterGroup.
+  CKV_AWS_281: >-
+    Vacuous as a deployed assertion. KmsKeyId is required on every snapshot
+    copy grant — the grant exists only to authorise a CMK — so
+    describe_snapshot_copy_grants always returns one and not_empty would pass
+    unconditionally while looking implemented.
+  CKV_AWS_391: >-
+    A conjunction: master_username in a named list AND publicly_accessible.
+    The schema asserts one property against one value, and there is no
+    not_in_list satisfies for the username half either.
+
+  CKV_AWS_252: >-
+    aws_cloudtrail_trail exposes explicit attr_readers only — no
+    create_resource_methods — and sns_topic_name is not one of them.
+    its('sns_topic_name') would fall through AwsResourceBase#method_missing to
+    NullResponse for EVERY trail, so not_empty would fail all of them,
+    including trails that do define an SNS topic. Routing it through an api
+    spec instead (describe_trails takes no required arguments and trailList
+    carries SnsTopicName) hits the opposite failure TODAY: the api reader drops
+    nil fields, and nil is exactly the trail with no topic — the violation.
+    The in-flight nil_filter_for change in tools/render_controls.py removes
+    that block. Once it lands, promote this verbatim:
+      api spec aws_cloudtrail — gem aws-sdk-cloudtrail,
+      client Aws::CloudTrail::Client, list describe_trails (no required
+      arguments), collection trail_list, id name, arn trail_arn,
+      scope regional, fields: sns_topic_name: sns_topic_name.
+      Mapping: field sns_topic_name, satisfies not_empty.
+    Caveat to state in the control: describe_trails returns shadow trails from
+    other regions by default, so a multi-region trail is asserted once per
+    region — repeated output, not a wrong answer.
+
+  # --- RDS ---
+
+  CKV_AWS_246: >-
+    activity_stream_kms_key_id is on the DB cluster, and the stock template has
+    no nil filter, so mapping it would fail every cluster that simply has no
+    activity stream. Routing it through the api reader instead makes it vacuous:
+    the KMS key is mandatory when a stream is started, so a non-nil value is
+    always a set value.
+  CKV_AWS_325: >-
+    Two things the schema cannot do: the assertion is list-containment
+    (enabled_cloudwatch_logs_exports includes 'audit', not equals), and it is
+    conditional on the engine being MySQL/Aurora-MySQL.
+
+  # --- Image Builder ---
+
+  CKV_AWS_180: >-
+    ListComponents returns componentVersionList summaries with no kmsKeyId;
+    the key is only in GetComponent, which requires componentBuildVersionArn.
+    An api spec cannot chain a second call.
+  CKV_AWS_199: >-
+    ListDistributionConfigurations returns arn, name, description, dates, tags
+    and regions — no distribution block, so no amiDistributionConfiguration and
+    no kmsKeyId. GetDistributionConfiguration requires the arn.
+  CKV_AWS_200: >-
+    ListImageRecipes returns no blockDeviceMappings; GetImageRecipe requires the
+    arn. The check is also per-device inside an array.
+
+  # --- WAF ---
+
+  CKV_AWS_175: >-
+    Of the three types the check names, only classic aws_waf_web_acl has a stock
+    resource, and its plural is unsafe: fetch_data maps over the response's
+    MEMBERS and builds rows whose web_acl_id column is an array, so the ids list
+    is malformed. wafv2 ListWebACLs requires Scope, so it cannot enumerate an
+    account. Covering this needs a purpose-built reader across all three.
+  CKV_AWS_342: >-
+    Same enumeration walls as CKV_AWS_175, and the assertion is over the actions
+    of each rule in an array — not one property against one value.
+
+  # --- Connect ---
+
+  CKV_AWS_269: >-
+    connect ListInstanceStorageConfigs requires InstanceId AND ResourceType, so
+    storage configs cannot be enumerated for an account. No stock resource.
+  CKV_AWS_270: >-
+    Same as CKV_AWS_269.
+
+  # --- EFS access points ---
+
+  CKV_AWS_329: >-
+    A forbidden-value check: root_directory path must not be "/". matcher_for
+    supports only equals / not_empty / empty / greater_than / in_list — there is
+    no not_equals, so the assertion cannot be rendered. Enumeration is not the
+    problem: the aws_efs_access_point spec proposed under CKV_AWS_330 already
+    carries root_directory_path, so this becomes a one-line mapping (field
+    root_directory_path, satisfies not_equals, value '/') the moment
+    matcher_for gains not_equals. Worth adding — the resource_map.yml header
+    already advertises not_equals as a supported satisfies, and matcher_for
+    raises SystemExit on it, so the two disagree today.
+  CKV_AWS_330: >-
+    BLOCKED ONLY BY THE RENDERER, on both counts, and both are being fixed in
+    the working tree right now. posix_user.gid is nil exactly when no user
+    identity is enforced — the violation — and today's api control drops nil
+    fields, so every offending access point renders Not Applicable; and gid is
+    a number, which the old `should_not be_empty` matcher raises on. The
+    in-flight nil_filter_for plus the satisfy('be set') matcher fix both. Once
+    they land, promote this verbatim:
+      api spec aws_efs_access_point — gem aws-sdk-efs,
+      client Aws::EFS::Client, list describe_access_points (no required
+      arguments), collection access_points, id access_point_id,
+      arn access_point_arn, scope regional, fields:
+      posix_user_gid: posix_user.gid, root_directory_path: root_directory.path.
+      Mapping: field posix_user_gid, satisfies not_empty.
+
+  # --- Everything else ---
+
+  CKV_AWS_208: >-
+    The assertion is a version COMPARISON (engine_version >= 5.16.x for
+    ActiveMQ, >= 3.9.x for RabbitMQ) against a per-engine minimum. greater_than
+    renders a numeric Ruby comparison, which is wrong for a semver string, and
+    there is no per-engine conditional in the schema.
+  CKV_AWS_221: >-
+    Vacuous as a deployed assertion. CodeArtifact always returns an
+    encryptionKey ARN — a domain created without one gets the AWS-managed key —
+    and nothing in ListDomains distinguishes an AWS-managed key from a customer
+    managed one. not_empty would pass unconditionally.
+  CKV_AWS_265: >-
+    keyspaces ListTables requires keyspaceName and GetTable requires
+    keyspaceName plus tableName, so tables cannot be enumerated for an account.
+    The assertion is also a conjunction (kms_key_identifier set AND type ==
+    CUSTOMER_MANAGED_KMS_KEY).
+  CKV_AWS_294: >-
+    ListEventDataStores returns name, ARN, status, retention and the selectors —
+    no KmsKeyId. That is only in GetEventDataStore, which requires the store's
+    ARN, and an api spec cannot chain a second call.
+  CKV_AWS_297: >-
+    scheduler ListSchedules returns a summary with Arn, Name, GroupName, State
+    and a minimal Target — no KmsKeyArn. GetSchedule requires the schedule name.
+  CKV_AWS_33: >-
+    Requires parsing the key's policy document for a wildcard principal, with
+    Deny and Condition statements excluded. Explicitly outside these schemas —
+    aws_api_assets extracts fields, it does not interpret documents.
+  CKV_AWS_381: >-
+    ListRepositoryAssociations returns AssociationArn, ConnectionArn, Name,
+    Owner, ProviderType and State — no KMSKeyDetails. That needs
+    DescribeRepositoryAssociation with the association ARN.

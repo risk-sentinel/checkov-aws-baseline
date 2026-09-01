@@ -1,0 +1,750 @@
+# Slice graph-a — 20 Checkov GRAPH checks the research pass judged to collapse to
+# a SINGLE FIELD on one deployed asset.
+#
+# Every Checkov definition below was read out of the graph_checks JSON in the
+# checkov-3.3.16 venv, not from the proposal's summary of it, and every InSpec
+# property and enumeration column was read out of
+# vendor/8d70ebd15eaba9b4b52657eef1f9dbb2d0235206/libraries/.
+#
+# 7 mapped, 13 skipped. Where the single-field claim did not hold, the skip says
+# which second resource, guard, predicate or renderer feature it actually needs.
+#
+# ADVERSARIAL REVIEW PASS (second agent). Every surviving mapping was re-checked
+# against vendor/8d70ebd15eaba9b4b52657eef1f9dbb2d0235206/libraries and against
+# botocore. Two mappings were REMOVED and are now skipped:
+#
+#   CKV2_AWS_1 — fails the default network ACL of any VPC whose subnets are all
+#                on custom ACLs, i.e. it penalises its own remediation.
+#   CKV2_AWS_2 — byte-identical to the already-live CKV_AWS_3 mapping, and the
+#                one thing that distinguishes the graph check from it (the
+#                attachment exemption) is the thing that was dropped.
+#
+# Both are the same "needs a where-guard" class this slice already used to skip
+# CKV2_AWS_12 and CKV2_AWS_15; applying that standard consistently is what
+# removed them.
+#
+# Confirmed in this pass, against botocore service-2.json:
+#   CloudTrail  DescribeTrails.trailNameList — "If one or more trail names are
+#               specified, information is returned only if the names match the
+#               names of trails belonging only to the current Region and current
+#               account. To return information about a trail in another Region,
+#               you must specify its trail ARN." The drafting pass's divergence
+#               to trail_arns is correct, and the four LIVE aws_cloudtrail_trails
+#               mappings (CKV_AWS_35/36/67/251) enumerate `names` and therefore
+#               carry this bug. Out of scope here; worth its own issue.
+#   ec2         Address.AssociationId, Volume.Encrypted,
+#               NetworkAclAssociation.SubnetId, DescribeFlowLogs filter
+#               `resource-id`, FlowLog.FlowLogId.
+#   ssm         Parameter.Type, ParameterType enum ["String","StringList",
+#               "SecureString"] — the asserted literal is exact.
+#   cloudfront  ViewerCertificate.CertificateSource, CertificateSource enum
+#               ["cloudfront","iam","acm"] — the asserted literal is exact.
+#   iam         GetGroupResponse.Users; GetLoginProfile raises
+#               NoSuchEntityException (404, not 403), so catch_aws_errors takes
+#               its non-permissions branch and returns nil rather than raising.
+#
+# Two pack-wide facts the mappings below rely on, read out of the installed
+# aws-sdk-core rather than assumed:
+#   Aws::Structure#to_h OMITS nil members (structure.rb) — which is what makes an
+#   absent optional field reach method_missing and become a NullResponse whose
+#   nil? is true, i.e. the FAILING state for not_empty rather than a crash.
+#   Aws::Structure defines empty? — so the `return [] if response.empty?` guard
+#   every plural below uses actually works on an Aws response.
+
+mappings:
+
+  # CKV2_AWS_10 — CloudtrailHasCloudwatch.json asserts
+  # `cloud_watch_logs_group_arn exists` on aws_cloudtrail. Deployed member is
+  # CloudWatchLogsLogGroupArn, exposed by the stock singular as an attr_reader.
+  #
+  # DELIBERATE DIVERGENCE FROM THE PROPOSAL: it enumerated `names`. That is
+  # wrong for this pair. aws_cloudtrail_trails calls DescribeTrails with no
+  # arguments, which INCLUDES shadow trails — the copies of a multi-region or
+  # organization trail that appear in every region. The singular then calls
+  # DescribeTrails(trail_name_list: [name]), and AWS resolves a bare NAME only
+  # for a trail belonging to the CURRENT region; for a trail in another region
+  # you must give the ARN. A shadow trail therefore comes back as an empty
+  # trail_list, resp.trail_list[0] is nil, nil.to_h is {}, and the ARN reads
+  # nil — a FAILED control for a trail that is correctly integrated. Since
+  # every CIS-shaped estate runs one multi-region trail, that would fail in
+  # every region but one. Enumerating trail_arns (a registered column,
+  # libraries/aws_cloudtrail_trails.rb:23) resolves in both cases, because
+  # trail_name_list accepts a name OR an ARN.
+  CKV2_AWS_10:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: trail_arns}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: cloud_watch_logs_log_group_arn
+        satisfies: not_empty
+      note: >-
+        Enumerates trail_arns rather than names on purpose, and the adversarial
+        pass CONFIRMED this against botocore rather than accepting it: the
+        cloudtrail service model documents trailNameList as "If one or more
+        trail names are specified, information is returned only if the names
+        match the names of trails belonging only to the current Region and
+        current account. To return information about a trail in another Region,
+        you must specify its trail ARN." A shadow trail therefore returns an
+        empty trail_list for a bare name, resp.trail_list[0] is nil, nil.to_h is
+        {}, and the ARN reads nil — a FAILED control for a correctly integrated
+        trail, in every region but the trail's home. trail_arns is a registered
+        column (aws_cloudtrail_trails.rb:23) and trailNameList accepts an ARN.
+        The member spelling is confirmed too: Trail.CloudWatchLogsLogGroupArn ->
+        cloud_watch_logs_log_group_arn, which the singular exposes as an
+        attr_reader (NOT via create_resource_methods, so nil stays nil rather
+        than becoming a NullResponse — not_empty handles both). Known cost,
+        accepted: DescribeTrails includes shadow trails by default, so a
+        multi-region or organization trail is assessed once per scanned region
+        and produces N identical results with the same verdict; `found` is not
+        deduplicated by the template. THE FOUR LIVE MAPPINGS ON THIS PLURAL
+        (CKV_AWS_35, 36, 67, 251) ENUMERATE `names` AND CARRY THE BUG THIS ENTRY
+        AVOIDS — out of scope for this slice, but it wants its own issue.
+
+  # CKV2_AWS_11 — VPCHasFlowLog.json: aws_vpc connected to aws_flow_log.
+  # aws_flow_log accepts vpc_id (validate_parameters require_any_of
+  # %i(flow_log_id subnet_id vpc_id), libraries/aws_flow_log.rb:19) and filters
+  # DescribeFlowLogs on resource-id, so the reverse lookup is one call per VPC
+  # with no second enumeration. exists? is `!@flow_log_id.nil?`.
+  CKV2_AWS_11:
+    aws_vpc:
+      reader: stock
+      enumerate: {resource: aws_vpcs, ids: vpc_ids}
+      assert:
+        resource: aws_flow_log
+        arg: vpc_id
+        property: exists?
+        satisfies: equals
+        value: true
+      note: >-
+        enumerate.resource and assert.resource are independent, so this is a
+        one-hop join already expressible today. aws_vpcs registers :vpc_ids
+        (libraries/aws_vpcs.rb:17). Asserted through exists? rather than
+        log_group_name because a flow log delivered to S3 or to Data Firehose
+        has no log group and is still a flow log — Checkov only requires the
+        connection to exist. The `resource-id` filter is confirmed in the
+        botocore ec2 model as "The ID of the VPC, subnet, or network interface",
+        so passing a vpc-id is the documented reverse lookup, and exists? is
+        `!@flow_log_id.nil?` over FlowLog.FlowLogId. TOOLING TRAP, recorded so it
+        is not mistaken for a real finding later: lint_resource_map.py's
+        required_params() keeps only the FIRST alternative of a require_any_of,
+        so it reports aws_flow_log as requiring flow_log_id and will flag
+        arg: vpc_id as wrong. The Ruby is
+        `validate_parameters(require_any_of: %i(flow_log_id subnet_id vpc_id))`
+        and validate_parameters adds every alternative to `allow`, so vpc_id is
+        valid. The lint reads resource_map.yml only, and this entry lands in
+        resource_map_derived.yml, so nothing fails today — but do not "fix" this
+        by switching the arg if the entry is ever promoted to the authored map.
+        Known limitation, matching Checkov: a flow log whose DeliverLogsStatus is
+        FAILED still satisfies this, because both check for the connection rather
+        than for delivery.
+
+  # CKV2_AWS_14 — IAMGroupHasAtLeastOneUser.json. Checkov's filter is on
+  # aws_iam_group_membership, i.e. it evaluates the membership resource. The
+  # deployed question is the same one asked of the group: GetGroup returns
+  # Users, which the stock singular assigns to @users as a list of user names.
+  CKV2_AWS_14:
+    aws_iam_group:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_iam_groups, ids: group_names}
+      assert:
+        resource: aws_iam_group
+        arg: group_name
+        property: users
+        satisfies: not_empty
+      note: >-
+        Global service, so enumerated once rather than once per region. Asserted
+        on the GROUP rather than on a membership object, because deployed there
+        is no membership object — GetGroup answers it directly, and
+        GetGroupResponse.Users is confirmed in the botocore iam model. The
+        singular sets @users through an attr_reader from
+        @resp[:users].map(&:user_name), so the empty case is [] and not_empty
+        reads it as the failure without a nil path. Slightly broader than
+        Checkov, which only evaluates groups that have an
+        aws_iam_group_membership in the plan at all; here a group created by
+        hand and never populated is assessed too. Efficiency note, not a defect:
+        aws_iam_groups#fetch_data already calls GetGroup per group to populate
+        its own :users column, so this pair makes the call twice. Collapsing it
+        would need a plural-only shape the schema does not have.
+
+  # CKV2_AWS_19 — EIPAllocatedToVPCAttachedEC2.json. Checkov passes on any of
+  # instance / eip_association / nat_gateway / transfer_server, plus two
+  # `contains "module."`/`"data."` escape hatches that are pure HCL artefacts.
+  # All of the real ones set Address.AssociationId, so the deployed read is one
+  # field. The vpc/domain guard is dropped deliberately: EC2-Classic is retired
+  # and every address returns Domain=vpc.
+  CKV2_AWS_19:
+    aws_eip:
+      reader: stock
+      enumerate: {resource: aws_ec2_eips, ids: public_ips}
+      assert:
+        resource: aws_ec2_eip
+        arg: public_ip
+        property: association_id
+        satisfies: not_empty
+      note: >-
+        aws_ec2_eips registers :public_ips (libraries/aws_ec2_eips.rb:16). The
+        singular runs create_resource_methods over Address.to_h; an unassociated
+        address has no AssociationId member at all, so the method is undefined
+        and AwsResourceBase#method_missing returns a NullResponse whose nil? is
+        true — which the not_empty matcher reads as the failing state rather
+        than raising. The adversarial pass verified the load-bearing half of that
+        rather than assuming it: Aws::Structure#to_h in the installed
+        aws-sdk-core is documented and implemented as "Structure members that are
+        nil are omitted from the resultant hash", so the member really is absent
+        rather than present-and-nil. Address.AssociationId and Address.PublicIp
+        are both confirmed in the botocore ec2 model. A NAT gateway's or a
+        network load balancer's address carries an AssociationId just as an
+        instance's does, so the three Checkov pass branches that survive
+        deployment all land on the same field. Does not implement Checkov's
+        `instance contains "module."` branches: those assert something about the
+        Terraform text, not the asset.
+
+  # CKV2_AWS_22 — IAMUserHasNoConsoleAccess.json: aws_iam_user NOT connected to
+  # aws_iam_user_login_profile. Deployed equivalent is GetLoginProfile, wrapped
+  # by the stock resource as has_console_password (libraries/aws_iam_user.rb:41,
+  # `login_profile.present?`).
+  CKV2_AWS_22:
+    aws_iam_user:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_iam_users, ids: usernames}
+      assert:
+        resource: aws_iam_user
+        arg: user_name
+        property: has_console_password
+        satisfies: equals
+        value: false
+      note: >-
+        Strictly better than the IaC check: it sees a console password added by
+        hand after apply. The singular's arg is user_name while the plural's
+        column is usernames — those are not the same word, and both were read
+        off the vendored pack rather than transliterated. For a user with no
+        login profile, IAM raises NoSuchEntityException (confirmed as a declared
+        error of GetLoginProfile in the botocore iam model); it is a 404, so
+        catch_aws_errors' is_permissions_error test is false, it takes the
+        non-permissions branch, logs a warning, sets @failed_resource and returns
+        nil — `nil.present?` is false, which is the passing verdict. Expect one
+        warning line per password-less user; nothing reads @failed_resource on
+        this path, so the assertion is unaffected. The drafting pass flagged
+        `.present?` as an unconfirmed ActiveSupport dependency; it is not
+        unconfirmed — aws_backend.rb's first three lines are
+        `require "active_support"` and two core_ext requires, so ActiveSupport is
+        a hard load-time dependency of the ENTIRE vendored pack. If it were
+        missing, no resource in this profile would load at all. Also confirmed:
+        the plural derives its id as user.arn.split("/").last, which is the bare
+        user NAME even for a user under a path, and GetUser takes the bare name.
+
+  # CKV2_AWS_34 — AWSSSMParameterShouldBeEncrypted.json is not a graph traversal
+  # at all: `attribute type equals SecureString` on one resource. The deployed
+  # field is ParameterMetadata.Type / Parameter.Type, same value.
+  CKV2_AWS_34:
+    aws_ssm_parameter:
+      reader: stock
+      enumerate: {resource: aws_ssm_parameters, ids: names}
+      assert:
+        resource: aws_ssm_parameter
+        arg: name
+        property: type
+        satisfies: equals
+        value: SecureString
+      note: >-
+        aws_ssm_parameters registers :names (libraries/aws_ssm_parameters.rb:16)
+        from DescribeParameters, which takes no required arguments. The singular
+        calls GetParameter without with_decryption, which is permitted on a
+        SecureString and returns Type without returning the plaintext — so this
+        never pulls a secret value into the run. Spelling and literal both
+        confirmed in the botocore ssm model: Parameter.Type, with the
+        ParameterType enum exactly ["String", "StringList", "SecureString"], so
+        the asserted value is byte-correct and cannot silently never match.
+        LANDMINE IN THIS RESOURCE, recorded so no later pass steps on it: the
+        singular defines `def name; name if exists?; end` (aws_ssm_parameter.rb),
+        which is unbounded self-recursion whenever create_resource_methods has
+        NOT run — i.e. whenever GetParameter returned no parameter. This mapping
+        asserts `type` and never touches it, but NEVER map `name` as the property
+        on aws_ssm_parameter: it is a SystemStackError, not a nil.
+
+  # CKV2_AWS_42 — CloudFrontHasCustomSSLCertificate.json: viewer_certificate
+  # .iam_certificate_id OR .acm_certificate_arn exists. Deployed, CloudFront
+  # collapses both into ViewerCertificate.CertificateSource, one of
+  # "cloudfront" | "iam" | "acm", which the stock singular stores as
+  # @ssl_certificate (libraries/aws_cloudfront_distribution.rb:44).
+  CKV2_AWS_42:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: ssl_certificate
+        satisfies: not_equals
+        value: cloudfront
+      note: >-
+        "IAMCertificateId or ACMCertificateArn exists" is exactly
+        "CertificateSource != cloudfront", and the botocore cloudfront model
+        confirms both the member (ViewerCertificate.CertificateSource) and the
+        closed enum ["cloudfront", "iam", "acm"], so the asserted literal is
+        exact and the three-way value really is a two-way question. Global
+        service, enumerated once. RESIDUAL HOLE, disclosed rather than papered
+        over: the verb is not_equals, so nil PASSES. CloudFront always populates
+        ViewerCertificate on a real distribution, but if get_distribution returns
+        a non-403 service error, catch_aws_errors swallows it to nil, the
+        singular's `return if @resp.nil?` leaves @ssl_certificate unset, and the
+        control reports a PASS it did not earn. A 403 still raises
+        ResourceFailed, so the permissions case is loud; only a transient
+        service-side error is silent. Closing it properly needs an in_list verb
+        over ["iam", "acm"], which matcher_for implements — worth revisiting, but
+        it changes the semantics from "not the default cert" to "one of two known
+        sources" and would newly fail on any source AWS adds later.
+
+metadata:
+
+  # No metadata for CKV2_AWS_1 or CKV2_AWS_2: both are skipped, and
+  # render_planned deliberately emits no NIST/CCI/KSI tags for a control that
+  # cannot evaluate ("a compliance anchor on a control that cannot evaluate is a
+  # claim the profile has not earned" — render_controls.py:734). Writing an
+  # anchor into control_metadata_derived.yml for an unmapped check would leave
+  # an unreviewed anchor for a later pass to inherit.
+
+  CKV2_AWS_10:
+    severity: medium
+    impact: 0.5
+    nist: ['AU-6', 'AU-9', 'SI-4']
+    nist_r4: ['AU-6', 'AU-9', 'SI-4']
+    cci: ['CCI-000162', 'CCI-002664']
+    ksi: ['KSI-MLA-LOG']
+    nist_source: agent-drafted
+    what: >-
+      a CloudTrail trail whose cloud_watch_logs_group_arn is set, so its events
+      also land somewhere they can be alarmed on
+    rationale: >-
+      A trail that only writes to S3 produces an archive nobody is watching.
+      Delivery to CloudWatch Logs is what makes metric filters and alarms
+      possible, so it is the difference between events being retained and events
+      being noticed. It also puts a second copy of the audit record in a store
+      with a different access path from the bucket.
+
+  CKV2_AWS_11:
+    severity: medium
+    impact: 0.5
+    nist: ['SI-4', 'AU-12']
+    nist_r4: ['SI-4', 'AU-12']
+    cci: ['CCI-002664', 'CCI-000172']
+    ksi: ['KSI-MLA-OSM']
+    nist_source: agent-drafted
+    what: >-
+      a VPC that has a flow log attached to it, capturing accepted and rejected
+      network traffic
+    rationale: >-
+      Without a flow log there is no record of what talked to what inside the
+      VPC. An intrusion is then reconstructible only from application logs, and
+      lateral movement between instances — which never touches an application
+      log — leaves no trace at all.
+
+  CKV2_AWS_14:
+    severity: low
+    impact: 0.3
+    nist: ['AC-2', 'CM-6']
+    nist_r4: ['AC-2', 'CM-6']
+    cci: ['CCI-000366']
+    ksi: ['KSI-IAM-CTL']
+    nist_source: agent-drafted
+    what: >-
+      an IAM group that contains at least one user, rather than a group carrying
+      permissions that nobody holds
+    rationale: >-
+      An empty IAM group is a set of permissions with no members and therefore
+      no owner and no review. It accumulates policy over time because nobody
+      notices it, and it grants everything it holds the moment a user is added
+      to it — which is a one-call change nobody treats as a privilege grant.
+
+  CKV2_AWS_19:
+    severity: low
+    impact: 0.3
+    nist: ['CM-8', 'SC-7']
+    nist_r4: ['CM-8', 'SC-7']
+    cci: ['CCI-000366', 'CCI-001097']
+    ksi: ['KSI-CMT-INV']
+    nist_source: agent-drafted
+    what: >-
+      an Elastic IP that is associated with something — an instance, a NAT
+      gateway or a network interface — rather than allocated and dangling
+    rationale: >-
+      An allocated but unassociated Elastic IP is an address the account owns and
+      nothing answers on. It is billed continuously, it is still present in any
+      allow-list or DNS record that was written against it, and whatever is
+      associated with it next inherits that reachability without anyone
+      revisiting the decision.
+
+  CKV2_AWS_22:
+    severity: medium
+    impact: 0.5
+    nist: ['IA-2', 'AC-2']
+    nist_r4: ['IA-2', 'AC-2']
+    cci: ['CCI-000764']
+    ksi: ['KSI-IAM-CTL']
+    nist_source: agent-drafted
+    what: >-
+      an IAM user with no login profile, so console access is not available
+      through a long-lived local password
+    rationale: >-
+      A console password on an IAM user is a standing credential that lives
+      outside the identity provider: it is not covered by the organisation's
+      session policy, its MFA is enforced per user rather than centrally, and it
+      survives the user being deprovisioned upstream. Human console access
+      belongs to federated roles, where revocation happens in one place.
+
+  CKV2_AWS_34:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    nist_source: agent-drafted
+    what: >-
+      an SSM parameter whose type is SecureString, so its value is encrypted
+      with KMS rather than stored and returned in clear text
+    rationale: >-
+      A String parameter is returned in plaintext to anyone holding
+      ssm:GetParameter, and its value appears in CloudTrail-visible API
+      responses and in any console listing. SecureString moves the value behind
+      a KMS key, so reading it requires a second, separately auditable
+      authorisation.
+
+  CKV2_AWS_42:
+    severity: medium
+    impact: 0.5
+    nist: ['SC-8', 'SC-8 (1)']
+    nist_r4: ['SC-8', 'SC-8 (1)']
+    cci: ['CCI-002418', 'CCI-002421']
+    ksi: ['KSI-SVC-CET']
+    nist_source: agent-drafted
+    what: >-
+      a CloudFront distribution whose viewer certificate comes from ACM or IAM
+      rather than the default CloudFront certificate
+    rationale: >-
+      The default CloudFront certificate is only valid for the
+      cloudfront.net name, so a distribution relying on it cannot serve the
+      organisation's own domain over TLS that a client will accept. In practice
+      that means users reach the service under a name the organisation does not
+      control, or reach it over a connection whose certificate warning they have
+      been trained to click through.
+
+fixes:
+
+  # No fix entries for CKV2_AWS_1 or CKV2_AWS_2: render_planned does not take
+  # `fixes` at all (render_controls.py:731), so a fix for a skipped check is
+  # written to fix_examples.yml and rendered nowhere. Both fixes are preserved
+  # verbatim in the SKIPPED reasons below so the next pass does not redo them.
+
+  CKV2_AWS_10:
+    aws_cloudtrail:
+      terraform: |
+        resource "aws_cloudwatch_log_group" "trail" {
+          name              = "/aws/cloudtrail/org"
+          retention_in_days = 365
+        }
+
+        resource "aws_cloudtrail" "org" {
+          name                          = "org-trail"
+          s3_bucket_name                = aws_s3_bucket.trail.id
+          is_multi_region_trail         = true
+          enable_log_file_validation    = true
+          cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.trail.arn}:*"
+          cloud_watch_logs_role_arn     = aws_iam_role.trail_to_cwl.arn
+        }
+      cli: |
+        aws cloudtrail update-trail --name <trail> --cloud-watch-logs-log-group-arn <log-group-arn>:* --cloud-watch-logs-role-arn <role-arn>
+      note: >-
+        Two things bite here. The log group ARN must carry the trailing ":*" or
+        CloudTrail rejects it, and the role in cloud_watch_logs_role_arn must
+        trust cloudtrail.amazonaws.com and hold logs:CreateLogStream and
+        logs:PutLogEvents on that group. Without the role the trail still
+        reports the group and delivers nothing, which this control cannot see.
+
+  CKV2_AWS_11:
+    aws_vpc:
+      terraform: |
+        resource "aws_flow_log" "main" {
+          vpc_id                   = aws_vpc.main.id
+          traffic_type             = "ALL"
+          log_destination_type     = "cloud-watch-logs"
+          log_destination          = aws_cloudwatch_log_group.flow.arn
+          iam_role_arn             = aws_iam_role.flow_logs.arn
+          max_aggregation_interval = 60
+        }
+      cli: |
+        aws ec2 create-flow-logs --resource-type VPC --resource-ids <vpc-id> --traffic-type ALL --log-destination-type cloud-watch-logs --log-group-name <group> --deliver-logs-permission-arn <role-arn>
+      note: >-
+        Use traffic_type = "ALL": REJECT alone hides successful lateral movement
+        and ACCEPT alone hides the scanning that preceded it. An S3 or Data
+        Firehose destination satisfies this control equally — it asserts that a
+        flow log exists for the VPC, not where it lands.
+
+  CKV2_AWS_14:
+    aws_iam_group_membership:
+      terraform: |
+        resource "aws_iam_group_membership" "engineers" {
+          name  = "engineers-membership"
+          group = aws_iam_group.engineers.name
+          users = [aws_iam_user.alice.name]
+        }
+      cli: |
+        aws iam add-user-to-group --group-name <group> --user-name <user>
+      note: >-
+        Deleting the group is the other valid remediation and usually the right
+        one. Note that aws_iam_group_membership is authoritative — it removes
+        any user it does not list — whereas aws_iam_user_group_membership is
+        not; mixing the two silently drops members on the next apply.
+
+  CKV2_AWS_19:
+    aws_eip_association:
+      terraform: |
+        resource "aws_eip_association" "app" {
+          allocation_id        = aws_eip.app.id
+          network_interface_id = aws_network_interface.app.id
+        }
+      cli: |
+        aws ec2 release-address --allocation-id <alloc-id>
+      note: >-
+        The CLI shown is the release, not the association, because a dangling
+        Elastic IP is far more often garbage than a missing wiring. Releasing is
+        irreversible — the address returns to the pool and cannot be reclaimed —
+        so confirm no DNS record or partner allow-list still names it. To keep
+        it, associate it with `aws ec2 associate-address` instead.
+
+  CKV2_AWS_22:
+    aws_iam_user:
+      terraform: |
+        # The fix is the ABSENCE of a login profile. Remove any
+        # aws_iam_user_login_profile for this user and let humans reach the
+        # console through federation instead.
+        resource "aws_iam_user" "svc" {
+          name = "svc-deploy"
+          tags = { console_access = "none" }
+        }
+      cli: |
+        aws iam delete-login-profile --user-name <user>
+      note: >-
+        Deleting the login profile removes console access only; the user's
+        access keys still work, so audit those separately. If the user is a
+        person rather than a service identity, the real remediation is to delete
+        the IAM user and grant them a federated role.
+
+  CKV2_AWS_34:
+    aws_ssm_parameter:
+      terraform: |
+        resource "aws_ssm_parameter" "db_password" {
+          name   = "/app/prod/db_password"
+          type   = "SecureString"
+          key_id = aws_kms_key.params.arn
+          value  = var.db_password
+        }
+      cli: |
+        aws ssm put-parameter --name <name> --type SecureString --key-id <key-arn> --value <value> --overwrite
+      note: >-
+        A parameter's type cannot be changed in place by Terraform without
+        replacement, and the value was already exposed as plaintext, so treat
+        the existing value as compromised and rotate it rather than re-storing
+        it encrypted. Give key_id a customer-managed key: the default
+        alias/aws/ssm key cannot carry a key policy that limits who may decrypt.
+
+  CKV2_AWS_42:
+    aws_cloudfront_distribution:
+      terraform: |
+        resource "aws_cloudfront_distribution" "site" {
+          aliases = ["www.example.com"]
+
+          viewer_certificate {
+            acm_certificate_arn      = aws_acm_certificate.site.arn
+            ssl_support_method       = "sni-only"
+            minimum_protocol_version = "TLSv1.2_2021"
+          }
+        }
+      cli: |
+        aws cloudfront get-distribution-config --id <dist-id> > dist.json
+      note: >-
+        There is no single update call: CloudFront requires the full
+        distribution config plus its ETag, so edit the ViewerCertificate block
+        of the fetched JSON and send it back with `aws cloudfront
+        update-distribution --if-match <etag>`. The ACM certificate must be
+        issued in us-east-1 whatever region the rest of the stack lives in, and
+        the distribution needs an `aliases` entry matching the certificate.
+
+skipped:
+
+  CKV2_AWS_1: >-
+    REMOVED BY THE ADVERSARIAL PASS — needs a where-guard, and without one it
+    penalises its own remediation. Every element of the mapping verifies:
+    aws_network_acls registers :network_acl_ids, aws_network_acl requires
+    network_acl_id, associated_subnet_ids is a public method returning [], and
+    NetworkAclAssociation.SubnetId is confirmed in botocore. The defect is
+    population, not plumbing. DescribeNetworkAcls returns the VPC DEFAULT network
+    ACL, which Terraform never declares as aws_network_acl (it is
+    aws_default_network_acl) and which Checkov therefore never evaluates. In AWS
+    a subnet always sits on exactly one ACL, so the moment every subnet in a VPC
+    is explicitly associated with a custom ACL — which is precisely the state
+    this control's own fix produces — that VPC's default ACL has zero
+    associations and FAILS, while being correctly configured. A subnet-less VPC
+    fails the same way. That is the identical "a control that fails correct
+    configuration is worse than no control" objection this slice used to skip
+    CKV2_AWS_15, and consistency requires the same verdict. Unblocked cheaply:
+    aws_network_acls already registers a :default column and the singular has a
+    default? predicate, so `where default == false` is all this needs.
+    Remediation, preserved so the next pass need not rederive it: declare
+    aws_network_acl with subnet_ids = [for s in aws_subnet.private : s.id] plus
+    explicit ingress/egress blocks; out of band there is no "attach" call, only
+    `aws ec2 replace-network-acl-association --association-id <assoc-id>
+    --network-acl-id <acl-id>`, and because an ACL is stateless a missing
+    ephemeral-port egress rule breaks return traffic the instant the swap lands.
+
+  CKV2_AWS_2: >-
+    REMOVED BY THE ADVERSARIAL PASS — as drafted it is not a port of CKV2_AWS_2,
+    it is a second copy of CKV_AWS_3. The proposed mapping (aws_ebs_volumes
+    .volume_ids -> aws_ebs_volume#encrypted equals true) is element-for-element
+    identical to the entry ALREADY LIVE in resource_map_derived.yml under
+    CKV_AWS_3, so the two controls can never return different verdicts and the
+    second one adds no information — it only double-counts every unencrypted
+    volume in the aggregated failure summary that feeds the OSCAL pipeline. The
+    single thing that distinguishes Checkov's graph check from CKV_AWS_3 is the
+    attachment exemption (EncryptedEBSVolumeOnlyConnectedToEC2s passes an
+    unattached unencrypted volume), and that is exactly what was dropped. The
+    result is a control tagged checkov_id CKV2_AWS_2 that reports FAIL on the one
+    population Checkov reports PASS on, which breaks reconciliation against
+    Checkov for anyone diffing the two. A note disclosing the divergence does not
+    stop the HDF result carrying the id. Unblocked cheaply: aws_ebs_volumes
+    registers an :attachments column, so `where attachments not empty` is the
+    whole fix — the same missing where-guard as CKV2_AWS_12 and CKV2_AWS_15.
+    Remediation, preserved: encrypted = true plus kms_key_id on aws_ebs_volume,
+    and aws_ebs_encryption_by_default for volumes created outside Terraform; note
+    that an existing volume cannot be encrypted in place (snapshot, copy the
+    snapshot with --encrypted, create a volume from the copy, stop the instance
+    and swap the attachment — downtime, not a setting change) and that
+    `aws ec2 enable-ebs-encryption-by-default` is per region and only affects
+    volumes created after it.
+
+  CKV2_AWS_12: >-
+    Not a single field. VPCHasRestrictedSG.json requires NINE attributes absent
+    across BOTH the ingress and the egress block, and the schema asserts exactly
+    one property. It also needs a `where group_name == "default"` — the only
+    enumeration available is aws_security_groups, and without that guard the
+    control asserts that every security group in the account has no ingress
+    rules, which is absurd rather than strict. A freshly created VPC's default
+    SG always carries one self-referencing ingress rule AND one allow-all egress
+    rule, so asserting inbound_rules alone would pass a VPC that is in fact wide
+    open outbound. Needs: a where-guard plus multi-property assertion.
+
+  CKV2_AWS_15: >-
+    Needs a where-guard. AutoScallingEnabledELB.json filters on
+    `aws_autoscaling_attachment within` — it evaluates ONLY auto scaling groups
+    that are attached to a load balancer. The api_spec itself is buildable
+    (autoscaling DescribeAutoScalingGroups takes no required arguments and
+    returns HealthCheckType, LoadBalancerNames and TargetGroupARNs on one row,
+    and aws-sdk-autoscaling is in the image), but with no `where
+    load_balancer_names or target_group_arns is non-empty` the control asserts
+    HealthCheckType == ELB on every standalone ASG, every one of which
+    correctly uses EC2 health checks and would fail. A control that fails
+    correct configuration is worse than no control.
+
+  CKV2_AWS_32: >-
+    Needs a dotted collection path the api reader does not implement.
+    DefaultCacheBehavior.ResponseHeadersPolicyId is on
+    cloudfront.DistributionSummary, but AwsApiAssets#collect resolves
+    `collection` with a single `page.public_send(@spec["collection"])`
+    (libraries/aws_api_assets.rb:145) and CloudFront nests its items under
+    distribution_list.items. The stock plural registers no such column and the
+    stock singular never reads the field. Unblocked by one dig_path call in
+    AwsApiAssets#collect, which is a library change, not a data change.
+
+  CKV2_AWS_35: >-
+    Needs a new predicate on aws_route_table, and the obvious shortcut is a trap.
+    The plural FLATTENS routes into parallel per-column arrays
+    (destination_cidr_block: [...], gateway_id: [...], instance_id: [...]), so
+    the pairing between a route's destination and its target is LOST: a table
+    with a 0.0.0.0/0-via-NAT route and a 10.0.0.0/8-via-instance route is
+    indistinguishable from the failing case. Only the singular keeps the pairing,
+    via create_resource_methods over the raw hash, and reading it requires a
+    predicate over `routes` that no satisfies verb expresses.
+
+  CKV2_AWS_37: >-
+    Needs a new two-call reader. CodecommitApprovalRulesAttached.json wants the
+    aws_codecommit_approval_rule_template_association connection; deployed that
+    is ListAssociatedApprovalRuleTemplatesForRepository, which takes a
+    repositoryName — a second per-asset call that neither the stock shape nor
+    the api reader (one list call, no per-item call) performs. Worth asking
+    whether it earns the build at all: CodeCommit is closed to new AWS accounts,
+    so this is likely a permanently zero-asset control.
+
+  CKV2_AWS_38: >-
+    Needs a new two-call reader. There is NO hosted-zone resource in the
+    vendored inspec-aws pack at all — only aws_route53_record_sets, which
+    requires a zone id (trap 2). An api_spec over route53 ListHostedZones would
+    enumerate zones, but HostedZone carries no DNSSEC state: signing status
+    comes from GetDNSSEC per zone, a second per-item call the api reader does
+    not make. It also needs a where-guard on Config.PrivateZone == false, since
+    GetDNSSEC errors on a private zone and Checkov exempts private zones too.
+
+  CKV2_AWS_41: >-
+    Expressible today only through a reader that would produce false failures.
+    EC2InstanceHasIAMRoleAttached.json is a plain attribute check
+    (iam_instance_profile exists) and the field is right there on
+    DescribeInstances, but the only stock enumeration is aws_ec2_instances,
+    whose fetch_data applies no state filter — so it returns TERMINATED and
+    shutting-down instances, which AWS keeps returning for up to an hour and
+    which have no instance profile. Every recently terminated instance would
+    render a FAIL. The profile's own aws_compute_assets already excludes them
+    (libraries/aws_compute_assets.rb:194) and is the right home, but it does not
+    emit iam_instance_profile, and its renderer (render_controls.render) supports
+    only the `empty` and `equals` verbs — its satisfies map is literally
+    {"empty", "equals"} — so `not_empty` would KeyError even once the field
+    exists. Unblocked by one line in aws_compute_assets#instances plus
+    not_empty support in render(); both are code changes, not data.
+
+  CKV2_AWS_43: >-
+    Needs a new predicate on aws_s3_bucket. The check is about ONE grantee URI
+    (.../groups/global/AuthenticatedUsers) in the bucket ACL grants. The stock
+    resource exposes `bucket_acl` as a raw array of Aws::S3::Types::Grant, which
+    no satisfies verb can inspect, and its `public?` predicate is not a
+    substitute: it ORs the AuthenticatedUsers grant together with AllUsers AND
+    with a public bucket policy, so mapping it here would report a policy-public
+    bucket as an ACL finding. Build one grant-inspection helper and this plus
+    CKV_AWS_57 both fall out of it.
+
+  CKV2_AWS_44: >-
+    Needs a new predicate on aws_route_table, and hits the same route-flattening
+    trap as CKV2_AWS_35: the plural's parallel per-column arrays destroy the
+    pairing between vpc_peering_connection_id and destination_cidr_block, which
+    is the entire assertion. The predicate ("any route with
+    vpc_peering_connection_id set whose destination is 0.0.0.0/0 or ::/0") must
+    be built off the singular's `routes`, and no satisfies verb expresses a
+    condition over an array of hashes.
+
+  CKV2_AWS_46: >-
+    The stock field answers only the legacy half, and would fail the modern
+    correct case. CLoudFrontS3OriginConfigWithOAI.json passes on s3_origin_config
+    OR origin_access_control_id. The stock singular builds @s3_origin_access from
+    origin[:s3_origin_config][:origin_access_identity] only
+    (libraries/aws_cloudfront_distribution.rb:66) and never reads
+    Origin.OriginAccessControlId, which is what AWS now recommends — so
+    asserting not_empty on it FAILS every OAC-secured distribution, and also
+    fails any distribution with only custom origins, which Checkov exempts
+    outright. Blocked on the same CloudFront api_spec as CKV2_AWS_32.
+
+  CKV2_AWS_48: >-
+    A per-region enumeration turns one Terraform assertion into N-1 guaranteed
+    false failures. The api_spec is buildable — configservice
+    DescribeConfigurationRecorders takes no required arguments,
+    aws-sdk-configservice is in the image, and
+    RecordingGroup.includeGlobalResourceTypes is confirmed in botocore — but the
+    field is per-recorder and therefore per-region, and AWS's own model requires
+    it to be true in exactly ONE region (enabling it everywhere duplicates every
+    global IAM configuration item). Worse, botocore states the global IAM types
+    "can only be recorded by Config in Regions where Config was available before
+    February 2022", so in every newer region the value CANNOT be true. Answering
+    this correctly needs an account-level fold — "at least one recorder in the
+    account sets it" — which no satisfies verb expresses, since every verb here
+    is applied per asset.

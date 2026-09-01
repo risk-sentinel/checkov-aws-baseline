@@ -1,0 +1,895 @@
+# Slice graph-b — 20 Checkov GRAPH checks the research pass judged to collapse to
+# a SINGLE FIELD on one deployed asset.
+#
+# Source proposal: tools/proposals/graph.yml, section single_field.
+#
+# Every field below was confirmed against, in this order:
+#   * vendor/8d70ebd.../libraries/*.rb          (what the stock resource is called,
+#                                                its columns, its required args)
+#   * botocore/data/<service>/*/service-2.json  (the API member name and its type)
+#   * checkov/terraform/checks/graph_checks/aws/*.json  (what the rule actually
+#                                                asserts, read rather than assumed)
+#
+# Four entries diverge from the proposal because reading those three sources
+# contradicted it. Each divergence is recorded in the entry's `note`.
+#
+# ADVERSARIAL REVIEW PASS (second reader, independent re-derivation of every
+# mapping against the vendored pack and botocore). Result: 10 mapped, 10 skipped.
+#   * CKV2_AWS_71 WITHDRAWN to `skipped:` — the assertion is right, the population
+#     is not: ListCertificates' default keyTypes filter hides every EC certificate,
+#     so the control is clean-or-Not-Applicable over a silently partial set.
+#   * CKV2_AWS_63 CORRECTED — the assertion descends one level, to
+#     logging_configuration.log_destination_configs, closing a false-pass path.
+#   * CKV2_AWS_55 and CKV2_AWS_73 gained enumeration-truncation caveats: both
+#     vendored plurals read a single page and never follow their pagination token.
+#   * The other eight were re-derived and stand unchanged.
+
+mappings:
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_49 — DMS endpoint SSL mode
+  # ------------------------------------------------------------------
+  CKV2_AWS_49:
+    aws_dms_endpoint:
+      reader: stock
+      enumerate: {resource: aws_dms_endpoints, ids: endpoint_arns}
+      assert:
+        resource: aws_dms_endpoint
+        arg: endpoint_arn
+        property: ssl_mode
+        satisfies: not_equals
+        value: none
+      note: >-
+        Confirmed: aws_dms_endpoints registers endpoint_arns (field :endpoint_arn)
+        and takes no required parameters; aws_dms_endpoint requires endpoint_arn
+        and runs create_resource_methods over the endpoint hash, so ssl_mode is a
+        real method. botocore dms DescribeEndpoints returns SslMode on every
+        endpoint. STRICTER THAN CHECKOV, deliberately: the rule definition exempts
+        source endpoints on s3/azuredb and target endpoints on
+        dynamodb/kinesis/neptune/redshift/s3/elasticsearch/kafka, and the mapping
+        schema has no `where` clause to express that. Those engines report
+        SslMode="none" and will fail here. Use exempt_assets for them, or add a
+        `where` guard when the schema grows one.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_50 — ElastiCache replication group automatic failover
+  # ------------------------------------------------------------------
+  CKV2_AWS_50:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: auto_failover?
+        satisfies: equals
+        value: enabled
+      note: >-
+        DIVERGES FROM THE PROPOSAL, which asked for `equals true`. That would have
+        rendered `its('auto_failover?') { should eq true }` and failed on EVERY
+        group in the account. The stock `auto_failover?` returns
+        @replication_group[:automatic_failover] unchanged, and botocore elasticache
+        types AutomaticFailover as a STRING enum — enabled | disabled | enabling |
+        disabling — not a boolean. 'enabled' is the compliant value; a group stuck
+        in 'enabling'/'disabling' fails, which is the right answer for a
+        Multi-AZ-failover assertion. Enumeration column is `ids` (field :id), NOT
+        replication_group_ids — the singular name is misleading here and the
+        vendored FilterTable is the authority.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_52 — OpenSearch/ElasticSearch fine-grained access control
+  # ------------------------------------------------------------------
+  CKV2_AWS_52:
+    aws_opensearch_domain:
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: advanced_security_options.enabled
+        satisfies: equals
+        value: true
+      note: >-
+        botocore es ElasticsearchDomainStatus.AdvancedSecurityOptions.Enabled is a
+        Boolean; the singular runs create_resource_methods over the whole
+        DomainStatus hash and a nested Hash becomes an AwsResourceProbe, so the
+        dotted property resolves the same way the live CKV_AWS_116 mapping's
+        dead_letter_config.target_arn does. Checkov accepts EITHER
+        advanced_security_options.internal_user_database_enabled OR
+        advanced_security_options.enabled; `enabled` is the gate for both, so the
+        single field is faithful. DescribeElasticsearchDomains (plural) requires
+        DomainNames, so the per-domain singular is the only route — which is the
+        shape used. inspec-aws ships only the elasticsearchservice client, which
+        still answers for OpenSearch-generation domains.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_54 — CloudFront custom origins must not offer SSLv3
+  # ------------------------------------------------------------------
+  CKV2_AWS_54:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: custom_origin_ssl_protocols
+        satisfies: excludes
+        value: SSLv3
+      note: >-
+        The check definition is exactly
+        origin.*.custom_origin_config.origin_ssl_protocols not_contains "SSLv3",
+        and the singular's attr_reader :custom_origin_ssl_protocols is built by
+        collecting origin_ssl_protocols[:items] across every custom origin — a
+        one-for-one match. Do NOT use the resource's own
+        has_disallowed_custom_origin_ssl_protocols?: its default disallow list is
+        SSLv3 + TLSv1 + TLSv1_2016, a different and stricter rule than the one
+        this id names. `scope: global` because CloudFront returns the same
+        distributions from every region.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_55 — EMR cluster has a security configuration
+  # ------------------------------------------------------------------
+  CKV2_AWS_55:
+    aws_emr_cluster:
+      reader: stock
+      enumerate: {resource: aws_emr_clusters, ids: cluster_ids}
+      assert:
+        resource: aws_emr_cluster
+        arg: cluster_id
+        property: security_configuration_name
+        satisfies: not_empty
+      note: >-
+        emr Cluster.SecurityConfiguration confirmed in botocore; the singular
+        assigns it to attr_reader :security_configuration_name, and the plural
+        registers cluster_ids (field :cluster_id). nil is the failing state and
+        not_empty is a presence check, so a cluster with no security configuration
+        fails rather than being filtered out. CAVEAT: emr ListClusters returns
+        recently TERMINATED clusters as well as live ones, and the schema has no
+        `where` on status_state, so terminated history will be assessed too. That
+        is noise, not a false pass — exempt_assets is the escape until a `where`
+        exists.
+        SECOND CAVEAT, found in review and inherent to the vendored pack:
+        aws_emr_clusters#fetch_data calls list_clusters ONCE and never follows the
+        Marker, while botocore documents ListClusters as returning "a maximum of 50
+        clusters in unsorted order per call". An account with more than 50 clusters
+        in the ~2-month window therefore has an arbitrary subset assessed and
+        nothing said about the rest — including, since the order is unspecified,
+        possibly the live ones. No cluster that IS assessed can pass wrongly, so
+        this is under-enumeration rather than a false pass, but a reviewer reading
+        a clean result must know the population was capped. Fixing it is a change
+        to the upstream resource, not to this mapping.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_57 — Secrets Manager automatic rotation
+  # ------------------------------------------------------------------
+  CKV2_AWS_57:
+    aws_secretsmanager_secret:
+      reader: stock
+      enumerate: {resource: aws_secretsmanager_secrets, ids: arns}
+      assert:
+        resource: aws_secretsmanager_secret
+        arg: secret_id
+        property: rotation_enabled
+        satisfies: equals
+        value: true
+      note: >-
+        DIVERGES FROM THE PROPOSAL, which asked for the `api` reader against the
+        live aws_secretsmanager_secret spec's rotation_enabled field. That shape
+        CANNOT FAIL. AwsApiAssets#dig_path resolves a field as
+        `node[key.to_sym] || node[key]`, so a member whose value is `false`
+        evaluates to `false || nil` => nil; render_api then emits
+        `.reject { |a| a[:rotation_enabled].nil? }` for a value comparison, which
+        drops exactly the secrets that should fail. Every non-rotating secret would
+        vanish and the control would render Not Applicable or 100% pass.
+        The stock pair has no such problem: aws_secretsmanager_secrets registers
+        arns (field :arn) off ListSecrets (no required args), aws_secretsmanager_secret
+        requires secret_id (an ARN is a valid SecretId) and runs
+        create_resource_methods over DescribeSecret, whose RotationEnabled member
+        is confirmed in botocore. A secret that never had rotation configured is
+        dropped from the to_h, so the method is undefined and method_missing
+        returns NullResponse, whose `== true` is false — it fails, which is
+        correct. Checkov's connection to aws_secretsmanager_secret_rotation is
+        this boolean deployed.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_59 — OpenSearch/ElasticSearch dedicated master node
+  # ------------------------------------------------------------------
+  CKV2_AWS_59:
+    aws_opensearch_domain:
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: elasticsearch_cluster_config.dedicated_master_enabled
+        satisfies: equals
+        value: true
+      note: >-
+        NAME DIVERGENCE, confirmed against botocore rather than transliterated:
+        Terraform calls the block `cluster_config` and Checkov inspects
+        cluster_config.dedicated_master_enabled, but the DescribeElasticsearchDomain
+        response member is ElasticsearchClusterConfig.DedicatedMasterEnabled. A
+        mapping that copied Checkov's prefix would resolve to a NullResponse on
+        every domain and fail all of them for the wrong reason. Same enumeration
+        and same create_resource_methods singular as CKV2_AWS_52.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_63 — Network Firewall logging configuration
+  # ------------------------------------------------------------------
+  CKV2_AWS_63:
+    aws_networkfirewall_firewall:
+      reader: stock
+      enumerate: {resource: aws_network_firewall_firewalls, ids: firewall_names}
+      assert:
+        resource: aws_network_firewall_logging_configuration
+        arg: firewall_name
+        property: logging_configuration.log_destination_configs
+        satisfies: not_empty
+      note: >-
+        DIVERGES FROM THE PROPOSAL, which asked for `exists? equals true`. That
+        control CAN NEVER FAIL. botocore network-firewall
+        DescribeLoggingConfigurationResponse always returns FirewallArn, and the
+        stock resource's exists? is `!@res.nil? && !@res.empty?` over
+        `resp.to_h` — so it is true for any firewall that exists at all, logging or
+        not. LoggingConfiguration is the member that is absent when no logging is
+        configured, and Aws::Structure#to_h drops nil members, so the dynamic
+        method is never defined and method_missing returns NullResponse, whose
+        nil? is true — which is precisely what the not_empty matcher fails on.
+        ListFirewalls takes no required args (confirmed) and the plural registers
+        firewall_names.
+        REVIEW CORRECTION — the assertion was on `logging_configuration` alone,
+        which leaves one false-pass path open: an AwsResourceProbe answers neither
+        `nil?` nor `respond_to?(:empty?)`, so a LoggingConfiguration carrying an
+        EMPTY LogDestinationConfigs would have PASSED — logging structurally
+        present, nothing actually being written anywhere. The chain now descends
+        one level. LogDestinationConfigs is `required` on the LoggingConfiguration
+        shape in botocore, so it is present whenever the parent is; an empty Array
+        makes create_method define the reader as `[]`, which responds to empty? and
+        FAILS, and an absent parent still yields NullResponse (method_missing
+        returns self down the chain), which also fails. Dotted properties on a
+        create_resource_methods singular are the established shape here — six live
+        mappings on aws_elasticsearchservice_domain and two more on
+        aws_network_firewall_firewall use them.
+
+  # CKV2_AWS_71 was mapped here and was WITHDRAWN in adversarial review — see the
+  # `skipped:` section. The live aws_acm_certificate api spec cannot enumerate the
+  # certificates this rule is about.
+
+  # ------------------------------------------------------------------
+  # CKV2_AWS_73 — SQS encrypted with a CMK, not the AWS-managed key
+  # ------------------------------------------------------------------
+  CKV2_AWS_73:
+    aws_sqs_queue:
+      reader: stock
+      enumerate: {resource: aws_sqs_queues, ids: queue_urls}
+      assert:
+        resource: aws_sqs_queue
+        arg: queue_url
+        property: kms_master_key_id
+        satisfies: not_equals
+        value: alias/aws/sqs
+      note: >-
+        aws_sqs_queues registers queue_urls (field :queue_url, populated from
+        ListQueues — note that several of that resource's OTHER registered columns
+        name fields its fetch_data never writes, so only queue_urls and arns are
+        usable). The singular requires queue_url and sets attr_reader
+        :kms_master_key_id from GetQueueAttributes["KmsMasterKeyId"].
+        API DIVERGENCE, read it before trusting the result: Checkov's first `or`
+        branch is `kms_master_key_id not_exists`, so Checkov PASSES a queue with no
+        key at all. Deployed, an unencrypted queue and an SSE-SQS queue both return
+        no KmsMasterKeyId, and not_equals passes them too — faithful to the rule as
+        written, weaker than its title. The one case the title names, a queue on
+        the AWS-managed key, returns the literal 'alias/aws/sqs' and fails.
+        CAVEAT, found in review and inherent to the vendored pack:
+        aws_sqs_queues#fetch_data calls list_queues ONCE and never follows the
+        NextToken, and botocore documents ListQueues as returning "a maximum of
+        1,000 results". Past a thousand queues in a region the population is capped
+        silently. Under-enumeration, not a false pass, and an upstream fix.
+
+  # ------------------------------------------------------------------
+  # CKV_AWS_378 — load balancer target group does not speak HTTP
+  # ------------------------------------------------------------------
+  CKV_AWS_378:
+    aws_lb_target_group:
+      reader: stock
+      enumerate: {resource: aws_elasticloadbalancingv2_target_groups, ids: target_group_arns}
+      assert:
+        resource: aws_elasticloadbalancingv2_target_group
+        arg: target_group_arn
+        property: protocol
+        satisfies: not_equals
+        value: HTTP
+      note: >-
+        elbv2 DescribeTargetGroups takes no required args and the stock plural
+        passes none; target_group_arns is registered (field :target_group_arn) and
+        the singular requires target_group_arn, running create_resource_methods
+        over the target group hash, so `protocol` is real. A Lambda target group
+        has no Protocol at all; the method is then undefined, method_missing
+        returns NullResponse, and `should_not eq 'HTTP'` passes it — correct.
+        STRICTER THAN CHECKOV, deliberately: the rule's second branch forgives an
+        HTTP target group whose listener protocol is not HTTP, and listeners cannot
+        be enumerated without a parent load-balancer ARN (rule 2). Cleartext from
+        the load balancer to the target is the finding either way; use
+        exempt_assets where a boundary has accepted that risk.
+
+metadata:
+
+  CKV2_AWS_49:
+    severity: high
+    impact: 0.7
+    nist: [SC-8, SC-8 (1)]
+    nist_r4: [SC-8, SC-8 (1)]
+    cci: [CCI-002418, CCI-002421]
+    ksi: [KSI-SVC-CET]
+    nist_source: agent-drafted
+    rationale: >-
+      A DMS endpoint with SslMode "none" replicates the source database's rows in
+      cleartext across the network, including whatever the source considered
+      sensitive enough to encrypt at rest. Migration traffic is the one moment a
+      whole datastore crosses a network boundary in bulk, so it is the worst
+      traffic to leave unprotected.
+
+  CKV2_AWS_50:
+    severity: medium
+    impact: 0.5
+    nist: [CP-10, SC-5]
+    nist_r4: [CP-10, SC-5]
+    cci: [CCI-000553, CCI-002385]
+    ksi: [KSI-RPL-RCY]
+    nist_source: agent-drafted
+    rationale: >-
+      Without automatic failover a replication group's primary node is a single
+      point of failure: recovery waits for a human to promote a replica, and until
+      then every write fails. AutomaticFailover is also the setting that makes the
+      Multi-AZ topology an availability control rather than just extra cost.
+
+  CKV2_AWS_52:
+    severity: high
+    impact: 0.7
+    nist: [AC-3, IA-2]
+    nist_r4: [AC-3, IA-2]
+    cci: [CCI-000213, CCI-000764]
+    ksi: [KSI-IAM-CTL]
+    nist_source: agent-drafted
+    rationale: >-
+      Without fine-grained access control the only thing standing between a caller
+      and every index in the domain is the resource-based access policy and the
+      network path. Enabling it puts authentication and per-index, per-document
+      authorisation inside the engine, so a caller that reaches the endpoint is
+      still not automatically a reader of everything in it.
+
+  CKV2_AWS_54:
+    severity: high
+    impact: 0.7
+    nist: [SC-8, SC-8 (1), SC-13]
+    nist_r4: [SC-8, SC-8 (1), SC-13]
+    cci: [CCI-002418, CCI-002450]
+    ksi: [KSI-SVC-CET]
+    nist_source: agent-drafted
+    rationale: >-
+      SSLv3 is broken — POODLE recovers plaintext from it — and offering it on the
+      CloudFront-to-origin leg means an attacker who can influence the negotiation
+      downgrades the connection to a cipher suite that no longer protects the
+      traffic. The viewer leg being TLS 1.2 does not help when the origin leg is
+      not.
+
+  CKV2_AWS_55:
+    severity: medium
+    impact: 0.5
+    nist: [SC-28, SC-28 (1)]
+    nist_r4: [SC-28, SC-28 (1)]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER]
+    nist_source: agent-drafted
+    rationale: >-
+      The EMR security configuration is where at-rest encryption for EBS and S3,
+      in-transit encryption between nodes, and Kerberos authentication are declared.
+      A cluster without one has none of them, and an EMR cluster is by definition
+      processing a bulk copy of data that lives somewhere more protected.
+
+  CKV2_AWS_57:
+    severity: medium
+    impact: 0.5
+    nist: [IA-5, SC-12]
+    nist_r4: [IA-5, SC-12]
+    cci: [CCI-000196, CCI-002450]
+    ksi: [KSI-IAM-CTL, KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      A secret that is never rotated stays valid for as long as it exists, so the
+      window between a leak and its expiry is unbounded. Automatic rotation caps
+      that window without depending on anyone noticing the leak, which is the only
+      form of credential hygiene that survives contact with a real estate.
+
+  CKV2_AWS_59:
+    severity: low
+    impact: 0.3
+    nist: [CP-10, SC-5]
+    nist_r4: [CP-10, SC-5]
+    cci: [CCI-000553, CCI-002385]
+    ksi: [KSI-RPL-RCY]
+    nist_source: agent-drafted
+    rationale: >-
+      Without dedicated master nodes the cluster-management workload runs on the
+      same nodes serving queries, so one expensive search can cost the cluster its
+      quorum and take the domain — and anything logging to it — offline. Dedicated
+      masters isolate cluster state from data-plane load.
+
+  CKV2_AWS_63:
+    severity: medium
+    impact: 0.5
+    nist: [AU-2, AU-12]
+    nist_r4: [AU-2, AU-12]
+    cci: [CCI-000169, CCI-000172]
+    ksi: [KSI-MLA-LOG]
+    nist_source: agent-drafted
+    rationale: >-
+      A network firewall with no logging configuration inspects traffic and records
+      nothing about what it allowed or dropped. The control is still enforcing, but
+      there is no evidence it enforced, and no way to investigate what reached the
+      protected subnets — the firewall becomes unauditable exactly where the
+      boundary matters most.
+
+  # CKV2_AWS_71's metadata was withdrawn with its mapping. A NIST/CCI/KSI anchor on
+  # a check that asserts nothing is a compliance claim the profile has not earned —
+  # render_planned deliberately emits no tags, and this file must not smuggle them
+  # into control_metadata_derived.yml ahead of a reader that works.
+
+  CKV2_AWS_73:
+    severity: medium
+    impact: 0.5
+    nist: [SC-12, SC-28 (1)]
+    nist_r4: [SC-12, SC-28 (1)]
+    cci: [CCI-002475, CCI-002450]
+    ksi: [KSI-SVC-KMG]
+    nist_source: agent-drafted
+    rationale: >-
+      Queue payloads encrypted under the AWS-managed key alias/aws/sqs cannot have
+      their key policy, rotation schedule or grants controlled by the account, and
+      the key cannot be disabled to revoke access in an incident. A customer-managed
+      key makes those decisions the boundary's to make.
+
+  CKV_AWS_378:
+    severity: medium
+    impact: 0.5
+    nist: [SC-8, SC-8 (1)]
+    nist_r4: [SC-8, SC-8 (1)]
+    cci: [CCI-002418, CCI-002421]
+    ksi: [KSI-SVC-CET]
+    nist_source: agent-drafted
+    rationale: >-
+      A target group registered on HTTP carries requests — including the session
+      cookies and bearer tokens the load balancer just decrypted — in cleartext
+      across the VPC to the target. The perimeter TLS termination protects the
+      internet leg only; anything with a foothold on the path inside reads the
+      rest.
+
+fixes:
+
+  CKV2_AWS_49:
+    aws_dms_endpoint:
+      terraform: |
+        resource "aws_dms_endpoint" "example" {
+          endpoint_id   = "source-postgres"
+          endpoint_type = "source"
+          engine_name   = "postgres"
+
+          # none | require | verify-ca | verify-full
+          ssl_mode        = "verify-full"
+          certificate_arn = aws_dms_certificate.example.certificate_arn
+        }
+      cli: aws dms modify-endpoint --endpoint-arn <arn> --ssl-mode verify-full --certificate-arn <cert-arn>
+      note: >-
+        verify-ca and verify-full need a certificate imported into DMS first
+        (aws_dms_certificate / `aws dms import-certificate`); `require` encrypts
+        without validating the server certificate and is the weakest setting that
+        still satisfies the rule. Endpoints whose engine has no SSL concept
+        (s3, dynamodb, kinesis, kafka, elasticsearch, neptune, redshift) cannot
+        be fixed and belong in exempt_assets.
+
+  CKV2_AWS_50:
+    aws_elasticache_replication_group:
+      terraform: |
+        resource "aws_elasticache_replication_group" "example" {
+          replication_group_id = "example"
+          description          = "example"
+          node_type            = "cache.t4g.medium"
+
+          automatic_failover_enabled = true
+          multi_az_enabled           = true
+          num_cache_clusters         = 2
+        }
+      cli: aws elasticache modify-replication-group --replication-group-id <id> --automatic-failover-enabled --multi-az-enabled --apply-immediately
+      note: >-
+        Automatic failover requires at least two nodes in the group and is not
+        available on cache.t1.* node types. Applying immediately triggers a
+        failover test; without --apply-immediately the change lands in the next
+        maintenance window.
+
+  CKV2_AWS_52:
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "example"
+
+          advanced_security_options {
+            enabled                        = true
+            internal_user_database_enabled = false
+          }
+
+          # FGAC requires all three of these
+          encrypt_at_rest { enabled = true }
+          node_to_node_encryption { enabled = true }
+          domain_endpoint_options { enforce_https = true }
+        }
+      cli: aws opensearch update-domain-config --domain-name <name> --advanced-security-options Enabled=true
+      note: >-
+        Fine-grained access control cannot be enabled on an existing domain
+        in place on older engine versions — check the engine version first;
+        where it cannot, the domain must be recreated from a snapshot.
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "example"
+
+          advanced_security_options {
+            enabled                        = true
+            internal_user_database_enabled = false
+          }
+
+          encrypt_at_rest { enabled = true }
+          node_to_node_encryption { enabled = true }
+          domain_endpoint_options { enforce_https = true }
+        }
+
+  CKV2_AWS_54:
+    aws_cloudfront_distribution:
+      terraform: |
+        resource "aws_cloudfront_distribution" "example" {
+          origin {
+            domain_name = "origin.example.com"
+            origin_id   = "custom-origin"
+
+            custom_origin_config {
+              http_port              = 80
+              https_port             = 443
+              origin_protocol_policy = "https-only"
+
+              # SSLv3 removed; TLSv1.2 only
+              origin_ssl_protocols = ["TLSv1.2"]
+            }
+          }
+        }
+      cli: >-
+        aws cloudfront get-distribution-config --id <id> > dist.json, edit
+        OriginSslProtocols to remove SSLv3, then aws cloudfront
+        update-distribution --id <id> --distribution-config file://config.json
+        --if-match <etag>
+      note: >-
+        CloudFront has no single-field update API — the whole distribution config
+        must be read, edited and written back with the current ETag. Confirm the
+        origin actually negotiates TLS 1.2 before removing the older protocols,
+        or the origin becomes unreachable.
+
+  CKV2_AWS_55:
+    aws_emr_cluster:
+      terraform: |
+        resource "aws_emr_security_configuration" "example" {
+          name          = "example"
+          configuration = jsonencode({
+            EncryptionConfiguration = {
+              EnableInTransitEncryption = true
+              EnableAtRestEncryption    = true
+              AtRestEncryptionConfiguration = {
+                S3EncryptionConfiguration  = { EncryptionMode = "SSE-KMS", AwsKmsKey = aws_kms_key.emr.arn }
+                LocalDiskEncryptionConfiguration = { EncryptionKeyProviderType = "AwsKms", AwsKmsKey = aws_kms_key.emr.arn }
+              }
+              InTransitEncryptionConfiguration = {
+                TLSCertificateConfiguration = { CertificateProviderType = "PEM", S3Object = "s3://example/certs.zip" }
+              }
+            }
+          })
+        }
+
+        resource "aws_emr_cluster" "example" {
+          name                   = "example"
+          release_label          = "emr-7.1.0"
+          security_configuration = aws_emr_security_configuration.example.name
+        }
+      note: >-
+        No in-place fix: a cluster's security configuration is fixed at launch and
+        cannot be attached afterwards. The running cluster must be replaced.
+        Terminated clusters still appear in ListClusters for roughly two months and
+        should be exempted rather than remediated.
+
+  CKV2_AWS_57:
+    aws_secretsmanager_secret:
+      terraform: |
+        resource "aws_secretsmanager_secret" "example" {
+          name = "example"
+        }
+
+        resource "aws_secretsmanager_secret_rotation" "example" {
+          secret_id           = aws_secretsmanager_secret.example.id
+          rotation_lambda_arn = aws_lambda_function.rotator.arn
+
+          rotation_rules {
+            automatically_after_days = 30
+          }
+        }
+      cli: aws secretsmanager rotate-secret --secret-id <name> --rotation-lambda-arn <arn> --rotation-rules AutomaticallyAfterDays=30
+      note: >-
+        Rotation needs a rotation Lambda that can reach both Secrets Manager and
+        the credential's own service; AWS publishes templates per engine. Secrets
+        owned by another service (OwningService set, e.g. RDS-managed master
+        passwords) rotate under that service's control and should be exempted
+        rather than given a second rotator.
+
+  CKV2_AWS_59:
+    aws_opensearch_domain:
+      terraform: |
+        resource "aws_opensearch_domain" "example" {
+          domain_name = "example"
+
+          cluster_config {
+            instance_type            = "r6g.large.search"
+            instance_count           = 3
+            dedicated_master_enabled = true
+            dedicated_master_type    = "m6g.large.search"
+            dedicated_master_count   = 3
+            zone_awareness_enabled   = true
+          }
+        }
+      cli: aws opensearch update-domain-config --domain-name <name> --cluster-config DedicatedMasterEnabled=true,DedicatedMasterType=m6g.large.search,DedicatedMasterCount=3
+      note: >-
+        Use three dedicated masters, not two — two cannot form a quorum, so a
+        single master loss takes the cluster down anyway. The change is a blue/green
+        deployment and the domain stays available but is briefly degraded.
+    aws_elasticsearch_domain:
+      terraform: |
+        resource "aws_elasticsearch_domain" "example" {
+          domain_name = "example"
+
+          cluster_config {
+            instance_count           = 3
+            dedicated_master_enabled = true
+            dedicated_master_type    = "m5.large.elasticsearch"
+            dedicated_master_count   = 3
+            zone_awareness_enabled   = true
+          }
+        }
+
+  CKV2_AWS_63:
+    aws_networkfirewall_firewall:
+      terraform: |
+        resource "aws_networkfirewall_logging_configuration" "example" {
+          firewall_arn = aws_networkfirewall_firewall.example.arn
+
+          logging_configuration {
+            log_destination_config {
+              log_destination_type = "CloudWatchLogs"
+              log_type             = "FLOW"
+              log_destination = {
+                logGroup = aws_cloudwatch_log_group.firewall_flow.name
+              }
+            }
+
+            log_destination_config {
+              log_destination_type = "CloudWatchLogs"
+              log_type             = "ALERT"
+              log_destination = {
+                logGroup = aws_cloudwatch_log_group.firewall_alert.name
+              }
+            }
+          }
+        }
+      cli: aws network-firewall update-logging-configuration --firewall-name <name> --logging-configuration file://logging.json
+      note: >-
+        Configure both log types: ALERT records what the rule groups acted on,
+        FLOW records the traffic they saw. Only one destination change is accepted
+        per call, so adding both types out of band takes two calls.
+
+  CKV2_AWS_71:
+    aws_acm_certificate:
+      terraform: |
+        resource "aws_acm_certificate" "example" {
+          # Name each host explicitly rather than "*.example.com"
+          domain_name = "api.example.com"
+
+          subject_alternative_names = [
+            "app.example.com",
+            "admin.example.com",
+          ]
+
+          validation_method = "DNS"
+
+          lifecycle {
+            create_before_destroy = true
+          }
+        }
+      note: >-
+        No in-place fix: a certificate's domain names are set at issuance. Issue a
+        replacement naming the hosts explicitly, repoint every listener and
+        distribution at it, then delete the wildcard. Certificates ACM issued for
+        another service's use (ManagedBy CLOUDFRONT) cannot be replaced this way.
+
+  CKV2_AWS_73:
+    aws_sqs_queue:
+      terraform: |
+        resource "aws_kms_key" "sqs" {
+          description             = "CMK for SQS payload encryption"
+          enable_key_rotation     = true
+          deletion_window_in_days = 30
+        }
+
+        resource "aws_sqs_queue" "example" {
+          name                              = "example"
+          kms_master_key_id                 = aws_kms_key.sqs.arn
+          kms_data_key_reuse_period_seconds = 300
+        }
+      cli: aws sqs set-queue-attributes --queue-url <url> --attributes KmsMasterKeyId=<key-arn>
+      note: >-
+        Every producer and consumer principal needs kms:GenerateDataKey and
+        kms:Decrypt on the new key, and cross-account senders need it in the key
+        policy — switching the key before that grant exists silently breaks the
+        queue. Messages already in flight stay under the old key.
+
+  CKV_AWS_378:
+    aws_lb_target_group:
+      terraform: |
+        resource "aws_lb_target_group" "example" {
+          name     = "example"
+          port     = 443
+          protocol = "HTTPS"
+          vpc_id   = aws_vpc.example.id
+
+          health_check {
+            protocol = "HTTPS"
+            path     = "/healthz"
+          }
+        }
+      cli: >-
+        No in-place fix — a target group's protocol is immutable. Create a new
+        HTTPS target group, register the targets, then update the listener's
+        default action to forward to it.
+      note: >-
+        The targets must actually terminate TLS before the switch, which usually
+        means a certificate on the instance or task. Where the target cannot serve
+        TLS and the segment is accepted risk, exempt the target group rather than
+        leaving the finding unexplained.
+    aws_alb_target_group:
+      terraform: |
+        resource "aws_alb_target_group" "example" {
+          name     = "example"
+          port     = 443
+          protocol = "HTTPS"
+          vpc_id   = aws_vpc.example.id
+        }
+      note: aws_alb_target_group is an alias of aws_lb_target_group; the same fix applies.
+
+skipped:
+
+  CKV2_AWS_58: >-
+    Neptune deletion protection has no reader available to a data-only change.
+    inspec-aws ships no aws_neptune_* resource (confirmed by listing the vendored
+    pack), api_specs.yml has no aws_neptune_cluster entry, and aws-sdk-neptune is
+    NOT in tools/image_gems.txt — an api spec naming it would be refused, and if
+    it were not the LoadError would be rescued into unreadable_regions and read as
+    Not Applicable. Reading Neptune clusters through aws_rds_clusters was rejected:
+    DescribeDBClusters returns Aurora and DocumentDB clusters as well, the mapping
+    schema has no `where engine == neptune`, and the control would silently assert
+    against every RDS cluster in the account. Needs the gem in the image plus an
+    api spec, or a stock resource upstream.
+
+  CKV2_AWS_60: >-
+    The mapping itself is sound — aws_rds_instances.db_instance_identifiers ->
+    aws_rds_instance(db_instance_identifier:).copy_tags_to_snapshot — but the
+    CATALOGUE entry cannot be rendered. checkov_catalog.yml gives CKV2_AWS_60
+    `resources: []` and `tf_docs: null`, and render_controls.render_fix does
+    `list(entry['tf_docs'].values())[0]` whenever no fixes matched a declared
+    resource type, which raises AttributeError on None. Since resources is empty,
+    no fixes entry can ever match, so the crash is unavoidable from data alone and
+    it would abort the whole render, leaving controls/ half-written. Blocked on a
+    one-line guard in render_fix/render_stock (or on the catalogue learning this
+    check's resource types). Same blocker as CKV2_AWS_65 and CKV2_AWS_66.
+
+  CKV2_AWS_62: >-
+    S3 event notifications need a new predicate on aws_s3_bucket. The vendored
+    resource exposes no notification reader at all (its methods are bucket_acl,
+    bucket_ownership_controls, public?, has_access_logging_enabled?,
+    prevent_public_access?, has_default_encryption_enabled?,
+    has_versioning_enabled?, has_secure_transport_enabled?, bucket_policy,
+    bucket_lifecycle_rules, tags), and this slice writes data, not library code.
+    GetBucketNotificationConfiguration answers it in one call per bucket and
+    returns 200 with an empty body when there are none, so the predicate must
+    treat empty as false rather than nil.
+
+  CKV2_AWS_65: >-
+    Blocked exactly as CKV2_AWS_60 is: `resources: []` and `tf_docs: null` in
+    checkov_catalog.yml make render_fix raise AttributeError on None. The reader
+    side is confirmed ready — aws_s3_bucket#bucket_ownership_controls exists and
+    returns OwnershipControls.Rules[0].ObjectOwnership as a String, so
+    `equals BucketOwnerEnforced` with `scope: global` would be correct the moment
+    the renderer stops crashing. Note for whoever lands it: that reader indexes
+    [0] unguarded, so a bucket that never had ownership controls set raises
+    OwnershipControlsNotFoundError, which catch_aws_errors turns into a failed
+    resource — a visible failure, not a false pass.
+
+  CKV2_AWS_66: >-
+    Two independent blockers. (1) Same catalogue defect as CKV2_AWS_60/65:
+    `resources: []` and `tf_docs: null`, so render_fix raises. (2) There is no
+    reader. mwaa ListEnvironments returns NAMES ONLY and WebserverAccessMode lives
+    on GetEnvironment(Name).Environment, which api_specs cannot express — the spec
+    reader makes one list call and extracts fields, it never follows up per row —
+    and inspec-aws ships no aws_mwaa_* resource. Needs a small singular resource
+    written upstream or in libraries/.
+
+  CKV2_AWS_71: >-
+    WITHDRAWN IN ADVERSARIAL REVIEW. The assertion itself is sound — the live
+    aws_acm_certificate api spec declares `id: domain_name`, so AwsApiAssets#row_for
+    sets row[:id] to the domain name as a never-nil String and `excludes '*'` is a
+    correct substring test on it. What is NOT sound is the population it runs over.
+    AwsApiAssets#collect invokes the spec's list call with NO arguments, and botocore
+    acm documents the default for ListCertificates' `Includes.keyTypes` filter as
+    "Default filtering returns only RSA_1024 and RSA_2048 certificates that have at
+    least one domain." So every EC certificate (EC_prime256v1, EC_secp384r1,
+    EC_secp521r1) and every RSA_3072/RSA_4096 certificate is invisible to the
+    enumeration — permanently, in every account, regardless of size. A wildcard
+    certificate on an EC key is exactly the modern ALB/CloudFront default, and it
+    would render as a clean pass; an account whose certificates are ALL EC renders
+    the control NOT APPLICABLE — "this rule does not apply here" for an account full
+    of certificates. That is the failure mode the api reader's unreadable_regions
+    guard exists to prevent, and this one walks past it because the list call
+    SUCCEEDS. Fixing it means teaching api_specs to carry list arguments (or adding
+    a keyTypes-complete spec), which is a change to a LIVE spec and to the reader —
+    library work this slice cannot do, and merge_proposals correctly refuses a
+    staging file that redefines a live spec. Two notes for whoever lands it: (1) the
+    same defect makes the live spec's `key_algorithm` field near-vacuous, since it
+    can only ever report RSA_1024 or RSA_2048; (2) once the enumeration is complete,
+    CertificateSummary already carries SubjectAlternativeNameSummaries, so the SAN
+    half of this rule needs no DescribeCertificate call — only the any-element verb
+    named in the CKV2_AWS_72 entry below. The Terraform fix example is retained in
+    `fixes:` so it is not lost; an unreferenced fix entry is precedented here.
+
+  CKV2_AWS_72: >-
+    Needs a verb that does not exist. @custom_origin_protocol_policies is an ARRAY
+    with one entry per custom origin, and the requirement is "no element of this
+    array is in [http-only, match-viewer]". `not_in_list` compares a SCALAR against
+    a list — it renders `should_not be_in [...]`, and an Array is never `in` a list
+    of Strings, so the assertion passes for every distribution including the
+    non-compliant ones: a control that cannot fail. Needs an any-element /
+    set-intersection verb (`excludes_any`, or `not_in_list` taught to distribute
+    over an array subject) in matcher_for. The same verb closes the
+    subject_alternative_names half of CKV2_AWS_71.
+
+  CKV_AWS_57: >-
+    Public-WRITE ACL needs a new predicate on aws_s3_bucket. The honest read is
+    GetBucketAcl grants — exposed as `bucket_acl`, an Array of Aws::S3::Types::Grant
+    — failing when a grant's Grantee.URI is the AllUsers group AND its Permission
+    is WRITE, WRITE_ACP or FULL_CONTROL. No verb expresses a two-field predicate
+    over an array of structs, and this slice cannot add the library method.
+    Explicitly NOT mapped to the existing `public?` property that CKV_AWS_20 uses:
+    that wraps GetBucketPolicyStatus plus an any-AllUsers-grant test, so it reports
+    on the bucket POLICY and on READ grants too — shipping it here would produce a
+    second control asserting a different fact under this rule's id.
+
+  CKV_AWS_144: >-
+    S3 cross-region replication needs a new predicate on aws_s3_bucket; no
+    replication reader exists on the vendored resource. GetBucketReplication ->
+    ReplicationConfiguration.Rules[].Status == "Enabled" answers it, and the
+    predicate must rescue ReplicationConfigurationNotFoundError to false — the API
+    raises rather than returning empty when replication was never configured, and
+    an unrescued raise turns "no replication", which IS the finding, into an
+    errored control.
+
+  CKV_AWS_145: >-
+    Needs a new reader on aws_s3_bucket that returns the ALGORITHM, not a boolean.
+    The vendored has_default_encryption_enabled? answers only "is any default
+    encryption set", which since 2023 is true for every bucket — mapping to it
+    would ship a control that can never fail. The rule is specifically KMS versus
+    SSE-S3, which is
+    GetBucketEncryption -> ServerSideEncryptionConfiguration.Rules[0]
+    .ApplyServerSideEncryptionByDefault.SSEAlgorithm as a String. There is a real
+    failing population here (AES256 is the default), so it is worth writing; it
+    just is not a data change.

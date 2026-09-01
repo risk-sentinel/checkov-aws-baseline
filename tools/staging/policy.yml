@@ -1,0 +1,839 @@
+# Slice: policy (CKV2_AWS_70, CKV_AWS_33, 61, 63, 70, 72, 93, 168, 169, 364,
+#                385, 387, 393)
+#
+# Outcome: 6 mapped, 7 skipped, 2 new policy_specs sources (KMS, SNS).
+#
+# The brief's split was 3 already-rendered + 3 data-row-only + 9 needing one new
+# source each + CKV2_AWS_70 unreachable. Verifying it moved four checks:
+#
+#   * The 3 data-row-only checks are confirmed: CKV_AWS_61 and CKV_AWS_393 ride
+#     the live aws_iam_role source, CKV_AWS_63 rides the live aws_iam_policy
+#     source, and all three predicates (no_account_root_principal,
+#     gh_oidc_sub_safe, no_wildcard_action) are in the PREDICATES list.
+#
+#   * S3 (CKV_AWS_70) does NOT work, for a reason that is not the predicate.
+#     s3:GetBucketPolicy models `Policy` as the operation payload, and the Ruby
+#     SDK materialises a payload blob as a StringIO, not a String. Measured in
+#     the image, aws-sdk-s3 1.224.0:
+#
+#         c.stub_responses(:get_bucket_policy, policy: '{"Statement":[]}')
+#         c.get_bucket_policy(bucket: "b").to_h
+#         => {policy: #<StringIO:0x00007fffe224e570>}
+#
+#     libraries/aws_policy_documents.rb#resolve_document returns `"#{value}"`,
+#     so every bucket would hand the parser the literal string
+#     "#<StringIO:0x...>", which is not JSON before or after percent-decoding.
+#     Every bucket in the account becomes UNDECIDABLE and the control fails 100%
+#     having read nothing. That fails loudly rather than silently, which is the
+#     right posture — but it is not a check, so S3 is skipped and reported
+#     rather than shipped. See the reader note at the bottom of this header.
+#
+#   * SQS (CKV_AWS_72, 168, 387) does not work either, and for a third reason.
+#     sqs:ListQueues returns `QueueUrls` as a list of STRINGS, confirmed against
+#     the model in the image (ListShape whose member is a StringShape), and
+#     libraries/aws_policy_documents.rb#list_items does
+#
+#         Array(page.public_send(@spec["collection"])).each { |item| items << item.to_h }
+#
+#     String has no #to_h. The NoMethodError is raised inside rows_for, whose
+#     rescue names only Aws::Errors::ServiceError, Seahorse NetworkingError and
+#     ArgumentError, so it escapes the constructor and errors the WHOLE control
+#     — not one asset. Every other source in this slice returns SDK structs, so
+#     this is specific to SQS and to any future source whose collection is a
+#     scalar list. ListQueues has no other collection member to name
+#     (ListQueuesResult is QueueUrls + NextToken), so no spec spelling avoids it.
+#
+#   * CKV_AWS_364 (Lambda) is not a missing SOURCE, it is a missing PREDICATE,
+#     and mapping it onto one of the six would produce a control that cannot
+#     fail. See its skip entry.
+#
+#   * CKV_AWS_93 needs the seventh predicate the brief names. Skipped.
+#
+# So of the brief's "9 need one new source", 2 are real (KMS, SNS), 4 are
+# blocked in the READER rather than in the data (S3 x2, SQS x3 — six checks
+# across five rows), and 1 needs a predicate.
+#
+# Every field below was resolved against the SDK models in
+# risksentinel/sparc-auditor:v0.5.0, not against the Terraform argument names:
+#
+#   kms:ListKeys        -> keys[]           members [key_id, key_arn]
+#   kms:GetKeyPolicy    -> in  [key_id, policy_name] (only key_id required)
+#                          out [policy, policy_name]; `policy` is a String
+#                          errors: NotFoundException, InvalidArnException,
+#                                  DependencyTimeoutException, KMSInternalException,
+#                                  KMSInvalidStateException
+#   sns:ListTopics      -> topics[]         members [topic_arn]  (ONLY that)
+#   sns:GetTopicAttributes -> in [topic_arn], out [attributes]; attributes is a
+#                          String-keyed map and `attributes.Policy` resolves
+#                          through dig_path's `node[key.to_sym] || node[key]`
+#                          fallback — verified against a stubbed real response.
+#                          errors: InvalidParameterException, InternalErrorException,
+#                                  NotFoundException, AuthorizationErrorException,
+#                                  InvalidSecurityException
+#
+# Neither new source declares `absent_when`, and that is deliberate rather than
+# an omission: a KMS key ALWAYS has a key policy (AWS creates the default one at
+# CreateKey) and an SNS topic ALWAYS has a Policy attribute. There is no error
+# on either call that means "this asset has no policy", so every error is
+# undecidable — which is what we want, because NotFoundException on either call
+# means the asset vanished mid-scan or the id was wrong, and
+# AuthorizationErrorException means we were denied. Neither is evidence of
+# compliance. For the same reason neither declares
+# document_absent_is_no_policy: an absent `policy` / `attributes.Policy` member
+# means the read was wrong, not that the resource grants nothing.
+#
+# Two reader defects found while verifying, both worth their own fix and neither
+# fixable from a staging file:
+#
+#   1. list_items assumes every collection element responds to #to_h. A scalar
+#      collection (sqs:ListQueues, and s3control/route53-style list-of-ids calls)
+#      errors the whole control. A one-line `item.respond_to?(:to_h) ? item.to_h
+#      : item` plus a dig_path that tolerates a non-Hash item would unlock the
+#      three SQS checks.
+#   2. resolve_document stringifies with `"#{value}"`, which is correct for a
+#      String member and wrong for an SDK payload blob (StringIO). Calling
+#      `value.read` when it responds to :read would unlock the two S3 checks.
+#      Note that S3 would then still need per-bucket region handling:
+#      aws-sdk-s3 1.224.0's Redirects plugin follows 307 only, so a bucket
+#      outside the client's region answers GetBucketPolicy with a 301
+#      PermanentRedirect and stays undecidable. `Bucket` now carries a
+#      `bucket_region` member on ListBuckets, so the fix is available — but it
+#      needs a reader that can build a client per ITEM, not per region.
+#
+# One live-data caveat recorded rather than worked around: kms:ListKeys returns
+# AWS-managed keys as well as customer-managed ones, and there is no list-time
+# filter (KeyManager comes from kms:DescribeKey, a second call the spec shape
+# has no room for). This is the analogue of iam:ListPolicies' Scope=Local
+# problem. It is EXPECTED not to produce the same noise, because the documented
+# `aws/<service>` default policies condition their wildcard principal on
+# kms:CallerAccount / kms:ViaService and no_wildcard_principal takes any
+# conditioned statement out of scope — but that is a claim about live data, and
+# unlike everything else in this file it was NOT verified: it cannot be, without
+# an account to read. It is asserted here so the first exec can confirm or
+# refute it. If some AWS-managed key policy turns out to carry an unconditioned
+# `*`, this control reports it, which is the safe direction (over-reporting, not
+# a silent pass) and is the reason they are left in scope rather than filtered.
+#
+# Divergences from Checkov 3.3.16, read out of the check sources rather than
+# inferred from the catalogue's `name` strings. None of them is a silent pass
+# that this file could remove by choosing a different predicate — five of the
+# six are this profile being STRICTER, and the two that are not are disclosed in
+# the affected check's `what` so the rendered control does not overstate itself:
+#
+#   CKV_AWS_33  KMSKeyWildcardPrincipal matches the bare `*` EXACTLY and skips
+#               only Deny. no_wildcard_principal matches any principal
+#               CONTAINING `*` and requires Effect Allow. Stricter on the first,
+#               narrower on the second — but a deployed policy with no Effect
+#               does not exist, since IAM refuses to store one.
+#   CKV_AWS_61  IAMRoleAllowAssumeFromAccount fails on `\d{12}` or
+#               `arn:aws:iam::\d{12}:root`, skipping Deny. That is
+#               no_account_root_principal exactly, and ours is additionally
+#               partition-agnostic. Confirmed against the check source.
+#   CKV_AWS_63  IAMStarActionPolicyDocument flags `*` in Action and DEFAULTS a
+#               missing Effect to Allow; ours also flags `*:*` but requires an
+#               explicit Allow. Same non-existent-document caveat as CKV_AWS_33.
+#   CKV_AWS_169 SNSTopicPolicyAnyPrincipal delegates to cloudsplaining's
+#               internet_accessible_actions, which excuses a wildcard principal
+#               only under a CURATED allow-list of restrictive condition keys.
+#               no_wildcard_principal excuses ANY Condition. So a topic granting
+#               `*` under a non-restrictive condition (DateGreaterThan, a
+#               userAgent StringLike) PASSES here and FAILS in Checkov. That is
+#               a real false-pass path; it is the shared predicate's documented
+#               design, already live under CKV_AWS_32 and CKV_AWS_60, and it is
+#               disclosed in this check's `what` the same way CKV_AWS_32's is.
+#   CKV_AWS_385 SNSCrossAccountAccess fails on ANY concrete `arn:aws:iam::`
+#               principal with no Condition — including one in the SCANNING
+#               account. no_cross_account_principal_without_condition compares
+#               against sts:GetCallerIdentity and reports only genuinely
+#               external ones. Narrower than Checkov, and deliberately so (the
+#               rule's name is about cross-account access), but it is NOT
+#               "strictly stronger" and this file no longer says it is.
+#   CKV_AWS_393 GithubActionsOIDCTrustPolicyOnRole accepts an ORG-WIDE
+#               `repo:<org>/*`: gh_repo_regex is `(\$\{)?[\w-]+(\.[\w-]+)*(\})?/[^/]+`
+#               and `acme/*` matches it. gh_oidc_sub_safe REJECTS it. Stricter,
+#               on purpose — but the earlier draft of this file claimed Checkov
+#               rejects it too, which is false, and the control's `what` is the
+#               place an assessor reads that claim.
+
+mappings:
+
+  CKV_AWS_33:
+    aws_kms_key:
+      reader: policy
+      predicate: no_wildcard_principal
+      note: 'Checkov parses the `policy` argument on aws_kms_key. Deployed, the document
+        comes from kms:GetKeyPolicy(KeyId, PolicyName="default") per key enumerated by
+        kms:ListKeys — both confirmed against the KMS model in the auditor image, where
+        ListKeys returns KeyListEntry{KeyId, KeyArn} and GetKeyPolicy returns a plain
+        String `Policy`. A KMS key always has a policy, so the spec declares no
+        absent_when: NotFoundException, KMSInvalidStateException or a denial
+        (KMS models NotFoundException, InvalidArnException, DependencyTimeoutException,
+        KMSInternalException and KMSInvalidStateException on this call — AuthorizationError
+        is SNS''s spelling, not KMS''s) means the read failed, not that the key grants
+        nothing, and an unreadable key is undecidable. AWS-managed keys are in scope
+        because ListKeys cannot exclude them; their default policies are EXPECTED to
+        condition every wildcard principal on kms:CallerAccount / kms:ViaService, which
+        takes them out of this predicate''s scope, but that is the one claim in this file
+        resting on documentation rather than on a verified response.'
+      stronger: 'Stronger than Checkov: the key policy is the only thing standing between
+        a key and every principal in every account, and it is routinely widened in the
+        console or by a service that "helped" — a grant added after the apply is invisible
+        to the HCL scan and visible here. It also covers keys the Terraform never declared.'
+
+  CKV_AWS_61:
+    aws_iam_role:
+      reader: policy
+      predicate: no_account_root_principal
+      note: 'The trust policy, not a permissions policy, and the same live aws_iam_role
+        source CKV_AWS_60 already uses — iam:ListRoles returns AssumeRolePolicyDocument
+        inline, URL-encoded, and the parser percent-decodes on JSON failure without being
+        told. The predicate matches a bare 12-digit account or an arn:aws*:iam::<acct>:root
+        principal on any non-Deny statement, partition-agnostic so a GovCloud trust is
+        judged the same way. Note that it flags an OWN-account root trust as well as a
+        foreign one: the deployed document cannot say which was intended, and Checkov''s
+        rule is about the breadth of the grant rather than about whose account it is.'
+      stronger: 'Stronger than Checkov: an account-root trust is the classic thing added
+        by hand to "just make it work" during an incident and never narrowed afterwards,
+        so it is disproportionately likely to exist only in the deployed document.'
+
+  CKV_AWS_63:
+    aws_iam_policy:
+      reader: policy
+      predicate: no_wildcard_action
+      note: 'The same live aws_iam_policy source CKV_AWS_62 uses, with the broader
+        predicate: CKV_AWS_62 needs ''*'' in BOTH Action and Resource, this one needs it
+        in Action alone. Customer-managed policies only — policy_specs pins
+        iam:ListPolicies to Scope=Local, because the ~1,200 AWS-managed policies include
+        several that legitimately carry ''*'' on ''*'' and that this account cannot change.
+        The default version''s document comes from iam:GetPolicyVersion(PolicyArn,
+        VersionId) with VersionId taken from the list item''s DefaultVersionId. A prefix
+        wildcard such as s3:Get* is deliberately NOT flagged: the predicate matches only
+        the bare ''*'' and ''*:*'', which is Checkov''s rule and is the only version of it
+        that does not fire on nearly every policy in existence.'
+      stronger: 'Stronger than Checkov: it reads the version IAM is actually serving.
+        A policy whose default version was rolled forward in the console after the apply
+        has an HCL document that says one thing and a live document that says another,
+        and only the live one is enforced.'
+
+  CKV_AWS_169:
+    aws_sns_topic_policy:
+      reader: policy
+      predicate: no_wildcard_principal
+      note: 'Enumerated by sns:ListTopics, whose Topic struct carries topic_arn and
+        nothing else, then sns:GetTopicAttributes(TopicArn) — the Policy attribute of the
+        returned String-keyed attribute map. Both confirmed against the SNS model in the
+        auditor image. The default policy AWS writes at CreateTopic names Principal.AWS
+        "*" but constrains it with StringEquals on AWS:SourceOwner, and this predicate
+        takes any conditioned statement out of scope, so an untouched topic passes and
+        the finding is reserved for a genuinely unconditioned grant.'
+      stronger: 'Stronger than Checkov: a topic policy is one of the few documents AWS
+        itself rewrites — subscribing a queue, or letting a bucket publish events, appends
+        a statement that never appears in the Terraform. Reading the deployed document is
+        the only way to see what those appended statements actually allow.'
+
+  CKV_AWS_385:
+    aws_sns_topic_policy:
+      reader: policy
+      predicate: no_cross_account_principal_without_condition
+      note: 'The same enumeration and the same fetched document as CKV_AWS_169, with the
+        predicate that looks for a CONCRETE principal in another account rather than a
+        wildcard one. "Another account" is decided against sts:GetCallerIdentity, which
+        the reader resolves once per run — the Terraform scan has no equivalent, so this
+        is a question Checkov cannot answer at all. The AWS-written default statement is
+        conditioned and is therefore out of scope, as is any statement a person
+        deliberately constrained.'
+      stronger: 'Different from Checkov rather than uniformly stronger, and the
+        difference runs both ways. Stronger: the HCL scan sees an account number as an
+        opaque string, while this compares it against sts:GetCallerIdentity and reports
+        only genuinely external accounts, in any partition; and it sees the cross-account
+        statements a subscription flow appended that the Terraform never described.
+        Narrower: Checkov''s SNSCrossAccountAccess fails on any concrete arn:aws:iam::
+        principal with no Condition INCLUDING one in the scanning account, and this does
+        not report those. That narrowing is deliberate — the rule''s subject is
+        cross-account access — but it is a narrowing, so an assessor comparing the two
+        results will find same-account unconditioned grants here that Checkov flagged.'
+
+  CKV_AWS_393:
+    aws_iam_role:
+      reader: policy
+      predicate: gh_oidc_sub_safe
+      note: 'The live aws_iam_role trust-policy source again. The predicate is inert on
+        statements with no token.actions.githubusercontent.com federated principal — they
+        return no offence, which is a PASS for that statement and leaves the role''s other
+        statements judged — so in an account with no GitHub OIDC roles this control passes
+        without a finding, exactly as Checkov does on Terraform declaring none. Where such
+        a role does exist, the trust must carry a StringEquals/StringLike (including the
+        ForAllValues:/ForAnyValue: forms) Condition pinning ...:sub to a concrete
+        repo:<org>/<repo>. A Null condition is explicitly NOT accepted: it only requires
+        the claim to be present, which every GitHub token satisfies.'
+      stronger: 'Stronger than Checkov twice over, and the second one is a deliberate
+        divergence rather than a consequence of reading live data. First: the failure
+        mode this rule exists for is a trust policy widened after the apply — an org-wide
+        repo:acme/* pasted in to unblock a second repository; the HCL still says
+        repo:acme/widgets and the deployed document is what STS enforces. Second:
+        Checkov 3.3.16 PASSES repo:acme/* — its gh_repo_regex accepts any org/<anything>
+        value — and gh_oidc_sub_safe fails it, because an org-wide sub is assumable from
+        every repository in the organisation and the organisation is not the trust
+        boundary the role was written for. A run of both tools will therefore disagree on
+        exactly that case, and this control is the stricter of the two.'
+
+policy_specs:
+
+  aws_kms_key:
+    # kms:ListKeys is regional and returns KeyListEntry{KeyId, KeyArn} — both
+    # members confirmed against the KMS model in the auditor image. The policy
+    # needs a second call: GetKeyPolicy's `Policy` is a plain String (NOT a
+    # payload blob, unlike s3:GetBucketPolicy), so resolve_document's `"#{value}"`
+    # produces the document itself.
+    #
+    # PolicyName is optional in the current API and "default" is its only legal
+    # value; it is passed as a literal rather than omitted so the call is
+    # explicit about which of a key's policies is being read.
+    #
+    # No absent_when, deliberately. Every KMS key has a key policy from the
+    # moment it is created, so there is no error on this call that means "no
+    # policy here". NotFoundException means the key went away or the id was
+    # wrong; KMSInvalidStateException means it is in a state we could not read;
+    # an authorization failure means we were denied. All three are undecidable
+    # and must fail, because "we could not look" is not evidence of compliance.
+    gem: aws-sdk-kms
+    client: Aws::KMS::Client
+    scope: regional
+    list: list_keys
+    collection: keys
+    id: key_id
+    arn: key_arn
+    fetch:
+      call: get_key_policy
+      args:
+        key_id:
+          from: id
+        policy_name: default
+      document: policy
+
+  aws_sns_topic_policy:
+    # sns:ListTopics returns Topic structs carrying topic_arn and NOTHING else —
+    # there is no name member to use as an id, so id and arn are the same value.
+    # That is not a transliteration of the Terraform `arn` argument; it is the
+    # only member the shape has.
+    #
+    # GetTopicAttributes returns `attributes`, a String-keyed map, and the
+    # document path indexes into it. dig_path tries the symbol first and falls
+    # back to the string key, and that fallback was verified against a stubbed
+    # real response ({attributes: {"Policy" => ...}}) rather than assumed.
+    #
+    # No absent_when, for the same reason as KMS: SNS writes a default Policy
+    # attribute at CreateTopic, so a topic without one does not exist.
+    # AuthorizationErrorException in particular must stay undecidable — a denied
+    # GetTopicAttributes reading as "no policy" would make the topics we cannot
+    # see the ones that look cleanest.
+    gem: aws-sdk-sns
+    client: Aws::SNS::Client
+    scope: regional
+    list: list_topics
+    collection: topics
+    id: topic_arn
+    arn: topic_arn
+    fetch:
+      call: get_topic_attributes
+      args:
+        topic_arn:
+          from: arn
+      document: attributes.Policy
+
+metadata:
+
+  CKV_AWS_33:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-3
+    - AC-6
+    - SC-12
+    nist_r4:
+    - AC-3
+    - AC-6
+    - SC-12
+    cci:
+    - CCI-000213
+    - CCI-000225
+    ksi:
+    - KSI-SVC-KMG
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: >-
+      aws_kms_key: the key policy has no Allow statement whose Principal is '*', or whose
+      Principal.AWS contains '*', without ANY Condition on the statement (Checkov's
+      KMSKeyWildcardPrincipal matches the bare '*' exactly and skips only Deny
+      statements; this matches any principal containing '*' — stricter — and requires an
+      explicit Effect Allow, which is narrower on a document IAM would refuse to store)
+    rationale: A key policy is the only authority on a KMS key — an IAM policy cannot
+      grant use of a key the key policy does not already delegate. So a wildcard
+      principal with no condition is not one layer of a defence in depth, it is the
+      whole boundary, and every ciphertext the key protects becomes decryptable by any
+      caller who can reach the API. Encryption at rest is then a control the system
+      claims and does not have.
+
+  CKV_AWS_61:
+    severity: medium
+    impact: 0.5
+    nist:
+    - AC-3
+    - AC-6
+    nist_r4:
+    - AC-3
+    - AC-6
+    cci:
+    - CCI-000213
+    - CCI-000225
+    ksi:
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: 'aws_iam_role: the assume_role_policy has no statement whose Principal.AWS is
+      a bare 12-digit account id or an arn:aws:iam::<account>:root ARN — the role is
+      assumable by named principals, not by an entire account'
+    rationale: Trusting an account root delegates the decision about who may assume the
+      role to that account's own IAM, which means the permissions the role carries are
+      available to every identity in that account, present and future, including ones
+      created long after anyone reviewed this trust. The role's blast radius stops being
+      a property of this account's configuration and becomes a property of somebody
+      else's.
+
+  CKV_AWS_63:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-6
+    - CM-7
+    nist_r4:
+    - AC-6
+    - CM-7
+    cci:
+    - CCI-000225
+    - CCI-000381
+    ksi:
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: >-
+      aws_iam_policy and the inline-policy types: no policy document has an Allow
+      statement whose Action is the bare '*' or '*:*' (a prefixed wildcard such as
+      s3:Get* is not this rule). Checkov flags '*' alone and treats a statement with no
+      Effect as an Allow; this also flags '*:*' and requires an explicit Allow. Only the
+      customer-managed aws_iam_policy documents are read here — iam:ListPolicies is
+      pinned to Scope=Local and the four inline-policy types have no enumeration in this
+      profile, so they are unassessed rather than passing
+    rationale: An Allow on every action grants every operation in every AWS service the
+      account can reach, including the IAM calls that would let the holder grant itself
+      anything else. Even scoped to a single resource it defeats least privilege, because
+      the set of things it permits grows silently every time AWS ships a new API, and
+      nobody re-reviews a policy because a service added an action.
+
+  CKV_AWS_169:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-3
+    - AC-6
+    nist_r4:
+    - AC-3
+    - AC-6
+    cci:
+    - CCI-000213
+    - CCI-000225
+    ksi:
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: >-
+      aws_sns_topic_policy: the topic policy has no Allow statement whose Principal is
+      '*', or whose Principal.AWS contains '*', without ANY Condition on the statement
+      (Checkov runs cloudsplaining's internet_accessible_actions, which is the same test
+      with a CURATED allow-list of restrictive condition keys — so a topic granting '*'
+      under a condition that does not actually narrow it, a date or a userAgent match,
+      passes here and fails in Checkov)
+    rationale: >-
+      An unconditioned wildcard principal on a topic policy lets any AWS account, and an
+      anonymous caller, subscribe to the topic or publish to it. Subscribing exfiltrates
+      every message the topic will ever carry — and topics carry alarms, order events and
+      operational detail that describe the system to an attacker. Publishing is worse: it
+      injects messages into whatever the subscribers do next.
+
+  CKV_AWS_385:
+    severity: medium
+    impact: 0.5
+    nist:
+    - AC-3
+    - AC-6
+    - CA-3
+    nist_r4:
+    - AC-3
+    - AC-6
+    - CA-3
+    cci:
+    - CCI-000213
+    - CCI-000225
+    ksi:
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: >-
+      aws_sns_topic_policy: no Allow statement names a concrete principal in an account
+      other than the one being scanned without any Condition on the statement. Checkov's
+      SNSCrossAccountAccess is broader in one direction and narrower in another: it fails
+      on ANY concrete arn:aws:iam:: principal with no Condition, including one in the
+      scanning account, and it matches only the commercial partition's ARN prefix. This
+      compares the principal's account against sts:GetCallerIdentity and reports only
+      genuinely external ones, in any partition — so a same-account unconditioned role
+      grant passes here and fails in Checkov
+    rationale: A cross-account grant is an interconnection with a system this
+      authorization boundary does not contain, and an unconditioned one has no
+      documented limit on what the far side may do or for how long. It is the kind of
+      access that outlives the project that needed it — the far account keeps the grant
+      after the integration is retired, and nothing in this account's own configuration
+      records that the relationship ever ended.
+
+  CKV_AWS_393:
+    severity: high
+    impact: 0.7
+    nist:
+    - AC-3
+    - AC-6
+    - IA-8
+    nist_r4:
+    - AC-3
+    - AC-6
+    - IA-8
+    cci:
+    - CCI-000213
+    - CCI-000804
+    ksi:
+    - KSI-IAM-CTL
+    nist_source: agent-drafted
+    what: >-
+      aws_iam_role: every trust statement naming the token.actions.githubusercontent.com
+      federated principal carries a StringEquals or StringLike Condition pinning
+      token.actions.githubusercontent.com:sub to a concrete repo:<org>/<repo> value — not
+      '*', not a bare Null presence test, and not one of the abusable first claims
+      (workflow:, environment:, ref:, context:, head_ref:, base_ref:). Checkov's
+      GithubActionsOIDCTrustPolicyOnRole fails a GH-OIDC trust with no Condition at all,
+      a sub of '*', a sub with no value, a 'claim:*' assertion, an abusable first claim,
+      or a repo: value that is not org/repo-shaped — but its gh_repo_regex ACCEPTS an
+      org-wide repo:<org>/*, which this control rejects. That is a deliberate
+      strengthening, not a reproduction of Checkov's rule
+    rationale: >-
+      A GitHub Actions OIDC trust that does not pin the repository can be assumed from any
+      workflow GitHub will mint a token for, which in the unpinned case is every repository
+      on github.com. An attacker needs no credential and no access to this account — a
+      public repository and a workflow file are enough. A Null condition on the sub claim
+      looks like a constraint and is not one: it only asserts the claim is present, which
+      every GitHub token satisfies.
+
+fixes:
+
+  CKV_AWS_33:
+    aws_kms_key:
+      terraform: |
+        resource "aws_kms_key" "app" {
+          description = "Application data key"
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Sid       = "AllowAccountAdministration"
+                Effect    = "Allow"
+                Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+                Action    = "kms:*"
+                Resource  = "*"
+              },
+              {
+                Sid       = "AllowApplicationUse"
+                Effect    = "Allow"
+                Principal = { AWS = aws_iam_role.app.arn }
+                Action    = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
+                Resource  = "*"
+              },
+            ]
+          })
+        }
+      cli: |
+        aws kms put-key-policy --key-id <key-id> --policy-name default --policy file://key-policy.json
+      note: >-
+        put-key-policy REPLACES the whole document, so read the current one with
+        `aws kms get-key-policy --key-id <key-id> --policy-name default --query Policy
+        --output text` and edit that rather than writing a new file from scratch. Do not
+        remove the account-root administration statement while narrowing the others: a
+        key whose policy delegates to nobody cannot be managed by IAM at all, and
+        recovering one takes an AWS support case. If the wildcard principal is genuinely
+        required — a key a partner account must use — constrain it instead of removing it:
+        a Condition on kms:CallerAccount, aws:PrincipalOrgID or kms:ViaService takes the
+        statement out of this control's scope, which is the same allowance Checkov makes.
+
+  CKV_AWS_61:
+    aws_iam_role:
+      terraform: |
+        resource "aws_iam_role" "app" {
+          name = "app"
+
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Effect    = "Allow"
+                Principal = { AWS = "arn:aws:iam::${var.partner_account_id}:role/partner-integration" }
+                Action    = "sts:AssumeRole"
+                Condition = {
+                  StringEquals = { "sts:ExternalId" = var.external_id }
+                }
+              },
+            ]
+          })
+        }
+      cli: |
+        aws iam update-assume-role-policy --role-name <role-name> --policy-document file://trust-policy.json
+      note: >-
+        Name the role or user that actually assumes this role rather than the account it
+        lives in. Where the far side genuinely cannot commit to a single principal ARN,
+        keep the account-level trust but add sts:ExternalId (or aws:PrincipalOrgID for an
+        organization member) — that is the documented AWS pattern for third-party access
+        and it is what turns "anyone in that account" into "the integration we agreed to".
+        This control reports an own-account root trust too, because the deployed document
+        cannot say which account was intended; an own-account root trust is still the
+        whole account and is still worth narrowing.
+
+  CKV_AWS_63:
+    aws_iam_policy:
+      terraform: |
+        resource "aws_iam_policy" "app_s3" {
+          name = "app-s3"
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Effect   = "Allow"
+                Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+                Resource = "${aws_s3_bucket.app.arn}/*"
+              },
+            ]
+          })
+        }
+      cli: |
+        aws iam create-policy-version --policy-arn <policy-arn> --policy-document file://policy.json --set-as-default
+      note: >-
+        A managed policy is versioned: create-policy-version with --set-as-default is the
+        edit, and the old version stays until you delete it (five versions is the limit,
+        so prune with delete-policy-version). Enumerate the actions the workload actually
+        calls rather than guessing — IAM Access Analyzer's policy generation reads
+        CloudTrail and writes the least-privilege document for you
+        (`aws accessanalyzer start-policy-generation`). A prefixed wildcard such as
+        s3:Get* does NOT trip this control; only the bare '*' and '*:*' do.
+
+  CKV_AWS_169:
+    aws_sns_topic_policy:
+      terraform: |
+        resource "aws_sns_topic_policy" "app" {
+          arn = aws_sns_topic.app.arn
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Sid       = "AllowOwnerPublish"
+                Effect    = "Allow"
+                Principal = { AWS = aws_iam_role.publisher.arn }
+                Action    = "SNS:Publish"
+                Resource  = aws_sns_topic.app.arn
+              },
+              {
+                Sid       = "AllowServicePublish"
+                Effect    = "Allow"
+                Principal = { Service = "s3.amazonaws.com" }
+                Action    = "SNS:Publish"
+                Resource  = aws_sns_topic.app.arn
+                Condition = {
+                  ArnLike      = { "aws:SourceArn" = aws_s3_bucket.app.arn }
+                  StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+                }
+              },
+            ]
+          })
+        }
+      cli: |
+        aws sns set-topic-attributes --topic-arn <topic-arn> --attribute-name Policy --attribute-value file://topic-policy.json
+      note: >-
+        set-topic-attributes REPLACES the Policy attribute, so start from the current one
+        (`aws sns get-topic-attributes --topic-arn <arn> --query 'Attributes.Policy'
+        --output text`). Do not delete the AWS-written default statement while narrowing
+        the others — it is the one that lets the account manage its own topic, and it is
+        already conditioned on AWS:SourceOwner so this control does not report it. Where a
+        wildcard principal is genuinely needed (an S3 bucket or an SES rule publishing to
+        the topic), the fix is the Condition, not the Principal: aws:SourceArn plus
+        aws:SourceAccount both scopes the grant and takes the statement out of scope here.
+
+  CKV_AWS_385:
+    aws_sns_topic_policy:
+      terraform: |
+        resource "aws_sns_topic_policy" "app" {
+          arn = aws_sns_topic.app.arn
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Sid       = "PartnerSubscribe"
+                Effect    = "Allow"
+                Principal = { AWS = "arn:aws:iam::${var.partner_account_id}:role/consumer" }
+                Action    = ["SNS:Subscribe", "SNS:Receive"]
+                Resource  = aws_sns_topic.app.arn
+                Condition = {
+                  StringEquals = { "aws:PrincipalOrgID" = var.organization_id }
+                }
+              },
+            ]
+          })
+        }
+      cli: |
+        aws sns set-topic-attributes --topic-arn <topic-arn> --attribute-name Policy --attribute-value file://topic-policy.json
+      note: >-
+        Either remove the cross-account statement or constrain it. aws:PrincipalOrgID is
+        the usual constraint inside an organization and keeps working as accounts are
+        added and removed; aws:SourceArn, aws:SourceAccount and aws:PrincipalArn are the
+        alternatives when the far side is not an org member. Any Condition takes the
+        statement out of this control's scope, which mirrors what Checkov allows — so
+        write the condition that actually expresses the agreement rather than the shortest
+        one that clears the check, because nothing downstream will re-examine it.
+
+  CKV_AWS_393:
+    aws_iam_role:
+      terraform: |
+        resource "aws_iam_role" "gha_deploy" {
+          name = "gha-deploy"
+
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [
+              {
+                Effect    = "Allow"
+                Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+                Action    = "sts:AssumeRoleWithWebIdentity"
+                Condition = {
+                  StringEquals = {
+                    "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+                  }
+                  StringLike = {
+                    "token.actions.githubusercontent.com:sub" = "repo:acme/widgets:ref:refs/heads/main"
+                  }
+                }
+              },
+            ]
+          })
+        }
+      cli: |
+        aws iam update-assume-role-policy --role-name <role-name> --policy-document file://trust-policy.json
+      note: >-
+        The org and repository segments of the sub claim must carry no wildcard;
+        everything after them may, so repo:acme/widgets:* still pins the repository and
+        passes, while repo:acme/* does not — note that Checkov 3.3.16 accepts
+        repo:acme/*, so this control is stricter than the rule it is derived from and a
+        Terraform scan will not warn you about the org-wide form. Constrain the aud claim to sts.amazonaws.com
+        as well — it is not what this control reads, but an unconstrained aud is the other
+        half of the same misconfiguration. Do NOT use a Null condition on sub: it asserts
+        only that the claim exists, which is true of every GitHub token ever minted, and
+        this control rejects it for that reason. Where several repositories legitimately
+        need the role, list each sub value explicitly rather than widening to the org.
+
+skipped:
+
+  CKV2_AWS_70: >-
+    Not reachable with any existing shape, and not a policy_document problem. The
+    check is about apigateway METHODS: it needs GetRestApis -> GetResources(restApiId)
+    -> GetMethod(restApiId, resourceId, httpMethod), a three-level parent chain, and
+    only then narrows to OPTIONS methods with AuthorizationType NONE and
+    ApiKeyRequired false. The policy document is a FALLBACK arm of the verdict (a
+    PRIVATE endpointConfiguration or a resource policy can excuse an unauthorized
+    method), not the question, so aws_policy_documents cannot answer it even with an
+    apigateway source added: the reader enumerates one collection and evaluates one
+    predicate per asset, and there is no arm in it for "the parent's endpoint
+    configuration decides whether the child is in scope". Needs the parent_child
+    shape at three levels plus a combined verdict; belongs with the graph work, not
+    here.
+
+  CKV_AWS_70: >-
+    Blocked in libraries/aws_policy_documents.rb, not in the data. s3:GetBucketPolicy
+    models `Policy` as the operation PAYLOAD, and aws-sdk-s3 1.224.0 materialises a
+    payload blob as a StringIO — measured in the auditor image:
+    `c.get_bucket_policy(bucket: "b").to_h` => `{policy: #<StringIO:0x...>}`.
+    resolve_document stringifies with `"#{value}"`, so every bucket would hand the
+    parser the literal text "#<StringIO:0x00007f...>", which is not JSON before or
+    after percent-decoding. Result: PolicyDocument::ParseError on every bucket, every
+    asset UNDECIDABLE, the control 100% failing having assessed nothing. That is loud
+    rather than silent, but it is not a check. Unblocking it needs two reader changes:
+    read the blob when the resolved value responds to :read, and handle per-bucket
+    region — aws-sdk-s3's Redirects plugin follows 307 only, so a bucket outside the
+    client's region answers GetBucketPolicy with a 301 PermanentRedirect and stays
+    undecidable. ListBuckets now returns a `bucket_region` member, so the second fix
+    is available, but it needs a reader that can build a client per ITEM rather than
+    per region.
+
+  CKV_AWS_93: >-
+    Needs a seventh predicate that does not exist. The question is a DENY/NotPrincipal
+    one — a Deny statement with Principal '*' (or Principal.AWS containing '*'), no
+    Condition, no NotAction, and an Action in [s3:PutBucketPolicy, s3:*BucketPolicy,
+    s3:Put*, s3:*, *] — which locks every identity except the account root out of
+    fixing the bucket policy. None of the six implemented predicates expresses it:
+    five of them only examine Allow statements, and no_account_root_principal examines
+    non-Deny statements for a root PRINCIPAL, which is close to the opposite question.
+    Mapping it onto any of them would produce a control that reports on something else
+    under this check's id. Blocked behind the same reader work as CKV_AWS_70 in any
+    case, since the source is the S3 bucket policy.
+
+  CKV_AWS_72: >-
+    Blocked in libraries/aws_policy_documents.rb#list_items, not in the data.
+    sqs:ListQueues returns `QueueUrls` as a list of STRINGS (confirmed against the SQS
+    model in the auditor image: a ListShape whose member is a StringShape), and
+    list_items does `items << item.to_h` on every collection element. String has no
+    #to_h, and the resulting NoMethodError is raised inside rows_for, whose rescue
+    names only Aws::Errors::ServiceError, Seahorse::Client::NetworkingError and
+    ArgumentError — so it escapes the constructor and errors the WHOLE control rather
+    than filing one asset as undecidable. No spec spelling avoids it: ListQueuesResult
+    carries QueueUrls and NextToken and nothing else, so there is no struct-valued
+    collection to name instead. The fix is one line in the reader
+    (`item.respond_to?(:to_h) ? item.to_h : item`, plus a dig_path that tolerates a
+    non-Hash item), after which the source is straightforward: get_queue_attributes
+    with `attribute_names: [Policy]`, document `attributes.Policy`, absent_when
+    QueueDoesNotExist, and document_absent_is_no_policy: true — SQS genuinely omits
+    the Policy attribute on a queue that has none.
+
+  CKV_AWS_168: >-
+    Same blocker as CKV_AWS_72: sqs:ListQueues returns a list of Strings and
+    libraries/aws_policy_documents.rb#list_items calls #to_h on every element, which
+    raises NoMethodError outside the rescued classes and errors the whole control.
+    The predicate itself is available — no_wildcard_principal is the deployed
+    equivalent of the cloudsplaining internet_accessible_actions test Checkov runs
+    here — so this check needs no new library work, only the one-line list_items fix
+    and the aws_sqs_queue_policy source sketched under CKV_AWS_72.
+
+  CKV_AWS_387: >-
+    Same SQS list_items blocker as CKV_AWS_72 and CKV_AWS_168, and additionally the
+    only thing that would distinguish it from CKV_AWS_168 is a predicate that does
+    not exist: Checkov narrows this one to statements that also name an sqs:/SQS:/'*'
+    action before a wildcard principal counts. Mapping it onto plain
+    no_wildcard_principal would render a control whose assertion is byte-identical to
+    CKV_AWS_168's, so two check ids would report one test and the narrowing would
+    never actually be applied. Reported rather than padded: if the list_items fix
+    lands and the duplicate is acceptable, this is a one-row change.
+
+  CKV_AWS_364: >-
+    Not a missing source — a missing predicate, and mapping it onto one of the six
+    would produce a control that CANNOT FAIL. The question is about Principal.SERVICE:
+    for each statement whose Principal.Service ends in .amazonaws.com, a Condition on
+    AWS:SourceArn or AWS:SourceAccount must be present. Every one of the six
+    implemented predicates reads Principal.AWS (policy_document_principals(statement,
+    'AWS')) or Principal.Federated; none reads Principal.Service. A Lambda resource
+    policy built by aws_lambda_permission consists almost entirely of Service
+    principals, so no_wildcard_principal would find no offending statement on any
+    function in the account and report a clean pass over exactly the documents the
+    rule is about. Needs `no_service_principal_without_source_constraint` in
+    libraries/_policy_document.rb plus its PREDICATE_PROSE entry; the source itself is
+    easy afterwards (lambda:ListFunctions -> lambda:GetPolicy(FunctionName), with
+    ResourceNotFoundException as absent_when — a function with no permissions grants
+    nothing and passes).

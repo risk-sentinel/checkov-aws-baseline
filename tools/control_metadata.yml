@@ -1,0 +1,684 @@
+# Hand-authored, per check. Everything here is a judgement a person made and a
+# reviewer can argue with -- which is why it lives in one reviewable file rather
+# than scattered across 362 control files.
+#
+# Checkov ships none of this: no NIST mapping, no CCI, and no severity in the
+# OSS distribution. Claiming any of it came from Checkov would attribute values
+# it never published, so `severity_source` is 'assessed' everywhere.
+#
+# rationale  why the deployed state matters, in the profile's own words
+# nist/cci   assigned at catalogue review; nist is Rev 5, nist_r4 is Rev 4
+# ksi        resolved from the NIST anchors against the FedRAMP rules catalogue
+# severity   assessed here, with impact following it
+# what       only for `custom` checks: a custom scan_resource_conf has no
+#            declarative inspected key, so the catalogue cannot derive one
+# stronger   set where the deployed assertion covers MORE than the IaC check;
+#            it becomes a paragraph in the control, because that difference is
+#            the argument for this profile existing
+
+CKV_AWS_79:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'AC-6']
+  nist_r4: ['AC-3', 'AC-6']
+  cci: ['CCI-000213', 'CCI-002233']
+  ksi: ['KSI-IAM-MFA']
+  rationale: >-
+    IMDSv1 answers an unauthenticated GET, so any server-side request forgery in
+    a workload on the instance reaches the credential endpoint. IMDSv2 requires a
+    PUT-issued token, which SSRF cannot forge.
+
+CKV_AWS_88:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A public IP puts the instance directly on the internet attack surface, rather
+    than behind a load balancer or NAT where ingress can be reasoned about.
+
+CKV_AWS_8:
+  what: every declared block device sets encrypted = true
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted volume exposes its data to anyone who can reach the underlying
+    snapshot or the storage service, without needing access to the instance.
+  stronger: >-
+    Checkov reads the block devices declared in HCL. This reads DescribeVolumes,
+    so a volume attached later, by hand, outside Terraform is assessed too -- and
+    that is the volume most likely to be unencrypted.
+
+CKV_AWS_126:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Basic monitoring reports at five-minute granularity, too coarse to see a
+    short-lived spike or a brief exfiltration window.
+
+CKV_AWS_135:
+  severity: low
+  impact: 0.3
+  nist: ['SC-5']
+  nist_r4: ['SC-5']
+  cci: ['CCI-002385']
+  ksi: ['KSI-CNA-CAP']
+  rationale: >-
+    Dedicated EBS throughput keeps storage traffic off the shared network path,
+    so a noisy neighbour cannot starve the instance of disk I/O.
+
+CKV_AWS_46:
+  what: the user_data blob contains no recognisable secret
+  severity: high
+  impact: 0.7
+  nist: ['IA-5 (7)', 'SC-28']
+  nist_r4: ['IA-5 (7)', 'SC-28']
+  cci: ['CCI-000196', 'CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    User data is readable by anything that can reach the metadata service or call
+    DescribeInstanceAttribute, and it is not encrypted at rest.
+  stronger: >-
+    Checkov scans the user_data string in HCL. This decodes what the instance is
+    actually serving, which catches a value injected after apply or supplied by a
+    template Checkov never rendered.
+
+CKV_AWS_18:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Without access logging there is no record of who read or wrote an object, so a data-exposure question has no evidence either way.
+
+CKV_AWS_19:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Default encryption is what makes an object written by any client encrypted at rest; without it, encryption depends on every writer remembering.
+
+CKV_AWS_21:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535', 'CCI-001678']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Versioning is what makes an accidental or malicious overwrite recoverable; without it a delete is final.
+
+CKV_AWS_20:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'SC-7']
+  nist_r4: ['AC-3', 'SC-7']
+  cci: ['CCI-000213', 'CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A bucket ACL granting public READ exposes every object to the internet, and the exposure is invisible from inside the account.
+
+CKV_AWS_379:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418', 'CCI-002421']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    Without a policy denying aws:SecureTransport=false, an unencrypted request is accepted rather than refused, and TLS becomes a client-side choice.
+
+CKV2_AWS_6:
+  severity: high
+  impact: 0.7
+  nist: ['AC-3', 'SC-7']
+  nist_r4: ['AC-3', 'SC-7']
+  cci: ['CCI-000213', 'CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    The public access block is the account-independent backstop: without it, a future ACL or policy change can make the bucket public with no further review.
+
+CKV2_AWS_61:
+  severity: low
+  impact: 0.3
+  nist: ['AU-11', 'SI-12']
+  nist_r4: ['AU-11', 'SI-12']
+  cci: ['CCI-000167', 'CCI-001678']
+  ksi: ['KSI-MLA-OSM']
+  rationale: >-
+    With no lifecycle configuration, objects accumulate indefinitely: retention becomes whatever nobody got around to deleting.
+
+CKV_AWS_16:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted database exposes its data through any snapshot copy or storage-layer access, without touching the database itself.
+
+CKV_AWS_17:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A publicly accessible instance is reachable from the internet, so its exposure is bounded only by credentials and the security group.
+
+CKV_AWS_157:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-10', 'SC-5']
+  nist_r4: ['CP-10', 'SC-5']
+  cci: ['CCI-000553', 'CCI-002385']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Without Multi-AZ, a single availability-zone failure takes the database down with no automatic failover.
+
+CKV_AWS_161:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-2', 'IA-5']
+  nist_r4: ['IA-2', 'IA-5']
+  cci: ['CCI-000764', 'CCI-000196']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    IAM database authentication removes long-lived database passwords in favour of short-lived tokens tied to an IAM principal.
+
+CKV_AWS_226:
+  severity: medium
+  impact: 0.5
+  nist: ['SI-2', 'SI-2 (5)']
+  nist_r4: ['SI-2', 'SI-2 (5)']
+  cci: ['CCI-001227', 'CCI-002605']
+  ksi: ['KSI-CMT-VTD']
+  rationale: >-
+    Without automatic minor upgrades, a published engine patch is applied only when someone remembers to schedule it.
+
+CKV_AWS_293:
+  severity: low
+  impact: 0.3
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535', 'CCI-001678']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    Deletion protection is the difference between a mistyped identifier costing an argument and costing the database.
+
+CKV_AWS_353:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Performance Insights is what makes a slow-query or lock-contention question answerable after the fact rather than during the next incident.
+
+CKV_AWS_354:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Performance Insights data includes query text, which can carry the values a query filtered on; unencrypted, it is a second copy of the data outside the database.
+
+CKV_AWS_129:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Database logs that never leave the instance are lost when it is replaced, and cannot be alerted on or retained centrally.
+
+CKV_AWS_118:
+  severity: low
+  impact: 0.3
+  nist: ['AU-12', 'SI-4']
+  nist_r4: ['AU-12', 'SI-4']
+  cci: ['CCI-000172', 'CCI-002664']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Enhanced monitoring reads the host's own metrics; without it, a database starved of CPU or IO looks identical to one that is merely busy. An interval of 0 means disabled.
+
+CKV_AWS_211:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418', 'CCI-002421']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    The rds-ca-2019 authority expires; an instance still presenting it will fail client TLS validation on expiry, and the replacement is a reboot.
+
+CKV_AWS_96:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted cluster exposes its data through any snapshot copy or storage-layer access, without touching the database.
+
+CKV_AWS_139:
+  severity: low
+  impact: 0.3
+  nist: ['CP-9', 'SI-12']
+  nist_r4: ['CP-9', 'SI-12']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    Deletion protection is the difference between a mistyped identifier costing an argument and costing the cluster.
+
+CKV_AWS_162:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-2', 'IA-5']
+  nist_r4: ['IA-2', 'IA-5']
+  cci: ['CCI-000764']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    IAM database authentication replaces long-lived cluster passwords with short-lived tokens tied to an IAM principal.
+
+CKV_AWS_313:
+  severity: low
+  impact: 0.3
+  nist: ['CM-8', 'AU-12']
+  nist_r4: ['CM-8', 'AU-12']
+  cci: ['CCI-000366']
+  ksi: ['KSI-CMT-INV']
+  rationale: >-
+    A snapshot that loses its tags loses its owner, its retention class and its cost centre at the moment it becomes long-lived data.
+
+CKV_AWS_324:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Cluster logs that never leave the cluster are lost when it is replaced, and cannot be alerted on or retained centrally.
+
+CKV_AWS_327:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-12', 'SC-28 (1)']
+  nist_r4: ['SC-12', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data; a customer-managed key can.
+
+CKV_AWS_326:
+  severity: low
+  impact: 0.3
+  nist: ['CP-10', 'SI-12']
+  nist_r4: ['CP-10', 'SI-12']
+  cci: ['CCI-000553']
+  ksi: ['KSI-RPL-RCY']
+  rationale: >-
+    Backtrack rewinds a cluster in place after a bad write; without it the equivalent recovery is a restore, which is a new endpoint and an outage.
+
+CKV_AWS_64:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    An unencrypted warehouse exposes every table it holds through the storage layer and through any snapshot.
+
+CKV_AWS_87:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A publicly accessible warehouse is reachable from the internet, bounded only by credentials and the security group.
+
+CKV_AWS_141:
+  severity: medium
+  impact: 0.5
+  nist: ['SI-2', 'SI-2 (5)']
+  nist_r4: ['SI-2', 'SI-2 (5)']
+  cci: ['CCI-001227']
+  ksi: ['KSI-CMT-VTD']
+  rationale: >-
+    Without automatic version upgrades, a published engine patch is applied only when someone schedules it.
+
+CKV_AWS_321:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-7', 'AC-4']
+  nist_r4: ['SC-7', 'AC-4']
+  cci: ['CCI-001097']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    Without enhanced VPC routing, COPY and UNLOAD traffic leaves through the public endpoint, where VPC controls and flow logs do not see it.
+
+CKV_AWS_343:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9']
+  nist_r4: ['CP-9']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    A retention period of zero disables automated snapshots entirely: there is no recovery point that was not taken by hand.
+
+CKV_AWS_320:
+  severity: low
+  impact: 0.3
+  nist: ['CM-6']
+  nist_r4: ['CM-6']
+  cci: ['CCI-000366']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    The default database name is a known target: naming it explicitly is one less thing an untargeted scan can assume. The API reports this as db_name, not the Terraform database_name.
+
+CKV_AWS_29:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Cache contents are frequently a copy of the most sensitive rows in the database, held in the least protected place.
+
+CKV_AWS_30:
+  severity: high
+  impact: 0.7
+  nist: ['SC-8', 'SC-8 (1)']
+  nist_r4: ['SC-8', 'SC-8 (1)']
+  cci: ['CCI-002418']
+  ksi: ['KSI-SVC-CET']
+  rationale: >-
+    Without in-transit encryption the cache protocol is plaintext on the wire, including the values it returns.
+
+CKV_AWS_191:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-12', 'SC-28 (1)']
+  nist_r4: ['SC-12', 'SC-28 (1)']
+  cci: ['CCI-002475']
+  ksi: ['KSI-SVC-KMG']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data; a customer-managed key can.
+
+CKV_AWS_134:
+  severity: medium
+  impact: 0.5
+  nist: ['CP-9']
+  nist_r4: ['CP-9']
+  cci: ['CCI-000535']
+  ksi: ['KSI-RPL-ABO']
+  rationale: >-
+    A retention limit of zero disables backups entirely, so a cache holding the only copy of a computed result has no recovery point.
+
+CKV_AWS_50:
+  severity: low
+  impact: 0.3
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    Without X-Ray tracing a latency or error question about a function has no per-invocation evidence, only aggregate metrics.
+
+CKV_AWS_272:
+  severity: medium
+  impact: 0.5
+  nist: ['SR-3', 'SI-7']
+  nist_r4: ['SR-3', 'SI-7']
+  cci: ['CCI-005080', 'CCI-002703']
+  ksi: ['KSI-SVC-VRI']
+  rationale: >-
+    Code signing is what makes an unauthorised deployment package fail to run rather than run unnoticed.
+
+CKV_AWS_173:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Environment variables hold configuration that is frequently credentials; with the default key they are encrypted with a key the account cannot rotate or revoke.
+
+CKV_AWS_158:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Log groups routinely contain request payloads and identifiers; with the default key they are encrypted with a key the account cannot rotate or revoke.
+
+CKV_AWS_66:
+  severity: medium
+  impact: 0.5
+  nist: ['AU-2', 'AU-12']
+  nist_r4: ['AU-2', 'AU-12']
+  cci: ['CCI-000169', 'CCI-000172']
+  ksi: ['KSI-MLA-LOG']
+  rationale: >-
+    A log group with no retention keeps everything forever, which is a cost problem and a discovery problem, and says nobody decided how long these logs matter.
+
+CKV_AWS_163:
+  severity: medium
+  impact: 0.5
+  nist: ['CM-6', 'SI-2']
+  nist_r4: ['CM-6', 'SI-2']
+  cci: ['CCI-000366', 'CCI-001227']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    Without scan-on-push, a vulnerable image is discovered when someone runs a scan, not when it is pushed.
+
+CKV_AWS_51:
+  severity: medium
+  impact: 0.5
+  nist: ['SR-3', 'SI-7']
+  nist_r4: ['SR-3', 'SI-7']
+  cci: ['CCI-005080', 'CCI-002703']
+  ksi: ['KSI-SVC-VRI']
+  rationale: >-
+    A mutable tag means the image running today may not be the image that was scanned and approved under that tag.
+
+CKV_AWS_136:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default AES256 encryption uses a key the account does not control; KMS makes the key auditable and revocable.
+
+CKV_AWS_155:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The user volume holds whatever the person saved; unencrypted it is readable from the storage layer without their session.
+
+CKV_AWS_156:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The root volume holds the profile and cached credentials of whoever uses the WorkSpace.
+
+CKV_AWS_89:
+  severity: high
+  impact: 0.7
+  nist: ['SC-7', 'SC-7 (5)']
+  nist_r4: ['SC-7', 'SC-7 (5)']
+  cci: ['CCI-001097', 'CCI-002080']
+  ksi: ['KSI-CNA-NDS']
+  rationale: >-
+    A replication instance reads from a source database and writes to a target; publicly reachable, it is a route between both.
+
+CKV_AWS_222:
+  severity: medium
+  impact: 0.5
+  nist: ['CM-6', 'SI-2']
+  nist_r4: ['CM-6', 'SI-2']
+  cci: ['CCI-000366', 'CCI-001227']
+  ksi: ['KSI-CMT-CFG']
+  rationale: >-
+    Without automatic minor upgrades the replication engine is patched only when someone schedules it.
+
+CKV_AWS_202:
+  severity: high
+  impact: 0.7
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    Without TLS the cache protocol is plaintext on the wire, including the values it returns.
+
+CKV_AWS_201:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the data.
+
+CKV_AWS_2:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    The default service key cannot be rotated, scoped or revoked by the account that owns the secret.
+
+CKV_AWS_149:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    A secret encrypted with the service default key is protected by a key the account cannot audit use of.
+
+CKV_AWS_166:
+  severity: medium
+  impact: 0.5
+  nist: ['SC-28', 'SC-28 (1)']
+  nist_r4: ['SC-28', 'SC-28 (1)']
+  cci: ['CCI-001199', 'CCI-002475']
+  ksi: ['KSI-SVC-CER']
+  rationale: >-
+    A backup vault holds the copy that survives the incident; encrypting it with a customer-managed key keeps that copy under the same key control as the source.
+
+CKV_AWS_9:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    A policy that does not require lower-case characters permits a password drawn from a smaller alphabet, which shortens every offline cracking attempt against it.
+
+CKV_AWS_11:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Same as the lower-case requirement: each excluded character class shrinks the search space an attacker has to cover.
+
+CKV_AWS_12:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    A policy without a digit requirement permits all-alphabetic passwords, which are the first thing a wordlist attack tries.
+
+CKV_AWS_13:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Symbols are the character class most often omitted, and the one that most increases the cost of an offline attack.
+
+CKV_AWS_10:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Length dominates every other password property for resistance to offline attack. `at_least` rather than `greater_than`: a policy of exactly 14 satisfies a requirement of 14.
+
+CKV_AWS_14:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    An unexpiring password stays valid for as long as it stays undetected. The guard is separate because a policy that never expires passwords is itself the finding, and the reader raises rather than returning nil when expiry is off.
+
+CKV_AWS_15:
+  severity: medium
+  impact: 0.5
+  nist: ['IA-5', 'IA-5 (1)']
+  nist_r4: ['IA-5', 'IA-5 (1)']
+  cci: ['CCI-000192', 'CCI-000205']
+  ksi: ['KSI-IAM-CTL']
+  rationale: >-
+    Without reuse prevention a forced rotation can be satisfied by setting the same password again. The guard is separate for the same reason as the expiry one.

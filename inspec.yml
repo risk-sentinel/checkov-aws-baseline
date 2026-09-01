@@ -1,0 +1,81 @@
+name: checkov-aws-v3.3.16
+title: Checkov AWS Deployed-Asset Baseline
+maintainer: Risk Sentinel
+copyright: Risk Sentinel
+copyright_email: support@risk-sentinel.org
+license: Apache-2.0
+summary: |
+  Deployed-asset parity for Checkov's Terraform AWS checks.
+
+  Checkov answers "would this Terraform create a compliant resource?". This
+  profile answers "is the resource that actually exists still compliant with
+  what that check asserted?" — the same intent, assessed against the AWS API
+  rather than against HCL.
+
+  Controls are generated one-per-check from a committed catalogue derived from
+  a pinned Checkov release (see tools/checkov_catalog.yml). A check declares the
+  resource types it applies to, so a control asserts against every deployed
+  asset of every one of those types: several assertions per control is the
+  normal shape, not the exception.
+
+  Scope comes from the boundary. An inventory pass determines which services are
+  present, and a control for a service the boundary does not use renders Not
+  Applicable with a stated reason rather than passing silently.
+
+  Targets AWS Commercial (aws) and AWS GovCloud non-DoD (aws-us-gov).
+version: 0.1.0
+inspec_version: '>= 5.0'
+
+supports:
+  - platform: aws
+
+depends:
+  - name: inspec-aws
+    git: https://github.com/inspec/inspec-aws.git
+    # `main`, matching the rest of the fleet. The v1.21.0 tag ships 90 resources;
+    # main ships 481, and the difference decides how many of Checkov's 194 AWS
+    # resource types can be read with a stock resource instead of a custom one.
+    branch: main
+
+inputs:
+  - name: aws_partition
+    type: string
+    value: aws
+    description: >-
+      Which AWS partition this boundary lives in — separate account namespaces,
+      endpoints, service availability and ARN prefixes. One of: aws
+      (Commercial), aws-us-gov (GovCloud US, non-DoD). A check whose service
+      does not exist in the partition is Not Applicable there for a stated
+      reason, and asset ARNs are built with this prefix, so an exemption written
+      against arn:aws: will not match a GovCloud asset.
+  - name: aws_account_id
+    type: string
+    value: ''
+    description: >-
+      The account this boundary is. Empty means "do not check". When set, the
+      run asserts the credentials actually resolve to it and fails otherwise —
+      evidence filed against the wrong account is worse than no evidence, and
+      the two are indistinguishable after the fact.
+  - name: scan_regions
+    type: array
+    value: []
+    description: >-
+      Regions to enumerate. Empty means every region enabled for the account —
+      a single-region sweep reports "absent" for a workload that exists
+      elsewhere, and absent renders as "does not apply here", which is a claim.
+  - name: checkov_version
+    type: string
+    value: '3.3.16'
+    description: >-
+      The Checkov release tools/checkov_catalog.yml was generated from. Asserted
+      against the catalogue at run time so a stale catalogue is loud.
+  - name: exempt_assets
+    type: hash
+    value: {}
+    description: >-
+      Documented exceptions, scoped by resource type and matched on ARN:
+      { CHECK_ID: [ { type: aws_instance, arns: [...] } ] }. An id alone is
+      ambiguous across resource types and names neither account nor region,
+      which matters when a boundary inherits assets from elsewhere. `ids:` is
+      accepted where the console id is what an operator has in hand. An
+      exception is data with an owner, not an edited control.

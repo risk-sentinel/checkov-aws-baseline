@@ -1,0 +1,58 @@
+# Reference inputs — clone-to-results. Copy, edit, and pass with
+#   --input-file inputs.yml
+#
+# Nothing here is required to get a first run: with the defaults the scan
+# enumerates every enabled region in the Commercial partition, asserts nothing
+# about which account it landed in, and exempts nothing.
+
+# The account this boundary is. Left empty, the run reports whichever account
+# the credentials resolve to. Set it, and a run against the wrong account fails
+# instead of quietly producing evidence labelled with someone else's estate.
+aws_account_id: ''
+
+# Which AWS partition this boundary lives in. Partitions are separate AWS
+# universes: separate account namespaces, separate endpoints, separate service
+# availability, and separate ARNs (`arn:aws:` vs `arn:aws-us-gov:`).
+#
+#   aws          AWS Commercial — the default, global regions
+#   aws-us-gov   AWS GovCloud (US), non-DoD
+#
+# It matters here for two reasons: a check whose service does not exist in the
+# partition is Not Applicable there for a stated reason rather than a silent
+# pass, and asset ARNs are built with the partition prefix, so an exemption
+# written against `arn:aws:` will not match a GovCloud asset.
+aws_partition: aws
+
+# Empty means every enabled region. A single-region sweep reports "absent" for a
+# workload that exists elsewhere, and absent renders as "does not apply here" —
+# which is a claim, not a gap.
+scan_regions: []
+
+# The Checkov release tools/checkov_catalog.yml was generated from. Asserted at
+# run time, so a catalogue that has drifted from the controls is loud.
+checkov_version: '3.3.16'
+
+# Documented exceptions, per check.
+#
+# Scoped by resource TYPE and matched on ARN: an id alone is ambiguous across
+# types and names neither the account nor the region it lives in. A boundary
+# that inherits assets from another account needs to name them precisely, and
+# an ARN is the only identifier that does.
+#
+# exempt_assets:
+#   CKV_AWS_88:
+#     - type: aws_instance
+#       arns:
+#         # public by design — NAT-less bastion, accepted in ticket RS-1234
+#         - arn:aws:ec2:us-east-2:111122223333:instance/i-0123456789abcdef0
+#     - type: aws_launch_template
+#       # inherited from the platform account; not ours to change
+#       arns:
+#         - arn:aws:ec2:us-east-1:444455556666:launch-template/lt-0123456789abcdef0
+#
+#   CKV_AWS_135:
+#     - type: aws_instance
+#       # `ids:` is accepted where the console id is what you have in hand and
+#       # the asset is unambiguously in the scanned account.
+#       ids: [i-0123456789abcdef0]
+exempt_assets: {}

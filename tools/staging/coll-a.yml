@@ -1,0 +1,782 @@
+# coll-a — checks whose deployed assertion is a roll-up over a collection-valued
+# field (any_of / all_of / none_of).
+#
+# Twenty checks were assigned. FIVE are mapped and FIFTEEN are skipped after an
+# adversarial review of the first draft (see the CKV_AWS_213 skip and the
+# `protocol` note on CKV_AWS_229). The split is almost entirely about ONE
+# question: is the thing the check judges
+# actually a collection on the asset row, or is it a conjunction/disjunction of
+# fields ON the row? The roll-up verb answers only the first. Four of the skips
+# are checks whose blocker was never the verb at all (`args:` on the list call),
+# and three more are a row-level DISJUNCTION of two different comparisons, which
+# the conjunction semantics deliberately cannot express.
+#
+# Two facts about the reader shaped several verdicts and neither is written down
+# where the proposal could see it:
+#
+#   1. `field:` must be a name declared in the api spec's `fields:` map
+#      (tools/lint_api_paths.rb enforces it). A staging file CANNOT add a field
+#      to an api spec that is already live — merge_proposals refuses the whole
+#      spec as "already live" — so a check whose roll-up needs a new field on a
+#      live spec is blocked on a one-line edit to tools/api_specs.yml that this
+#      slice is not allowed to make. CKV_AWS_80 is exactly that and nothing else.
+#
+#   2. `CheckovCollection.elements` treats a HASH as ONE element, on purpose. So
+#      a roll-up over a STRUCTURE-valued field is a conjunction of dotted paths
+#      into that structure — which is how CKV_AWS_99 is mapped here, and it is
+#      the reason `any_of` rather than `all_of`: over a field the API omitted,
+#      all_of is vacuously true and any_of is false, and false is the answer a
+#      missing encryption configuration deserves.
+#
+# What the review changed, so the next pass does not re-derive it:
+#
+#   * CKV_AWS_213 (classic-ELB policy) was WITHDRAWN. Every path in it resolves
+#     against the SDK model; the mapping was nonetheless unsafe, because its only
+#     failing condition depends on ELB expanding a Reference-Security-Policy into
+#     Protocol-* attributes at runtime — a claim no SDK model can settle, whose
+#     false case is a vacuous `none_of` pass that the collection-scope guard
+#     cannot see. Reasons in full under `skipped:`.
+#
+#   * The three NACL mappings had `protocol: not_in_list ['1','58']`. A deny-list
+#     of ICMP reports a protocol-'17' (UDP) allow-all entry as a TCP finding,
+#     because a UDP entry carries no PortRange either and both when_absent
+#     conditions then hold. Replaced with the ALLOW-list `in_list ['6','-1']`,
+#     verified against stubbed DescribeNetworkAcls rows in the auditor image.
+
+api_specs:
+
+  # Redshift parameter values, which the singular vendored resource cannot see:
+  # aws_redshift_cluster_parameter_group re-calls describe_cluster_parameter_groups
+  # and therefore only ever returns group METADATA.
+  #
+  # `collection: _response` with `id: _parent`, not `collection: parameters`: the
+  # asset this check judges is the GROUP, and the parameters are a field on it.
+  # Pointing `collection` at `parameters` would make each PARAMETER a row, and
+  # "no row named require_ssl has value true" is not a question any per-asset
+  # assertion can ask. Confirmed against the model: DescribeClusterParameters
+  # requires ParameterGroupName (supplied by `arg`), its response has exactly
+  # [:parameters, :marker], and Parameter carries [:parameter_name,
+  # :parameter_value, ...].
+  #
+  # Pagination caveat, recorded rather than solved: `_response` makes ONE ROW PER
+  # PAGE, so a group with more parameters than one page holds would produce
+  # several rows and the pages that do not contain require_ssl would fail. Every
+  # redshift-1.0 group ships ~11 parameters against a 100-record default page, so
+  # this cannot bite today; it would the moment the shape is reused on a
+  # parameter list that genuinely paginates (RDS DescribeDBParameters does).
+  aws_redshift_parameter_group:
+    gem: aws-sdk-redshift
+    client: Aws::Redshift::Client
+    scope: regional
+    parent:
+      list: describe_cluster_parameter_groups
+      collection: parameter_groups
+      id: parameter_group_name
+    list: describe_cluster_parameters
+    arg: parameter_group_name
+    collection: _response
+    id: _parent
+    fields:
+      parameters: parameters
+
+  # Network ACLs. ec2:DescribeNetworkAcls takes no required arguments.
+  # NetworkAclEntry members confirmed against the EC2 model:
+  # [:cidr_block, :egress, :icmp_type_code, :ipv_6_cidr_block, :port_range,
+  # :protocol, :rule_action, :rule_number], and PortRange is [:from, :to].
+  # Note `ipv_6_cidr_block`, NOT `ipv6_cidr_block` — the Ruby SDK splits the
+  # digit off, the same way `cidr_ipv_4` does on a security group rule, and the
+  # transliterated spelling would resolve to nothing on every element.
+  #
+  # `is_default` and `vpc_id` are carried for the failure message, and because
+  # `is_default` is the field a future population scope would filter on (see the
+  # divergence note on CKV_AWS_229).
+  aws_network_acl:
+    gem: aws-sdk-ec2
+    client: Aws::EC2::Client
+    scope: regional
+    list: describe_network_acls
+    collection: network_acls
+    id: network_acl_id
+    fields:
+      entries: entries
+      is_default: is_default
+      vpc_id: vpc_id
+
+  # Glue security configurations. glue:GetSecurityConfigurations takes no
+  # required arguments and paginates on NextToken. SecurityConfiguration is
+  # [:name, :created_time_stamp, :encryption_configuration], and
+  # EncryptionConfiguration is [:s3_encryption, :cloud_watch_encryption,
+  # :job_bookmarks_encryption] — all confirmed against the Glue model. Note
+  # `cloud_watch_encryption`, not `cloudwatch_encryption`: Terraform spells the
+  # block `cloudwatch_encryption` and the API member is the split form, which is
+  # the Terraform-argument-is-not-an-API-member trap this repo keeps paying for.
+  aws_glue_security_configuration:
+    gem: aws-sdk-glue
+    client: Aws::Glue::Client
+    scope: regional
+    list: get_security_configurations
+    collection: security_configurations
+    id: name
+    fields:
+      encryption_configuration: encryption_configuration
+
+mappings:
+
+  CKV_AWS_99:
+    aws_glue_security_configuration:
+      reader: api
+      field: encryption_configuration
+      satisfies: any_of
+      conditions:
+      - path: cloud_watch_encryption.cloud_watch_encryption_mode
+        satisfies: equals
+        value: SSE-KMS
+      - path: job_bookmarks_encryption.job_bookmarks_encryption_mode
+        satisfies: equals
+        value: CSE-KMS
+      - path: s3_encryption.s3_encryption_mode
+        satisfies: not_equals
+        value: DISABLED
+      note: >-
+        `encryption_configuration` is a STRUCTURE, not a list, and the walker
+        treats a Hash as ONE element — so this is the three-way conjunction the
+        check needs, expressed as three paths into that one element. `any_of`
+        rather than `all_of` is load-bearing: over a field the API omitted,
+        all_of is vacuously TRUE and would pass a security configuration with no
+        encryption block at all, which is the single worst case this check
+        exists to catch. any_of over an absent field is false, which fails it.
+
+        One honest divergence. `s3_encryption` is a LIST in the API and a
+        condition is EXISTENTIAL over the values a path reaches, so the third
+        condition reads "SOME S3 encryption mode is not DISABLED" where Checkov
+        wants every one of them. Terraform's aws_glue_security_configuration
+        allows exactly one `s3_encryption` block, so for anything under IaC the
+        two readings are identical; a configuration built through the API with
+        several S3 modes, one of them DISABLED, would pass here. Closing that
+        needs a universal quantifier over a sub-path, which the walker states it
+        does not have.
+
+  CKV_AWS_105:
+    aws_redshift_parameter_group:
+      reader: api
+      field: parameters
+      satisfies: any_of
+      conditions:
+      - path: parameter_name
+        satisfies: equals
+        value: require_ssl
+      - path: parameter_value
+        satisfies: equals
+        value: 'true'
+      note: >-
+        The two conditions are ANDed over each element, so this is "some
+        parameter is named require_ssl AND holds 'true'" — which is the check.
+        Splitting it into two mappings would assert "some parameter is named
+        require_ssl" and "some parameter holds true", which any group satisfies.
+
+        `parameter_value` is a STRING in the Redshift API, so the value is
+        'true', not the boolean. Rendered as a boolean it would compare a String
+        to true, never match, and fail every parameter group in the account.
+
+        Materially stronger than the IaC check: DescribeClusterParameters returns
+        the EFFECTIVE parameter set including engine defaults, so it also judges
+        groups Terraform never declared a `parameter` block on. It also means
+        `default.redshift-1.0` is assessed and FAILS — correctly. That group
+        cannot be modified and ships require_ssl false, so a cluster sitting on
+        it genuinely does not require TLS. This control reports parameter GROUPS,
+        not clusters, so an unattached group is also assessed; that is the same
+        population Checkov scans.
+
+  CKV_AWS_229:
+    aws_network_acl:
+      reader: api
+      field: entries
+      satisfies: none_of
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value: ['6', '-1']
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value: ['0.0.0.0/0', '::/0']
+      - path: port_range.from
+        satisfies: at_most
+        value: 21
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 21
+        when_absent: true
+      note: >-
+        `when_absent: true` on both port conditions is what makes this correct
+        rather than backwards. An entry with Protocol "-1" carries no PortRange
+        at all and AWS means "every port" by that, so an entry opening EVERY port
+        to the world would otherwise be the one entry this control passed.
+
+        `protocol` is an ALLOW-LIST of '6' (TCP) and '-1' (all protocols), not a
+        deny-list of ICMP. The deny-list this was drafted as — not_in_list
+        ['1','58'] — reported a UDP allow-all entry (protocol '17', which also
+        carries no PortRange, so both when_absent conditions hold) as a TCP
+        port-21 finding, and would have done the same for SCTP, GRE and every
+        other numbered protocol. Proved against stubbed DescribeNetworkAcls rows
+        in the auditor image: with the deny-list a protocol-'17' allow-all row
+        matched; with the allow-list it does not, and every true finding — the
+        '-1' default-ACL rule, an explicit TCP 21, a TCP 0-65535 range, a v6
+        ::/0 — still matches. This is also what Checkov does: its NACL port
+        checks consider tcp and -1, not every protocol.
+
+        TWO DIVERGENCES A READER OF THE RESULTS MUST KNOW ABOUT.
+
+        (1) No rule-number precedence. NACLs are evaluated lowest-number-first,
+        so an allow entry can be dead because a lower-numbered deny already
+        covered the port. Ordered evaluation is not expressible as a conjunction
+        over independent elements and is not faked here. The error is entirely in
+        the over-reporting direction — a shadowed allow entry is reported as a
+        finding — which is the visible, investigable direction, and Checkov does
+        not model precedence either.
+
+        (2) The DEFAULT network ACL is in the population and will FAIL. Every VPC
+        has one, DescribeNetworkAcls returns it, and it ships rule 100 allow-all
+        from 0.0.0.0/0. Terraform calls that resource aws_default_network_acl, so
+        Checkov never evaluates it; this control does. The finding is true — that
+        ACL does permit the port from anywhere — but it is one finding per VPC per
+        region and it is not the resource the check was written about. Scoping the
+        population to `is_default == false` is a `where` on the LEFT side of an
+        api mapping, which is graph.yml gap_3 and does not exist; `is_default` is
+        declared as a field here so that scope is one line away when it does.
+
+  CKV_AWS_230:
+    aws_network_acl:
+      reader: api
+      field: entries
+      satisfies: none_of
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value: ['6', '-1']
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value: ['0.0.0.0/0', '::/0']
+      - path: port_range.from
+        satisfies: at_most
+        value: 20
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 20
+        when_absent: true
+      note: >-
+        Identical in shape to CKV_AWS_229 at port 20 (FTP data). Read that
+        mapping's note: the same two divergences apply — no rule-number
+        precedence, and the VPC default network ACL is in the population and
+        fails. `when_absent: true` on the port conditions gives a Protocol "-1"
+        entry AWS's own meaning of "every port"; `protocol` is an allow-list of
+        '6' (TCP) and '-1' (all), so an ICMP or UDP allow-all entry — which also
+        carries no PortRange — is not reported as a TCP finding.
+
+  CKV_AWS_231:
+    aws_network_acl:
+      reader: api
+      field: entries
+      satisfies: none_of
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value: ['6', '-1']
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value: ['0.0.0.0/0', '::/0']
+      - path: port_range.from
+        satisfies: at_most
+        value: 3389
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 3389
+        when_absent: true
+      note: >-
+        Identical in shape to CKV_AWS_229 at port 3389 (RDP), which is the one of
+        the three that is a remote administration path rather than a legacy file
+        transfer, and is scored higher for it. Read CKV_AWS_229's note: the same
+        two divergences apply — no rule-number precedence, and the VPC default
+        network ACL is in the population and fails.
+
+metadata:
+
+  CKV_AWS_99:
+    what: >-
+      a Glue security configuration whose encryption configuration encrypts
+      CloudWatch logs with SSE-KMS, job bookmarks with CSE-KMS, and S3 output
+      with something other than DISABLED
+    rationale: >-
+      A Glue security configuration is the only place ETL output, job logs and
+      job bookmarks get encrypted; jobs attached to one that leaves any of the
+      three unencrypted write cleartext to S3 and to CloudWatch Logs. Bookmarks
+      are the one people forget — they hold the primary keys and partition values
+      the job has already processed, which is a description of the source data
+      even when the data itself is encrypted.
+    severity: medium
+    impact: 0.5
+    nist: [SC-28, 'SC-28 (1)', SC-13, AU-9]
+    nist_r4: [SC-28, 'SC-28 (1)', SC-13, AU-9]
+    cci: [CCI-001199, CCI-002475]
+    ksi: [KSI-SVC-CER]
+    nist_source: agent-drafted
+
+  CKV_AWS_105:
+    what: >-
+      a Redshift cluster parameter group whose effective require_ssl parameter is
+      'true', so the cluster refuses connections that are not TLS
+    rationale: >-
+      require_ssl is the only server-side control that makes TLS mandatory for
+      Redshift. Without it the cluster still accepts TLS, so a client-side test
+      passes and nothing looks wrong, while any client that omits sslmode
+      negotiates cleartext over the same port. Credentials and query results then
+      cross the network unprotected with no signal at either end.
+    stronger: >-
+      DescribeClusterParameters returns the EFFECTIVE value including the engine
+      default, so this sees a group that never declared the parameter at all —
+      which is the majority case and the one an HCL scan cannot see.
+    severity: high
+    impact: 0.7
+    nist: [SC-8, 'SC-8 (1)', SC-13]
+    nist_r4: [SC-8, 'SC-8 (1)', SC-13]
+    cci: [CCI-002418, CCI-002421]
+    ksi: [KSI-SVC-CET]
+    nist_source: agent-drafted
+
+  CKV_AWS_229:
+    what: >-
+      a network ACL with no ingress allow entry that reaches TCP port 21 from
+      0.0.0.0/0 or ::/0
+    rationale: >-
+      FTP's control channel carries credentials in cleartext, and an FTP daemon
+      reachable from the whole internet is both an authentication bypass target
+      and an anonymous-upload staging point. The network ACL is the subnet-wide
+      layer, so an entry here opens the port for every instance in the subnet
+      regardless of what the security groups say — and unlike a security group,
+      it is stateless and is usually written once and never revisited.
+    severity: high
+    impact: 0.7
+    nist: [SC-7, 'SC-7 (5)', AC-4]
+    nist_r4: [SC-7, 'SC-7 (5)', AC-4]
+    cci: [CCI-001097, CCI-002080]
+    ksi: [KSI-CNA-NDS]
+    nist_source: agent-drafted
+
+  CKV_AWS_230:
+    what: >-
+      a network ACL with no ingress allow entry that reaches TCP port 20 from
+      0.0.0.0/0 or ::/0
+    rationale: >-
+      Port 20 is FTP's data channel. Opened to the world it completes the
+      exposure port 21 begins — the control channel authenticates, the data
+      channel moves the bytes — and it is the half that gets left open, because
+      an operator closing FTP usually thinks only of 21. Like every network ACL
+      entry it applies to the whole subnet and is evaluated statelessly.
+    severity: medium
+    impact: 0.5
+    nist: [SC-7, 'SC-7 (5)', AC-4]
+    nist_r4: [SC-7, 'SC-7 (5)', AC-4]
+    cci: [CCI-001097, CCI-002080]
+    ksi: [KSI-CNA-NDS]
+    nist_source: agent-drafted
+
+  CKV_AWS_231:
+    what: >-
+      a network ACL with no ingress allow entry that reaches TCP port 3389 from
+      0.0.0.0/0 or ::/0
+    rationale: >-
+      3389 is RDP, an interactive administrative session. Exposed to 0.0.0.0/0 it
+      is credential-stuffed continuously and is the single most common initial
+      access vector for ransomware in cloud estates. Remote administrative access
+      is supposed to arrive over a managed path — Session Manager, a bastion, a
+      VPN — and a subnet-wide ACL entry silently makes every instance behind it
+      directly reachable instead.
+    severity: high
+    impact: 0.7
+    nist: [SC-7, 'SC-7 (5)', AC-4, AC-17]
+    nist_r4: [SC-7, 'SC-7 (5)', AC-4, AC-17]
+    cci: [CCI-001097, CCI-002080]
+    ksi: [KSI-CNA-NDS]
+    nist_source: agent-drafted
+
+fixes:
+
+  CKV_AWS_99:
+    aws_glue_security_configuration:
+      terraform: |
+        resource "aws_glue_security_configuration" "encrypted" {
+          name = "glue-encrypted"
+
+          encryption_configuration {
+            cloudwatch_encryption {
+              cloudwatch_encryption_mode = "SSE-KMS"
+              kms_key_arn                = aws_kms_key.glue.arn
+            }
+
+            job_bookmarks_encryption {
+              job_bookmarks_encryption_mode = "CSE-KMS"
+              kms_key_arn                   = aws_kms_key.glue.arn
+            }
+
+            s3_encryption {
+              s3_encryption_mode = "SSE-KMS"
+              kms_key_arn        = aws_kms_key.glue.arn
+            }
+          }
+        }
+      cli: |
+        aws glue create-security-configuration --name glue-encrypted --encryption-configuration file://enc.json
+        aws glue update-job --job-name <job> --job-update SecurityConfiguration=glue-encrypted
+        aws glue delete-security-configuration --name <old-configuration>
+      note: >-
+        There is no in-place fix. Glue security configurations are IMMUTABLE —
+        the API has create and delete and no update — so remediation is create a
+        new one, repoint every job that referenced the old one, then delete it.
+        Terraform does the same thing under the covers and will destroy and
+        recreate, which detaches jobs mid-flight if the update ordering is not
+        forced. Two further traps: the KMS key policy must allow the Glue service
+        principal and the job's role, or jobs fail at start with an opaque
+        access-denied; and CSE-KMS is the only accepted mode for job bookmarks,
+        so copying SSE-KMS across all three blocks is rejected.
+
+  CKV_AWS_105:
+    aws_redshift_parameter_group:
+      terraform: |
+        resource "aws_redshift_parameter_group" "tls" {
+          name   = "redshift-require-ssl"
+          family = "redshift-1.0"
+
+          parameter {
+            name  = "require_ssl"
+            value = "true"
+          }
+        }
+
+        resource "aws_redshift_cluster" "example" {
+          # ...
+          cluster_parameter_group_name = aws_redshift_parameter_group.tls.name
+        }
+      cli: |
+        aws redshift modify-cluster-parameter-group --parameter-group-name <group> --parameters ParameterName=require_ssl,ParameterValue=true
+        aws redshift reboot-cluster --cluster-identifier <cluster>
+      note: >-
+        require_ssl has apply-type static, so the parameter change is pending
+        until the cluster is rebooted — the group reports the new value and the
+        cluster keeps accepting cleartext until then. This control reads the
+        group, so it will report compliant during that window. And
+        default.redshift-1.0 cannot be modified at all: a cluster sitting on the
+        default group needs a new custom group plus `aws redshift modify-cluster
+        --cluster-parameter-group-name <group>` and a reboot, not a parameter
+        edit.
+
+  CKV_AWS_229:
+    aws_network_acl:
+      terraform: |
+        resource "aws_network_acl" "app" {
+          vpc_id = aws_vpc.main.id
+
+          ingress {
+            rule_no    = 100
+            protocol   = "tcp"
+            action     = "allow"
+            cidr_block = "10.0.0.0/16"
+            from_port  = 443
+            to_port    = 443
+          }
+
+          egress {
+            rule_no    = 100
+            protocol   = "tcp"
+            action     = "allow"
+            cidr_block = "0.0.0.0/0"
+            from_port  = 1024
+            to_port    = 65535
+          }
+        }
+      cli: |
+        aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=443,To=443
+        aws ec2 delete-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --ingress
+      note: >-
+        This control reads the ALLOW entries, so adding a deny rule at a lower
+        number does not clear the finding — the offending entry has to be
+        narrowed or deleted. Network ACLs are STATELESS: an ingress rule you
+        tighten needs a matching egress rule for the ephemeral range
+        (1024-65535) left in place or return traffic for every other connection
+        breaks, which is why the egress block above is shown. And the entry this
+        control most often reports is rule 100 on the VPC's DEFAULT network ACL,
+        which allows everything from 0.0.0.0/0 out of the box; Terraform manages
+        that one as aws_default_network_acl, not aws_network_acl.
+
+  CKV_AWS_230:
+    aws_network_acl:
+      terraform: |
+        resource "aws_network_acl" "app" {
+          vpc_id = aws_vpc.main.id
+
+          ingress {
+            rule_no    = 100
+            protocol   = "tcp"
+            action     = "allow"
+            cidr_block = "10.0.0.0/16"
+            from_port  = 443
+            to_port    = 443
+          }
+        }
+      cli: |
+        aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=443,To=443
+      note: >-
+        Same shape as the port 21 fix, and the same two traps: a deny rule at a
+        lower number does not clear this finding because the control reads allow
+        entries, and network ACLs are stateless so the ephemeral egress range
+        must survive the edit. Closing 20 without closing 21 leaves FTP
+        authentication exposed, so treat the pair together.
+
+  CKV_AWS_231:
+    aws_network_acl:
+      terraform: |
+        resource "aws_network_acl" "app" {
+          vpc_id = aws_vpc.main.id
+
+          ingress {
+            rule_no    = 100
+            protocol   = "tcp"
+            action     = "allow"
+            cidr_block = "10.0.0.0/16"
+            from_port  = 3389
+            to_port    = 3389
+          }
+        }
+      cli: |
+        aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=3389,To=3389
+      note: >-
+        Narrowing the CIDR to the management network is the minimum. The better
+        answer is to remove the entry entirely and reach Windows hosts through
+        Systems Manager Session Manager, which needs no inbound rule at any layer
+        and produces a session log; that also removes the bastion whose own
+        ingress rule would otherwise inherit this finding. Network ACLs are
+        stateless, so keep the ephemeral egress range when editing.
+
+skipped:
+
+  CKV_AWS_27: >-
+    aws_sqs_queue. Not a collection and not blocked on the verb. Checkov's
+    assertion is a row-level DISJUNCTION of two DIFFERENT comparisons —
+    SqsManagedSseEnabled is true OR KmsMasterKeyId is set — and the roll-up
+    conditions are a conjunction, with `path:` as a list covering only "the same
+    test in several places". A single `not_empty` over both paths would pass a
+    queue whose SqsManagedSseEnabled is the string "false", because "false" is a
+    non-empty string. Independently blocked twice more: sqs:GetQueueAttributes
+    needs an AttributeNames argument, which the api-spec schema refuses
+    (`args:` is explicitly NOT IMPLEMENTED), and its Attributes member is a MAP,
+    which tools/lint_api_paths.rb refuses to resolve a roll-up path across.
+
+  CKV_AWS_31: >-
+    aws_elasticache_replication_group. Confirmed against the ElastiCache model
+    that transit_encryption_enabled, auth_token_enabled and user_group_ids are
+    all real members of ReplicationGroup, so the fields exist — but the assertion
+    is transit_encryption_enabled AND (auth_token_enabled OR user_group_ids
+    non-empty), and the inner disjunction is between two different comparisons on
+    two different fields. Faking it means dropping one, and dropping the
+    user_group_ids arm fails every RBAC-authenticated Redis 6+ group, which is
+    the modern and MORE secure configuration. There is also no collection to roll
+    up over: this is a row-level predicate, and a roll-up needs `field:` to name
+    a collection- or structure-valued member.
+
+  CKV_AWS_38: >-
+    aws_eks_cluster. The spec is already live and carries both
+    resources_vpc_config.endpoint_public_access and .public_access_cidrs, so
+    nothing is missing from the reader. The assertion is not expressible: it is a
+    ROW-level conjunct (public access is on) ANDed with an ELEMENT test over
+    public_access_cidrs, and a roll-up's conditions apply only to elements. Worse,
+    the elements of public_access_cidrs are bare Strings and there is no self-path
+    — `dig_all` walks Hashes, so every path over a String element reaches nothing
+    and takes its when_absent verdict. Asserting `excludes 0.0.0.0/0` on the
+    field alone drops the endpoint_public_access conjunct and would fail a
+    cluster whose public endpoint is DISABLED, which is the compliant state.
+
+  CKV_AWS_80: >-
+    aws_msk_cluster. Blocked ONLY by a file this slice may not edit, and the fix
+    is one line. The three log destinations are named siblings under a structure,
+    and `CheckovCollection.elements` treats a Hash as one element, so the mapping
+    is exactly: field pointing at logging_info.broker_logs, satisfies any_of, one
+    condition with path: [cloud_watch_logs.enabled, firehose.enabled, s3.enabled]
+    and satisfies equals true. But `field:` must name a key in the api spec's
+    `fields:` map, aws_msk_cluster is ALREADY LIVE with only the three leaf
+    booleans declared, and merge_proposals refuses any staging api_spec whose
+    type is already live. Add `broker_logs: logging_info.broker_logs` to
+    tools/api_specs.yml and this maps. NOTE for whoever does: the proposal in
+    tools/proposals/custom.yml writes the path as `cloudwatch_logs`, and the
+    confirmed Kafka member is `cloud_watch_logs` — the live spec already has it
+    right, the proposal does not.
+
+  CKV_AWS_90: >-
+    aws_docdb_cluster_parameter_group. No aws-sdk-docdb in the image
+    (tools/api_specs.yml records it as removed for exactly this), and a spec
+    naming an absent gem is refused. The RDS client is not a surrogate: even if
+    rds:DescribeDBClusterParameterGroups surfaced DocumentDB families, the
+    population would include every Aurora parameter group, none of which carries
+    a `tls` parameter — so `none_of(parameters, [name == tls, value == disabled])`
+    would hold VACUOUSLY for every Aurora group in the account. Filtering the
+    population by db_parameter_group_family is a `where` on an api mapping, which
+    is graph.yml gap_3 and does not exist.
+
+  CKV_AWS_94: >-
+    aws_glue_data_catalog_encryption_settings. The proposal's stated blocker is
+    STALE and worth recording: it says `Array(page.public_send(collection))` would
+    explode an Aws::Structure into its members, but `items_from` was since fixed
+    to branch the three shapes explicitly and returns [value] for a non-Array, and
+    tools/lint_api_paths.rb accepts a StructureShape collection by name. So a
+    "singleton" spec is expressible today — `collection: _response` works on a
+    ONE-step spec too, which nothing documents. Not shipped for two reasons that
+    remain. There is no id member anywhere in the response, and `id:` is required;
+    `id: _parent` on a parentless spec yields a blank row id, which is the
+    condition the two-step reader treats as a lost subtree. And the Glue Data
+    Catalog exists implicitly in every region whether or not the account has ever
+    used Glue, with catalog_encryption_mode DISABLED, so an account with no Glue
+    at all would report one failure per region with no population scope available
+    to suppress it. Confirmed members for whoever picks this up:
+    encryption_at_rest.catalog_encryption_mode and
+    connection_password_encryption.return_connection_password_encrypted.
+
+  CKV_AWS_97: >-
+    aws_ecs_task_definition. The ASSERTION is expressible, and this is the shape
+    if the enumeration is ever solved: none_of over `volumes`, with conditions
+    [efs_volume_configuration.file_system_id not_empty] AND
+    [efs_volume_configuration.transit_encryption not_equals ENABLED,
+    when_absent: true] — the first condition scopes to EFS volumes and the
+    when_absent gives an omitted transit_encryption its real meaning of DISABLED,
+    so a plain Docker volume matches neither and is not flagged. The blocker is
+    the enumerator, and it is not mine to take: no aws_ecs_task_definition spec is
+    live, tools/proposals/parentchild.yml drafts one and its own call_volume note
+    says ListTaskDefinitions returns every ACTIVE REVISION of every family —
+    2,000-20,000 DescribeTaskDefinition calls on a mid-size account — with an
+    explicit RECOMMENDATION not to ship it unbounded. Claiming that api spec here
+    would also collide with the parent-child slice, which is a hard merge error.
+
+  CKV_AWS_104: >-
+    aws_docdb_cluster_parameter_group. Same absent gem as CKV_AWS_90, and the RDS
+    surrogate fails in the opposite and louder direction: an Aurora cluster
+    parameter group has no `audit_logs` parameter, so `any_of(parameters,
+    [name == audit_logs, value in enabled/ddl/all])` would FAIL every Aurora
+    parameter group in the account. Needs aws-sdk-docdb in the auditor image, or
+    a population filter on db_parameter_group_family.
+
+  CKV_AWS_113: >-
+    aws_ssm_document. Four things beyond the verb, any one of which is
+    disqualifying. The document CONTENT is a JSON string that must be parsed
+    before anything in it is addressable, which is a json_path capability nothing
+    here has. The population must be scoped to Session Manager documents
+    (a `where`, graph.yml gap_3). ssm:DescribeDocument/GetDocument need a name
+    argument, so it is a two-step. And the assertion is (s3BucketName AND
+    s3EncryptionEnabled) OR (cloudWatchLogGroupName AND
+    cloudWatchEncryptionEnabled) — a disjunction OF CONJUNCTIONS, which is
+    strictly beyond a conjunction of conditions.
+
+  CKV_AWS_192: >-
+    aws_wafv2_web_acl. Blocked before the verb: wafv2:ListWebACLs REQUIRES a
+    Scope argument (REGIONAL or CLOUDFRONT) and the api-spec schema has no way to
+    pass literal arguments to a list call — `args:` is listed as NOT IMPLEMENTED
+    and refused by tools/lint_api_specs.py, and the same wall is already recorded
+    against CKV_AWS_175. The assertion needs more than the verb even so: "a rule
+    using AWSManagedRulesKnownBadInputsRuleSet with the Log4JRCE rule NOT
+    overridden to count and NOT excluded" is a conjunction containing two
+    negations over NESTED collections (rule_action_overrides[], excluded_rules[]),
+    and a condition's `not_in_list` tests a value the path reached, not the
+    absence of a matching element.
+
+  CKV_AWS_196: >-
+    aws_elasticache_security_group. Confirmed that
+    elasticache:DescribeCacheSecurityGroups is still in the SDK model, so it
+    could be enumerated — but the assertion is "the POPULATION is empty", and
+    there is no verb for that: every value verb is per-asset, so the control could
+    fail (a group exists) and could never pass (zero groups renders Not
+    Applicable via only_if). Worse in the other direction: cache security groups
+    are EC2-Classic only, and on a VPC-only account the call itself answers
+    InvalidParameterValue rather than an empty list. Since the enumeration-hygiene
+    change, a region that raised lands in unreadable_regions and FAILS the
+    control — so this would render red in every region of every modern account
+    while assessing nothing. Needs a collection_empty verb plus declared
+    absent_errors.
+
+  CKV_AWS_198: >-
+    aws_db_security_group. Identical to CKV_AWS_196.
+    rds:DescribeDBSecurityGroups is still present in the SDK model, but it is an
+    EC2-Classic-only API that answers InvalidParameterValue on a VPC-only
+    account, which now lands in unreadable_regions and fails the control having
+    assessed nothing. And the assertion is again "the population is empty", which
+    no per-asset verb expresses.
+
+  CKV_AWS_204: >-
+    aws_ami. The assertion is a clean all_of — every block device mapping's
+    ebs.encrypted is true — but the ENUMERATION is disqualifying and the roll-up
+    verb does not touch it. ec2:DescribeImages with no arguments returns every
+    PUBLIC AMI in the region, tens of thousands of them, none of which is this
+    account's asset; scoping it needs `args: {owners: [self]}` on the list call,
+    which the api-spec schema explicitly does not implement. Shipping it
+    unscoped would be both ruinously expensive and a report about Amazon's
+    catalogue rather than the account.
+
+  CKV_AWS_213: >-
+    aws_load_balancer_policy. The SDK model is fine — a two-step off
+    describe_load_balancers -> describe_load_balancer_policies resolves, and
+    policy_attribute_descriptions[].{attribute_name,attribute_value} are real
+    members. The roll-up is withdrawn because it rests on an UNVERIFIABLE runtime
+    claim in the direction that fails silently. `none_of` over
+    policy_attribute_descriptions with [attribute_name in the weak Protocol-*
+    list, attribute_value == 'true'] only ever fails if the LB-scoped
+    DescribeLoadBalancerPolicies EXPANDS a reference policy into Protocol-*
+    attributes. Checkov has a separate Reference-Security-Policy branch precisely
+    because that is how these are written, and the fix this repo would recommend
+    (aws_load_balancer_policy with a single Reference-Security-Policy
+    policy_attribute) produces exactly the shape whose expansion is in doubt. If
+    ELB does NOT expand, a policy pinned to ELBSecurityPolicy-2015-05 carries no
+    Protocol-* attribute at all, `none_of` is vacuously TRUE, and the control
+    passes having assessed nothing — with no diagnostic, because the
+    collection-scope guard only asks whether SOME asset exposed
+    policy_attribute_descriptions and every stickiness / backend-auth policy on
+    the account satisfies it while contributing no protocol evidence. Reinstating
+    this needs either (a) one recorded LB-scoped DescribeLoadBalancerPolicies
+    response from a policy created via Reference-Security-Policy, proving the
+    expansion, or (b) a second condition arm [attribute_name ==
+    Reference-Security-Policy, attribute_value in <weak policy names>] — which is
+    expressible under the conjunction, but only against a deny-list of AWS
+    predefined policy names that no SDK model can confirm and that goes stale
+    silently. Neither is available in this slice.
+
+  CKV_AWS_224: >-
+    aws_ecs_cluster. Blocked twice, and neither is the verb. ecs:DescribeClusters
+    returns the `configuration` member ONLY when called with
+    include: ['CONFIGURATIONS'], and the api-spec schema cannot pass extra
+    arguments — so the field would be nil for every cluster, which under a
+    roll-up means zero elements, which makes all_of vacuously true for the whole
+    account: a control that cannot fail. And the assertion itself contains a
+    disjunction of different comparisons (kms_key_id set AND
+    (cloud_watch_encryption_enabled OR s3_bucket_encryption_enabled)), plus a
+    scope to clusters whose execute-command logging is not NONE, which is a
+    population `where`.

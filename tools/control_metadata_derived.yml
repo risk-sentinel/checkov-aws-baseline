@@ -1,0 +1,2849 @@
+# DERIVED, NOT REVIEWED. nist_source records which pass produced each anchor.
+CKV2_AWS_10:
+  cci:
+  - CCI-000162
+  - CCI-002664
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-6
+  - AU-9
+  - SI-4
+  nist_r4:
+  - AU-6
+  - AU-9
+  - SI-4
+  nist_source: agent-drafted
+  rationale: A trail that only writes to S3 produces an archive nobody is watching. Delivery to CloudWatch
+    Logs is what makes metric filters and alarms possible, so it is the difference between events being
+    retained and events being noticed. It also puts a second copy of the audit record in a store with
+    a different access path from the bucket.
+  severity: medium
+  what: a CloudTrail trail whose cloud_watch_logs_group_arn is set, so its events also land somewhere
+    they can be alarmed on
+CKV2_AWS_11:
+  cci:
+  - CCI-002664
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-OSM
+  nist:
+  - SI-4
+  - AU-12
+  nist_r4:
+  - SI-4
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Without a flow log there is no record of what talked to what inside the VPC. An intrusion
+    is then reconstructible only from application logs, and lateral movement between instances — which
+    never touches an application log — leaves no trace at all.
+  severity: medium
+  what: a VPC that has a flow log attached to it, capturing accepted and rejected network traffic
+CKV2_AWS_14:
+  cci:
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-2
+  - CM-6
+  nist_r4:
+  - AC-2
+  - CM-6
+  nist_source: agent-drafted
+  rationale: An empty IAM group is a set of permissions with no members and therefore no owner and no
+    review. It accumulates policy over time because nobody notices it, and it grants everything it holds
+    the moment a user is added to it — which is a one-call change nobody treats as a privilege grant.
+  severity: low
+  what: an IAM group that contains at least one user, rather than a group carrying permissions that nobody
+    holds
+CKV2_AWS_18:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: An EFS file system is usually shared mutable state for several workloads at once, so a bad
+    write reaches all of them and there is no single owner who would notice. Without a recovery point
+    there is nothing to roll back to.
+  severity: medium
+CKV2_AWS_19:
+  cci:
+  - CCI-000366
+  - CCI-001097
+  impact: 0.3
+  ksi:
+  - KSI-CMT-INV
+  nist:
+  - CM-8
+  - SC-7
+  nist_r4:
+  - CM-8
+  - SC-7
+  nist_source: agent-drafted
+  rationale: An allocated but unassociated Elastic IP is an address the account owns and nothing answers
+    on. It is billed continuously, it is still present in any allow-list or DNS record that was written
+    against it, and whatever is associated with it next inherits that reachability without anyone revisiting
+    the decision.
+  severity: low
+  what: an Elastic IP that is associated with something — an instance, a NAT gateway or a network interface
+    — rather than allocated and dangling
+CKV2_AWS_22:
+  cci:
+  - CCI-000764
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - IA-2
+  - AC-2
+  nist_r4:
+  - IA-2
+  - AC-2
+  nist_source: agent-drafted
+  rationale: 'A console password on an IAM user is a standing credential that lives outside the identity
+    provider: it is not covered by the organisation''s session policy, its MFA is enforced per user rather
+    than centrally, and it survives the user being deprovisioned upstream. Human console access belongs
+    to federated roles, where revocation happens in one place.'
+  severity: medium
+  what: an IAM user with no login profile, so console access is not available through a long-lived local
+    password
+CKV2_AWS_3:
+  cci:
+  - CCI-001253
+  - CCI-002656
+  impact: 0.7
+  ksi:
+  - KSI-MLA-OSM
+  nist:
+  - SI-4
+  - SI-4 (4)
+  - AU-6
+  nist_r4:
+  - SI-4
+  - SI-4 (4)
+  - AU-6
+  nist_source: agent-drafted
+  rationale: GuardDuty is the account's continuous threat detection. A region without an enabled detector
+    produces no findings at all, which reads as "no threats" and is in fact "no looking".
+  severity: high
+CKV2_AWS_32:
+  cci:
+  - CCI-002418
+  impact: 0.5
+  ksi:
+  - KSI-CNA-BND
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-18
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-18
+  nist_source: agent-drafted
+  rationale: A response headers policy is where HSTS, X-Content-Type-Options, a Content-Security-Policy
+    and the CORS headers are set for everything the distribution serves. Without one the origin has to
+    set them on every response, and any object served from a bucket or a static path that does not gets
+    none. The policy is the only place the header set can be asserted for the whole distribution at once.
+  severity: medium
+  what: a response headers policy is attached to the distribution's cache behaviour
+CKV2_AWS_34:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A String parameter is returned in plaintext to anyone holding ssm:GetParameter, and its value
+    appears in CloudTrail-visible API responses and in any console listing. SecureString moves the value
+    behind a KMS key, so reading it requires a second, separately auditable authorisation.
+  severity: high
+  what: an SSM parameter whose type is SecureString, so its value is encrypted with KMS rather than stored
+    and returned in clear text
+CKV2_AWS_41:
+  cci:
+  - CCI-000764
+  - CCI-000225
+  impact: 0.5
+  ksi:
+  - KSI-IAM-MFA
+  nist:
+  - IA-2
+  - AC-6
+  - IA-5 (2)
+  nist_r4:
+  - IA-2
+  - AC-6
+  - IA-5 (2)
+  nist_source: agent-drafted
+  rationale: 'An instance with no role has no way to obtain credentials except to carry them: an access
+    key in user data, in an AMI, or in a file on disk. Those do not rotate, do not expire, and leave no
+    record tying their use back to the instance. A role delivers short-lived credentials through IMDS
+    instead, and its use is attributable in CloudTrail. Terraform can only show that a profile was declared;
+    this asserts that the profile the running instance actually carries reaches a role at all.'
+  severity: medium
+  what: an IAM instance profile, containing a role, is attached to the instance
+CKV2_AWS_42:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: The default CloudFront certificate is only valid for the cloudfront.net name, so a distribution
+    relying on it cannot serve the organisation's own domain over TLS that a client will accept. In practice
+    that means users reach the service under a name the organisation does not control, or reach it over
+    a connection whose certificate warning they have been trained to click through.
+  severity: medium
+  what: a CloudFront distribution whose viewer certificate comes from ACM or IAM rather than the default
+    CloudFront certificate
+CKV2_AWS_49:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A DMS endpoint with SslMode "none" replicates the source database's rows in cleartext across
+    the network, including whatever the source considered sensitive enough to encrypt at rest. Migration
+    traffic is the one moment a whole datastore crosses a network boundary in bulk, so it is the worst
+    traffic to leave unprotected.
+  severity: high
+CKV2_AWS_50:
+  cci:
+  - CCI-000553
+  - CCI-002385
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-10
+  - SC-5
+  nist_r4:
+  - CP-10
+  - SC-5
+  nist_source: agent-drafted
+  rationale: 'Without automatic failover a replication group''s primary node is a single point of failure:
+    recovery waits for a human to promote a replica, and until then every write fails. AutomaticFailover
+    is also the setting that makes the Multi-AZ topology an availability control rather than just extra
+    cost.'
+  severity: medium
+CKV2_AWS_51:
+  cci:
+  - CCI-000778
+  - CCI-002418
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - IA-3
+  - SC-8
+  - AC-3
+  nist_r4:
+  - IA-3
+  - SC-8
+  - AC-3
+  nist_source: agent-drafted
+  rationale: A client certificate is how the backend proves a request actually came through API Gateway.
+    Without one, anything that learns the backend URL can call it directly and bypass the gateway's authorizers
+    and throttling.
+  severity: medium
+CKV2_AWS_52:
+  cci:
+  - CCI-000213
+  - CCI-000764
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - IA-2
+  nist_r4:
+  - AC-3
+  - IA-2
+  nist_source: agent-drafted
+  rationale: Without fine-grained access control the only thing standing between a caller and every index
+    in the domain is the resource-based access policy and the network path. Enabling it puts authentication
+    and per-index, per-document authorisation inside the engine, so a caller that reaches the endpoint
+    is still not automatically a reader of everything in it.
+  severity: high
+CKV2_AWS_54:
+  cci:
+  - CCI-002418
+  - CCI-002450
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_source: agent-drafted
+  rationale: SSLv3 is broken — POODLE recovers plaintext from it — and offering it on the CloudFront-to-origin
+    leg means an attacker who can influence the negotiation downgrades the connection to a cipher suite
+    that no longer protects the traffic. The viewer leg being TLS 1.2 does not help when the origin leg
+    is not.
+  severity: high
+CKV2_AWS_55:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: The EMR security configuration is where at-rest encryption for EBS and S3, in-transit encryption
+    between nodes, and Kerberos authentication are declared. A cluster without one has none of them, and
+    an EMR cluster is by definition processing a bulk copy of data that lives somewhere more protected.
+  severity: medium
+CKV2_AWS_56:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: IAMFullAccess grants unrestricted iam:* — the ability to create a role, attach AdministratorAccess
+    to it and assume it. Any principal holding it is effectively an account administrator regardless of
+    what its other policies say, so the policy is a privilege-escalation path rather than a permission
+    set. Least privilege is asserted here as "nothing is attached to it at all", which is the only state
+    that can be checked without evaluating every attached principal's intent.
+  severity: high
+CKV2_AWS_57:
+  cci:
+  - CCI-000196
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  - KSI-SVC-KMG
+  nist:
+  - IA-5
+  - SC-12
+  nist_r4:
+  - IA-5
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A secret that is never rotated stays valid for as long as it exists, so the window between
+    a leak and its expiry is unbounded. Automatic rotation caps that window without depending on anyone
+    noticing the leak, which is the only form of credential hygiene that survives contact with a real
+    estate.
+  severity: medium
+CKV2_AWS_59:
+  cci:
+  - CCI-000553
+  - CCI-002385
+  impact: 0.3
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-10
+  - SC-5
+  nist_r4:
+  - CP-10
+  - SC-5
+  nist_source: agent-drafted
+  rationale: Without dedicated master nodes the cluster-management workload runs on the same nodes serving
+    queries, so one expensive search can cost the cluster its quorum and take the domain — and anything
+    logging to it — offline. Dedicated masters isolate cluster state from data-plane load.
+  severity: low
+CKV2_AWS_63:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: A network firewall with no logging configuration inspects traffic and records nothing about
+    what it allowed or dropped. The control is still enforcing, but there is no evidence it enforced,
+    and no way to investigate what reached the protected subnets — the firewall becomes unauditable exactly
+    where the boundary matters most.
+  severity: medium
+CKV2_AWS_73:
+  cci:
+  - CCI-002475
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-12
+  - SC-28 (1)
+  nist_r4:
+  - SC-12
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Queue payloads encrypted under the AWS-managed key alias/aws/sqs cannot have their key policy,
+    rotation schedule or grants controlled by the account, and the key cannot be disabled to revoke access
+    in an incident. A customer-managed key makes those decisions the boundary's to make.
+  severity: medium
+CKV2_AWS_74:
+  cci:
+  - CCI-002418
+  - CCI-002450
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-13
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-13
+  nist_source: agent-drafted
+  rationale: The named legacy policies carry CBC and RC4-era suites and 3DES. They exist only for clients
+    that should no longer be reaching a FedRAMP boundary.
+  severity: high
+CKV2_AWS_75:
+  cci:
+  - CCI-001414
+  - CCI-002080
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - AC-4
+  - SC-7
+  - AC-3
+  nist_r4:
+  - AC-4
+  - SC-7
+  - AC-3
+  nist_source: agent-drafted
+  rationale: A wildcard CORS origin lets any website in a victim's browser call the function URL with
+    that browser's credentials and read the response.
+  severity: medium
+CKV2_AWS_8:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.7
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A database cluster with no recovery point cannot be restored. Encryption, deletion protection
+    and multi-AZ all protect availability of the running cluster; only a backup protects against the data
+    itself being wrong, and a backup plan that has never produced a recovery point protects nothing.
+  severity: high
+CKV2_AWS_9:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A volume with no recovery point is unrecoverable from corruption, ransomware or a mistaken
+    detach-and-delete. Snapshots taken by hand are not a control, because nothing asserts they were taken;
+    a backup plan that has produced a recovery point is evidence that they were.
+  severity: medium
+CKV_AWS_102:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A publicly accessible Neptune instance resolves to a public address, so the only thing between
+    the database and the internet is a security group rule. Any widening of that rule, deliberate or accidental,
+    exposes the database directly rather than exposing it to the VPC.
+  severity: high
+CKV_AWS_103:
+  cci:
+  - CCI-002418
+  - CCI-002422
+  - CCI-002450
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_source: agent-drafted
+  rationale: A listener on a pre-TLS-1.2 policy will negotiate TLS 1.0 or 1.1 with any client that asks,
+    so the weakest client on the internet sets the security of the connection.
+  severity: high
+  stronger: Checkov reads the ssl_policy argument on the listener resource. This reads DescribeListeners,
+    so a listener created outside Terraform -- or one whose policy was changed in the console -- is assessed
+    on the same footing.
+CKV_AWS_105:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  - SC-13
+  nist_source: agent-drafted
+  rationale: require_ssl is the only server-side control that makes TLS mandatory for Redshift. Without
+    it the cluster still accepts TLS, so a client-side test passes and nothing looks wrong, while any
+    client that omits sslmode negotiates cleartext over the same port. Credentials and query results then
+    cross the network unprotected with no signal at either end.
+  severity: high
+  stronger: DescribeClusterParameters returns the EFFECTIVE value including the engine default, so this
+    sees a group that never declared the parameter at all — which is the majority case and the one an
+    HCL scan cannot see.
+  what: a Redshift cluster parameter group whose effective require_ssl parameter is 'true', so the cluster
+    refuses connections that are not TLS
+CKV_AWS_116:
+  cci:
+  - CCI-001312
+  impact: 0.3
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - SI-11
+  nist_r4:
+  - SI-11
+  nist_source: agent-drafted
+  rationale: An asynchronous invocation that exhausts its retries is discarded silently when there is
+    no dead-letter target. The work is lost and nothing records that it existed, so the failure is invisible
+    to both operations and audit.
+  severity: low
+CKV_AWS_117:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A function outside a VPC reaches the internet directly and is not subject to the account's
+    egress controls, flow logs or endpoint policies, so its outbound traffic cannot be observed or constrained
+    alongside everything else.
+  severity: medium
+CKV_AWS_119:
+  cci:
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-12
+  - SC-28 (1)
+  nist_r4:
+  - SC-12
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A table on the AWS-owned default key is encrypted, but the key is invisible -- it has no
+    key policy to read, no grants to audit, and no CloudTrail record of its use. Moving to a KMS key puts
+    the table's encryption under the same key policy and usage log as everything else.
+  severity: medium
+  what: server_side_encryption is enabled with a kms_key_arn, rather than the AWS-owned default key
+CKV_AWS_121:
+  cci:
+  - CCI-000172
+  - CCI-000366
+  impact: 0.5
+  ksi:
+  - KSI-CMT-INV
+  nist:
+  - CM-8
+  - AU-12
+  nist_r4:
+  - CM-8
+  - AU-12
+  nist_source: agent-drafted
+  rationale: An aggregator pinned to a region list records configuration only where someone remembered
+    to look. Resources appear in unexpected regions precisely when nobody is watching them, so a region-limited
+    aggregator makes the inventory look complete while missing the part that matters.
+  severity: medium
+  what: an aggregation source covers all regions
+CKV_AWS_123:
+  cci: &id003
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi: &id004
+  - KSI-CNA-NDS
+  nist: &id001
+  - SC-7
+  - SC-7 (5)
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure that VPC Endpoint Service is configured for Manual Acceptance. Anchors derived from
+    the check's networking category, not reviewed control by control.
+  severity: high
+CKV_AWS_124:
+  cci: &id009
+  - CCI-000169
+  - CCI-000172
+  impact: 0.5
+  ksi: &id010
+  - KSI-MLA-LOG
+  nist: &id002
+  - AU-2
+  - AU-12
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure that CloudFormation stacks are sending event notifications to an SNS topic. Anchors
+    derived from the check's logging category, not reviewed control by control.
+  severity: medium
+CKV_AWS_127:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A classic load balancer listener with no certificate terminates in the clear, so everything
+    it carries — session cookies, credentials, the payload itself — crosses the public network readable
+    and modifiable in transit. One such listener is enough; it does not matter that the load balancer
+    also offers HTTPS if the plaintext port is still answering.
+  severity: high
+  stronger: Checkov reads the listener blocks in the Terraform. This reads the listeners the load balancer
+    is actually serving, so a listener added out of band, or one left behind after a certificate was moved
+    to a different port, is assessed too.
+  what: 'aws_elb: every listener block declares an ssl_certificate_id'
+CKV_AWS_130:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure VPC subnets do not assign public IP by default. Anchors derived from the check's networking
+    category, not reviewed control by control.
+  severity: high
+CKV_AWS_131:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure that ALB drops HTTP headers. Anchors derived from the check's networking category,
+    not reviewed control by control.
+  severity: high
+CKV_AWS_133:
+  cci:
+  - CCI-000535
+  - CCI-000553
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A retention period of zero turns automated backups off entirely, so a dropped table or a
+    corrupted write has no point to recover from. The window is the only thing standing between a mistake
+    and permanent data loss, and it cannot be added retroactively.
+  severity: medium
+  what: backup_retention_period is set to between 1 and 35 days
+CKV_AWS_137:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A domain outside a VPC has a public endpoint whose only barrier is its access policy, so
+    a mistake in that document exposes the index to the internet. Inside a VPC the security group and
+    route table bound reachability before the policy is consulted at all.
+  severity: high
+CKV_AWS_138:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure that ELB is cross-zone-load-balancing enabled. Anchors derived from the check's networking
+    category, not reviewed control by control.
+  severity: high
+CKV_AWS_140:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A global cluster's encryption is fixed at creation and inherited by every secondary it replicates
+    into. An unencrypted global cluster therefore writes plaintext storage in every region it reaches,
+    and the only fix is to build a new one.
+  severity: high
+  what: storage_encrypted is true on the global cluster
+CKV_AWS_142:
+  cci: &id007
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi: &id008
+  - KSI-SVC-CER
+  nist: &id005
+  - SC-28
+  - SC-28 (1)
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure that Redshift cluster is encrypted by KMS. Anchors derived from the check's encryption
+    category, not reviewed control by control.
+  severity: high
+CKV_AWS_146:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A cluster snapshot holds a full copy of the database and outlives the cluster it came from.
+    If it is unencrypted, the data is readable by anyone who can restore it or who gains access to the
+    snapshot store, without ever touching the running database.
+  severity: high
+  stronger: Checkov reads the declared snapshot resource. This reads DescribeDBClusterSnapshots, so snapshots
+    created by hand or by a retention policy -- the ones Terraform never declared -- are assessed too.
+CKV_AWS_148:
+  cci:
+  - CCI-001097
+  - CCI-000381
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - CM-7
+  nist_r4:
+  - SC-7
+  - CM-7
+  nist_source: agent-drafted
+  rationale: A default VPC ships with a public subnet in every availability zone, an internet gateway
+    and a security group that allows all traffic between its members. An instance launched without an
+    explicit subnet lands there.
+  severity: medium
+  stronger: Checkov flags the Terraform resource. AWS creates a default VPC in every region of a new account
+    regardless of Terraform, so this asserts against the VPCs that exist rather than against the ones
+    HCL mentions.
+  what: any aws_default_vpc resource is declared at all
+CKV_AWS_150:
+  cci: &id011
+  - CCI-000366
+  impact: 0.5
+  ksi: &id012
+  - KSI-CMT-CFG
+  nist: &id006
+  - CM-6
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure that Load Balancer has deletion protection enabled. Anchors derived from the check's
+    general security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_152:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure that Load Balancer (Network/Gateway) has cross-zone load balancing enabled. Anchors
+    derived from the check's networking category, not reviewed control by control.
+  severity: high
+CKV_AWS_153:
+  cci:
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-CMT-INV
+  nist:
+  - CM-8
+  - AU-12
+  nist_r4:
+  - CM-8
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Instances launched by an untagged Auto Scaling group appear in the account with no owner,
+    environment or data classification, and they appear and disappear on their own schedule. Anything
+    that keys off tags -- cost attribution, backup selection, patch groups -- silently skips them.
+  severity: low
+  what: the group declares at least one tag
+CKV_AWS_154:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure Redshift is not deployed outside of a VPC. Anchors derived from the check's networking
+    category, not reviewed control by control.
+  severity: high
+CKV_AWS_159:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Query results are written to S3 as ordinary objects, and they contain the rows the query
+    selected. An unencrypted result location leaves a growing archive of extracted data protected only
+    by the bucket's own settings.
+  severity: high
+CKV_AWS_164:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A PUBLIC Transfer endpoint accepts connections from anywhere on the internet, and Transfer
+    servers front file stores that usually hold bulk data exchanged with partners. A VPC endpoint puts
+    the same service behind security groups and route tables that can be reasoned about.
+  severity: high
+CKV_AWS_169:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: 'An unconditioned wildcard principal on a topic policy lets any AWS account, and an anonymous
+    caller, subscribe to the topic or publish to it. Subscribing exfiltrates every message the topic will
+    ever carry — and topics carry alarms, order events and operational detail that describe the system
+    to an attacker. Publishing is worse: it injects messages into whatever the subscribers do next.'
+  severity: high
+  what: 'aws_sns_topic_policy: the topic policy has no Allow statement whose Principal is ''*'', or whose
+    Principal.AWS contains ''*'', without ANY Condition on the statement (Checkov runs cloudsplaining''s
+    internet_accessible_actions, which is the same test with a CURATED allow-list of restrictive condition
+    keys — so a topic granting ''*'' under a condition that does not actually narrow it, a date or a userAgent
+    match, passes here and fails in Checkov)'
+CKV_AWS_174:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Verify CloudFront Distribution Viewer Certificate is using TLS v1.2 or higher. Anchors derived
+    from the check's encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_175:
+  cci:
+  - CCI-001097
+  - CCI-000366
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - CM-6
+  nist_r4:
+  - SC-7
+  - CM-6
+  nist_source: agent-drafted
+  rationale: A web ACL with no rules inspects nothing. It is attached, it appears in the architecture
+    diagram and it shows up as a control in the SSP, and every request reaching the protected resource
+    passes through it untouched.
+  severity: medium
+CKV_AWS_176:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure Logging is enabled for WAF Web Access Control Lists. Anchors derived from the check's
+    logging category, not reviewed control by control.
+  severity: medium
+CKV_AWS_184:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure resource is encrypted by KMS using a customer managed Key (CMK). Anchors derived from
+    the check's encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_189:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure EBS Volume is encrypted by KMS using a customer managed Key (CMK). Anchors derived
+    from the check's encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_195:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure Glue component has a security configuration associated. Anchors derived from the check's
+    encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_197:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure MQ Broker Audit logging is enabled. Anchors derived from the check's logging category,
+    not reviewed control by control.
+  severity: medium
+CKV_AWS_206:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure API Gateway Domain uses a modern security Policy. Anchors derived from the check's
+    general security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_207:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure MQ Broker minor version updates are enabled. Anchors derived from the check's general
+    security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_209:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure MQ broker encrypted by KMS using a customer managed Key (CMK). Anchors derived from
+    the check's encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_210:
+  cci:
+  - CCI-000225
+  - CCI-000381
+  impact: 0.7
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - AC-6
+  - CM-7
+  nist_r4:
+  - AC-6
+  - CM-7
+  nist_source: agent-drafted
+  rationale: A privileged container holds the host's capabilities and device access. Whatever isolation
+    the job was placed in stops mattering, and a compromise of the job becomes a compromise of the instance
+    running it and of every other job on it.
+  severity: high
+CKV_AWS_216:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure CloudFront distribution is enabled. Anchors derived from the check's general security
+    category, not reviewed control by control.
+  severity: medium
+CKV_AWS_227:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure KMS key is enabled. Anchors derived from the check's encryption category, not reviewed
+    control by control.
+  severity: high
+CKV_AWS_228:
+  cci:
+  - CCI-002421
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8 (1)
+  - SC-13
+  nist_r4:
+  - SC-8 (1)
+  - SC-13
+  nist_source: agent-drafted
+  rationale: The older endpoint policy still negotiates TLS 1.0 and 1.1. Enforcing HTTPS while accepting
+    a deprecated protocol version means the connection is encrypted with a cipher suite the organisation
+    has already retired everywhere else.
+  severity: medium
+CKV_AWS_229:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  nist_source: agent-drafted
+  rationale: FTP's control channel carries credentials in cleartext, and an FTP daemon reachable from
+    the whole internet is both an authentication bypass target and an anonymous-upload staging point.
+    The network ACL is the subnet-wide layer, so an entry here opens the port for every instance in the
+    subnet regardless of what the security groups say — and unlike a security group, it is stateless and
+    is usually written once and never revisited.
+  severity: high
+  what: "a network ACL with no ingress allow entry that reaches TCP port 21 from 0.0.0.0/0 or ::/0"
+CKV_AWS_23:
+  cci:
+  - CCI-000366
+  - CCI-000381
+  impact: 0.3
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-6
+  - CM-7
+  - CM-7 (1)
+  nist_r4:
+  - CM-6
+  - CM-7
+  - CM-7 (1)
+  nist_source: agent-drafted
+  rationale: An undescribed firewall rule cannot be reviewed. Nobody can say whose it is, what it was
+    opened for, or whether the reason still holds, so the periodic review that is supposed to close stale
+    openings degrades into a guess and the rule survives every review it should not have.
+  severity: low
+CKV_AWS_230:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  nist_source: agent-drafted
+  rationale: Port 20 is FTP's data channel. Opened to the world it completes the exposure port 21 begins
+    — the control channel authenticates, the data channel moves the bytes — and it is the half that gets
+    left open, because an operator closing FTP usually thinks only of 21. Like every network ACL entry
+    it applies to the whole subnet and is evaluated statelessly.
+  severity: medium
+  what: "a network ACL with no ingress allow entry that reaches TCP port 20 from 0.0.0.0/0 or ::/0"
+CKV_AWS_231:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  - AC-17
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  - AC-4
+  - AC-17
+  nist_source: agent-drafted
+  rationale: 3389 is RDP, an interactive administrative session. Exposed to 0.0.0.0/0 it is credential-stuffed
+    continuously and is the single most common initial access vector for ransomware in cloud estates.
+    Remote administrative access is supposed to arrive over a managed path — Session Manager, a bastion,
+    a VPN — and a subnet-wide ACL entry silently makes every instance behind it directly reachable instead.
+  severity: high
+  what: "a network ACL with no ingress allow entry that reaches TCP port 3389 from 0.0.0.0/0 or ::/0"
+CKV_AWS_238:
+  cci:
+  - CCI-002664
+  impact: 0.5
+  ksi:
+  - KSI-MLA-OSM
+  nist:
+  - SI-4
+  - RA-5
+  nist_r4:
+  - SI-4
+  - RA-5
+  nist_source: agent-drafted
+  rationale: A detector that exists but is suspended keeps its configuration and its findings history
+    while analysing nothing, so the account looks monitored in an inventory and is not. This is the deployed
+    state Terraform cannot show.
+  severity: medium
+CKV_AWS_239:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: DAX sits in front of DynamoDB and returns the same items. With the cluster endpoint left
+    unencrypted, those items and the requests for them cross the VPC in cleartext.
+  severity: high
+CKV_AWS_24:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A security group is the last boundary in front of the instance, and SSH on port 22 is an
+    administrative channel. Opened to 0.0.0.0/0 it is reachable from every host on the internet, so the
+    only remaining control is the credential — and the exposure is continuous, indexed by scanners within
+    minutes, and identical whether the rule was written deliberately or left behind by a debugging session.
+  severity: high
+  stronger: Two deliberate divergences from Checkov. It reads Terraform, so a rule added in the console,
+    by another pipeline or by an incident responder is invisible to it; this reads the rules AWS is actually
+    enforcing, whatever created them. And Checkov exempts any ingress block carrying prefix_list_ids,
+    which on a deployed rule would let a permission that ALSO opens 0.0.0.0/0 pass unexamined — that exemption
+    is not reproduced here.
+  what: "aws_security_group / aws_security_group_rule / aws_vpc_security_group_ingress_rule: an INGRESS\
+    \ rule whose from_port..to_port span covers 22 — or whose protocol is -1, which Checkov reads as 0-65535\
+    \ — and whose cidr_blocks contain 0.0.0.0/0 or whose ipv6_cidr_blocks contain ::/0"
+CKV_AWS_248:
+  cci:
+  - CCI-001097
+  - CCI-000382
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  - CM-7
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  - CM-7
+  nist_source: agent-drafted
+  rationale: A domain placed in a VPC without an explicit security group inherits the VPC default group,
+    which permits all traffic between anything else that also inherited it. The domain then has no ingress
+    boundary of its own.
+  severity: medium
+CKV_AWS_25:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: A security group is the last boundary in front of the instance, and RDP on port 3389 is an
+    administrative channel. Opened to 0.0.0.0/0 it is reachable from every host on the internet, so the
+    only remaining control is the credential — and the exposure is continuous, indexed by scanners within
+    minutes, and identical whether the rule was written deliberately or left behind by a debugging session.
+  severity: high
+  stronger: Two deliberate divergences from Checkov. It reads Terraform, so a rule added in the console,
+    by another pipeline or by an incident responder is invisible to it; this reads the rules AWS is actually
+    enforcing, whatever created them. And Checkov exempts any ingress block carrying prefix_list_ids,
+    which on a deployed rule would let a permission that ALSO opens 0.0.0.0/0 pass unexamined — that exemption
+    is not reproduced here.
+  what: "aws_security_group / aws_security_group_rule / aws_vpc_security_group_ingress_rule: an INGRESS\
+    \ rule whose from_port..to_port span covers 3389 — or whose protocol is -1, which Checkov reads as\
+    \ 0-65535 — and whose cidr_blocks contain 0.0.0.0/0 or whose ipv6_cidr_blocks contain ::/0"
+CKV_AWS_251:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.7
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: A trail that exists but is stopped produces no record of what happened while it was stopped,
+    and the gap is invisible in the console until someone goes looking for the events that should be there.
+  severity: high
+  stronger: Checkov reads enable_logging, the state Terraform asked for. This reads GetTrailStatus, the
+    state the trail is actually in — a trail stopped by hand after the apply reports the same HCL and
+    a different answer.
+CKV_AWS_252:
+  cci:
+  - CCI-000172
+  - CCI-002664
+  impact: 0.3
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-12
+  - SI-4
+  nist_r4:
+  - AU-12
+  - SI-4
+  nist_source: agent-drafted
+  rationale: 'Without an SNS topic on the trail nothing announces that a new log file has been delivered,
+    so anything built on CloudTrail has to poll the bucket and learns about activity late. The deployed
+    trail is what settles this: the topic association can be dropped by a single UpdateTrail call that
+    leaves the Terraform completely unchanged.'
+  severity: low
+CKV_AWS_258:
+  cci:
+  - CCI-000213
+  - CCI-000804
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - IA-2
+  - SC-7
+  nist_r4:
+  - AC-3
+  - IA-2
+  - SC-7
+  nist_source: agent-drafted
+  rationale: AuthType NONE makes the function URL an unauthenticated public HTTPS endpoint. Anyone with
+    the URL invokes the function, on the account's bill and with the function's execution role.
+  severity: high
+CKV_AWS_26:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Messages sit in the topic between publish and delivery, and topics routinely carry identifiers,
+    tokens and operational detail from the systems that publish to them. Server-side encryption puts that
+    at-rest window under a key whose use is logged and can be revoked.
+  severity: high
+CKV_AWS_260:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: Port 80 is cleartext HTTP, so anything reachable on it is reachable without transport confidentiality
+    or server authentication, and world-open means reachable by every host on the internet rather than
+    by a load balancer in front of it. Rated medium rather than high because a public web tier deliberately
+    terminating a redirect on 80 is a legitimate design; the finding is that the security group cannot
+    tell that case from an application server left directly exposed, and only the operator can.
+  severity: medium
+  stronger: Checkov reads Terraform, so a rule added in the console, by a second pipeline or by an incident
+    responder during an outage is invisible to it. This reads the permissions EC2 is actually enforcing,
+    whatever created them.
+  what: "aws_security_group: an INGRESS permission whose from_port..to_port span covers 80 — or which\
+    \ carries no port members at all, which is how AWS stores an all-protocols rule — and whose IpRanges\
+    \ contain 0.0.0.0/0 or whose Ipv6Ranges contain ::/0."
+CKV_AWS_266:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  - KSI-SVC-KMG
+  nist:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A snapshot copy is a second, independently retained image of the database. Encrypting it
+    under a managed key keeps the ability to revoke access to the copy without deleting it, which is the
+    only lever available once a snapshot has been shared or moved to another region.
+  severity: high
+CKV_AWS_274:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: AdministratorAccess grants every action on every resource. A principal holding it is bounded
+    by nothing the account can express — no resource policy, no tag condition, no service scope — so least
+    privilege is not partially satisfied for it, it is absent. Asserting that nothing is attached to the
+    policy is the only test that can be made without evaluating what every attached principal is actually
+    for, and it is the same assertion Checkov makes, taken against attachments that exist rather than
+    attachments that were written down.
+  severity: high
+CKV_AWS_277:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: An all-protocols, all-ports ingress permission open to 0.0.0.0/0 removes the security group
+    as a boundary entirely; every service the instance happens to be listening on, including ones nobody
+    knows are listening, is reachable from the internet. It is also the rule that survives longest, because
+    it is usually written to unblock something during an incident and never narrowed afterwards, and nothing
+    about the workload breaks to remind anyone.
+  severity: high
+  stronger: Deployed rather than declared, so a permission opened by hand is seen. It also reads the protocol
+    AWS actually stored rather than the from_port/to_port pair the HCL declared, which is the only form
+    in which an all-traffic rule exists after apply.
+  what: "aws_security_group: an INGRESS permission with IpProtocol \"-1\" — every protocol and every port\
+    \ — whose IpRanges contain 0.0.0.0/0 or whose Ipv6Ranges contain ::/0."
+CKV_AWS_278:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A snapshot outlives the cluster it came from and holds the same data. Under an AWS-owned
+    key the account cannot audit who used the key, cannot revoke it, and cannot prove the snapshot became
+    unreadable when it was retired.
+  severity: medium
+CKV_AWS_279:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A snapshot is a full copy of the database that persists after the cluster is gone and can
+    be shared to another account. An unencrypted snapshot moves that data outside the controls applied
+    to the running cluster.
+  severity: high
+CKV_AWS_28:
+  cci:
+  - CCI-000535
+  - CCI-000553
+  impact: 0.5
+  ksi:
+  - KSI-RPL-ABO
+  nist: &id013
+  - CP-9
+  - CP-10
+  nist_r4: *id013
+  nist_source: category-derived
+  rationale: Ensure DynamoDB point in time recovery (backup) is enabled. Anchors derived from the check's
+    backup and recovery category, not reviewed control by control.
+  severity: medium
+CKV_AWS_284:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.3
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Without tracing, a failed execution shows which state errored but not what the downstream
+    call did, so the boundary between the workflow's fault and a dependency's fault cannot be established
+    from the record.
+  severity: low
+CKV_AWS_285:
+  cci:
+  - CCI-000130
+  - CCI-000169
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-3
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-3
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Execution history is retained for ninety days inside Step Functions and then gone. Logging
+    with execution data is what puts the input and output of each state into a log group that retention
+    policy and alerting can reach.
+  severity: medium
+CKV_AWS_291:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: Public access attaches an elastic IP to every broker, putting the Kafka listener directly
+    on the internet where only the security group and the cluster's own authentication stand between a
+    scanner and the topics. Brokers reached through the VPC keep that surface off the public network entirely.
+  severity: high
+CKV_AWS_292:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A global cluster replicates the data into additional regions. If the global cluster is unencrypted
+    then every regional copy is unencrypted, which multiplies one configuration mistake across every region
+    the data has been replicated into.
+  severity: high
+CKV_AWS_294:
+  cci:
+  - CCI-000162
+  - CCI-001199
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - AU-9
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - AU-9
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: An event data store holds the account's audit history. A customer-managed key means access
+    to that history is gated by a key policy the account controls, independently of the CloudTrail permissions.
+  severity: medium
+CKV_AWS_298:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  - KSI-SVC-KMG
+  nist:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A DMS S3 endpoint writes whole tables of migrated source data into a bucket. Under SSE-S3
+    those objects are readable by anyone who can read the bucket; under SSE-KMS reading them additionally
+    requires a decrypt grant on the key, so bucket access alone no longer discloses the migrated records,
+    and key usage is auditable and revocable.
+  severity: medium
+CKV_AWS_3:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure all data stored in the EBS is securely encrypted. Anchors derived from the check's
+    encryption category, not reviewed control by control.
+  severity: high
+CKV_AWS_304:
+  cci:
+  - CCI-000196
+  - CCI-002450
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  - KSI-SVC-KMG
+  nist:
+  - IA-5
+  - SC-12
+  nist_r4:
+  - IA-5
+  - SC-12
+  nist_source: agent-drafted
+  rationale: 'Rotation that is enabled but scheduled a year out leaves the same unbounded exposure window
+    as no rotation at all: the interval, not the flag, is what caps the time between a leak and its expiry.
+    Ninety days is the ceiling Checkov asserts and the one FedRAMP''s authenticator-management expectations
+    are usually written to, so an interval longer than that is a control that exists on paper and does
+    not bind.'
+  severity: medium
+  stronger: Checkov reads the interval declared in an aws_secretsmanager_secret_rotation block. This reads
+    the interval Secrets Manager is actually holding, so it also sees a schedule changed in the console,
+    a secret created outside Terraform, and a rotation whose interval was widened by hand after the last
+    apply.
+CKV_AWS_305:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure CloudFront distribution has a default root object configured. Anchors derived from
+    the check's general security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_315:
+  cci:
+  - CCI-000293
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-2
+  - CM-6
+  nist_r4:
+  - CM-2
+  - CM-6
+  nist_source: agent-drafted
+  rationale: 'Launch configurations are immutable and cannot be edited in place: changing the baseline
+    means creating a new one and re-pointing the group, so the version instances actually launch from
+    drifts from the one under change control. Launch templates version the baseline inside the service,
+    which is what makes the running fleet''s configuration auditable.'
+  severity: low
+CKV_AWS_319:
+  cci:
+  - CCI-002664
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-OSM
+  nist:
+  - SI-4
+  - AU-12
+  nist_r4:
+  - SI-4
+  - AU-12
+  nist_source: agent-drafted
+  rationale: An alarm with actions disabled still changes state and still shows red on a dashboard, but
+    notifies nobody. It is the failure mode that looks most like working monitoring, which is why it survives
+    unnoticed for so long.
+  severity: medium
+CKV_AWS_32:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A repository policy that allows a wildcard principal with no condition makes every image
+    in the repository readable by any AWS account, and by an anonymous caller. Container images routinely
+    carry configuration, embedded credentials and the shape of the internal application, so the exposure
+    is not limited to the code that was intended to be public.
+  severity: high
+  what: 'aws_ecr_repository_policy: the policy document has no Allow statement whose Principal is ''*''
+    or whose Principal.AWS contains ''*'' without a Condition constraining it (Checkov runs cloudsplaining''s
+    internet_accessible_actions, which is the same test with a curated condition allow-list)'
+CKV_AWS_322:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure ElastiCache for Redis cache clusters have auto minor version upgrades enabled. Anchors
+    derived from the check's general security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_323:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure ElastiCache clusters do not use the default subnet group. Anchors derived from the
+    check's networking category, not reviewed control by control.
+  severity: high
+CKV_AWS_329:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: An access point whose root directory is "/" exposes the whole file system to every client
+    that mounts through it, which defeats the reason access points exist. The root directory is fixed
+    when the access point is created, so a deployed access point pointing at "/" is a standing grant that
+    no later Terraform edit narrows.
+  severity: medium
+CKV_AWS_33:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-SVC-KMG
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  - SC-12
+  nist_r4:
+  - AC-3
+  - AC-6
+  - SC-12
+  nist_source: agent-drafted
+  rationale: A key policy is the only authority on a KMS key — an IAM policy cannot grant use of a key
+    the key policy does not already delegate. So a wildcard principal with no condition is not one layer
+    of a defence in depth, it is the whole boundary, and every ciphertext the key protects becomes decryptable
+    by any caller who can reach the API. Encryption at rest is then a control the system claims and does
+    not have.
+  severity: high
+  what: 'aws_kms_key: the key policy has no Allow statement whose Principal is ''*'', or whose Principal.AWS
+    contains ''*'', without ANY Condition on the statement (Checkov''s KMSKeyWildcardPrincipal matches
+    the bare ''*'' exactly and skips only Deny statements; this matches any principal containing ''*''
+    — stricter — and requires an explicit Effect Allow, which is narrower on a document IAM would refuse
+    to store)'
+CKV_AWS_330:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: With no POSIX user enforced the access point uses whatever uid and gid the NFS client presents,
+    so ownership on a shared file system is decided by the caller rather than by the account. Enforcing
+    a uid and gid is what makes per-workload separation on one EFS file system actually hold.
+  severity: medium
+CKV_AWS_331:
+  cci:
+  - CCI-000213
+  - CCI-001097
+  impact: 0.7
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - AC-3
+  - SC-7
+  - CM-7
+  nist_r4:
+  - AC-3
+  - SC-7
+  - CM-7
+  nist_source: agent-drafted
+  rationale: With auto-accept on, any account the gateway is shared with can attach a VPC and reach everything
+    else on the gateway without anyone in this account approving it. Attachment stops being a reviewed
+    decision.
+  severity: high
+CKV_AWS_333:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure ECS services do not have public IP addresses assigned to them automatically. Anchors
+    derived from the check's logging category, not reviewed control by control.
+  severity: medium
+CKV_AWS_336:
+  cci:
+  - CCI-000381
+  impact: 0.5
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-7
+  nist_r4:
+  - CM-7
+  nist_source: agent-drafted
+  rationale: A writable root filesystem lets anything that achieves execution inside the container drop
+    a payload, modify a binary or install persistence, and the change survives for the life of the task
+    while being invisible to image scanning, which only ever looked at the image. Read-only roots remove
+    that step entirely; writable state belongs in a declared volume, which is auditable in a way an arbitrary
+    write is not.
+  severity: medium
+  stronger: Checkov reads whatever revisions the Terraform declares. This reads the latest ACTIVE revision
+    of every task-definition family registered in the account, which is the definition a new task will
+    actually run, and it sees families registered by a pipeline or by hand that no HCL in the repository
+    describes.
+  what: 'aws_ecs_task_definition: a container definition in the latest ACTIVE revision of a task-definition
+    family whose readonlyRootFilesystem is not true — including the common case where the member is absent
+    because it was never set.'
+CKV_AWS_337:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure SSM parameters are using KMS CMK. Anchors derived from the check's encryption category,
+    not reviewed control by control.
+  severity: high
+CKV_AWS_338:
+  cci:
+  - CCI-000167
+  - CCI-001227
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-11
+  - SI-12
+  nist_r4:
+  - AU-11
+  - SI-12
+  nist_source: agent-drafted
+  rationale: Intrusions are routinely found months after the fact. A retention window shorter than the
+    time it takes to notice means the log lines that would explain what happened have already been deleted
+    when the question is finally asked.
+  severity: medium
+  what: retention_in_days is at least 365, or 0 meaning never expire
+CKV_AWS_339:
+  cci: &id016
+  - CCI-000366
+  impact: 0.5
+  ksi: &id017
+  - KSI-CMT-CFG
+  nist: &id014
+  - CM-6
+  - SC-7
+  nist_r4: *id014
+  nist_source: category-derived
+  rationale: Ensure EKS clusters run on a supported Kubernetes version. Anchors derived from the check's
+    kubernetes category, not reviewed control by control.
+  severity: medium
+CKV_AWS_34:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: allow-all leaves the plain HTTP listener answering, so a client that starts on HTTP -- or
+    is pushed there -- completes the request in the clear, cookies and all. Redirecting or refusing is
+    what makes the TLS certificate on the distribution mean anything.
+  severity: high
+  what: no cache behaviour sets viewer_protocol_policy to allow-all
+CKV_AWS_341:
+  cci: *id011
+  impact: 0.5
+  ksi: *id012
+  nist: *id006
+  nist_r4: *id006
+  nist_source: category-derived
+  rationale: Ensure Launch template should not have a metadata response hop limit greater than 1. Anchors
+    derived from the check's general security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_344:
+  cci:
+  - CCI-000318
+  - CCI-001097
+  impact: 0.3
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-3
+  - SC-7
+  nist_r4:
+  - CM-3
+  - SC-7
+  nist_source: agent-drafted
+  rationale: Delete protection is what stops a single API call from removing the inspection point in front
+    of a subnet. Without it the firewall can be deleted faster than the traffic loss is noticed.
+  severity: low
+CKV_AWS_345:
+  cci:
+  - CCI-002450
+  - CCI-001199
+  - CCI-002475
+  impact: 0.3
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-12
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-12
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: The firewall's stored configuration includes the rules and the addresses they name. On the
+    AWS-owned key that material is encrypted but the key is outside the account, so its use cannot be
+    audited or revoked here.
+  severity: low
+CKV_AWS_346:
+  cci:
+  - CCI-002450
+  - CCI-001199
+  - CCI-002475
+  impact: 0.3
+  ksi:
+  - KSI-SVC-KMG
+  nist:
+  - SC-12
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-12
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A firewall policy is a description of what the boundary permits. Holding it under a customer
+    managed key keeps its use inside the account's own key grants and CloudTrail record.
+  severity: low
+CKV_AWS_349:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: EMR spills intermediate results to the instance storage attached to each node. Those files
+    hold the same data as the source dataset and survive until the node is reclaimed, so the local disks
+    need the same treatment as the source store.
+  severity: high
+  what: the security configuration enables at-rest encryption with a local disk encryption configuration
+CKV_AWS_35:
+  cci:
+  - CCI-000162
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - AU-9
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - AU-9
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Without SSE-KMS the log objects are readable by anyone who can read the bucket. With a CMK,
+    reading them additionally requires a decrypt grant on the key, so bucket access alone does not disclose
+    the audit record.
+  severity: medium
+CKV_AWS_351:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: Cluster nodes shuffle whole partitions of the dataset between each other over the VPC network.
+    Unencrypted, that traffic exposes the data to anything with a foothold in the subnet, which is a much
+    lower bar than access to the cluster itself.
+  severity: high
+  what: the security configuration sets EnableInTransitEncryption
+CKV_AWS_359:
+  cci:
+  - CCI-000764
+  - CCI-000196
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - IA-2
+  - IA-5
+  nist_r4:
+  - IA-2
+  - IA-5
+  nist_source: agent-drafted
+  rationale: Without IAM database authentication the cluster is reached with a static password that lives
+    in application configuration and does not expire. With it enabled, access is a short-lived token tied
+    to an IAM principal, so revocation and audit happen in one place.
+  severity: medium
+CKV_AWS_36:
+  cci:
+  - CCI-000162
+  - CCI-002696
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-9
+  - SI-7
+  nist_r4:
+  - AU-9
+  - SI-7
+  nist_source: agent-drafted
+  rationale: Log file validation writes a signed digest of each delivered log file. Without it, a log
+    file that was altered or removed after delivery is indistinguishable from one that was never written.
+  severity: medium
+CKV_AWS_360:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-ABO
+  nist:
+  - CP-9
+  - SI-12
+  nist_r4:
+  - CP-9
+  - SI-12
+  nist_source: agent-drafted
+  rationale: The default retention of one day means a bad write discovered on Monday about a Friday deployment
+    is unrecoverable. Seven days covers a weekend plus the time it takes for a data problem to be reported.
+  severity: medium
+CKV_AWS_361:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-ABO
+  nist:
+  - CP-9
+  - SI-12
+  nist_r4:
+  - CP-9
+  - SI-12
+  nist_source: agent-drafted
+  rationale: Automated backups are the only recovery path for a destructive write or a ransomware event
+    on the cluster. A one-day window means the damage has to be noticed within a day; a week of retention
+    gives a realistic detection interval to restore from.
+  severity: medium
+  what: backup_retention_period is at least 7 days
+CKV_AWS_362:
+  cci:
+  - CCI-000366
+  impact: 0.3
+  ksi:
+  - KSI-CMT-INV
+  nist:
+  - CM-8
+  - AU-12
+  nist_r4:
+  - CM-8
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Snapshots that do not carry the cluster's tags fall out of the inventory the estate is governed
+    by, so ownership, data classification and retention policies that key on tags stop applying to the
+    copies of the data even though they still apply to the source.
+  severity: low
+CKV_AWS_363:
+  cci:
+  - CCI-001227
+  - CCI-002605
+  impact: 0.5
+  ksi:
+  - KSI-CMT-VTD
+  nist:
+  - SI-2
+  - SI-2 (5)
+  nist_r4:
+  - SI-2
+  - SI-2 (5)
+  nist_source: agent-drafted
+  rationale: 'A deprecated Lambda runtime stops receiving security patches for the language runtime and
+    the OS packages beneath it, and AWS eventually blocks first updates and then invocations. The deployed
+    runtime is the one that matters: a function created before its runtime was deprecated keeps running
+    on it until someone changes it, with no Terraform change to notice.'
+  severity: medium
+CKV_AWS_366:
+  cci:
+  - CCI-000213
+  - CCI-002233
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist: &id015
+  - AC-3
+  - AC-6
+  nist_r4: *id015
+  nist_source: category-derived
+  rationale: Ensure AWS Cognito identity pool does not allow unauthenticated guest access. Anchors derived
+    from the check's iam category, not reviewed control by control.
+  severity: high
+CKV_AWS_37:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: The control plane is where authentication decisions and API authorisations are made, and
+    the audit and authenticator logs are the only record of them. A cluster with partial logging cannot
+    answer who called what after the fact.
+  severity: medium
+  what: enabled_cluster_log_types contains all of api, audit, authenticator, controllerManager and scheduler
+CKV_AWS_376:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A listener is where a client's connection lands, so its protocol decides whether the session
+    between the client and the boundary is encrypted and whether the client can authenticate the endpoint
+    at all. An HTTP or TCP listener carries credentials, session cookies and payloads in cleartext across
+    whatever network the client sits on, and no configuration behind the load balancer compensates for
+    that.
+  severity: high
+  stronger: 'Asserts the front-end protocol on the listeners AWS is actually serving, including listeners
+    added outside Terraform. Deliberately does NOT also assert that HTTPS listeners carry a certificate:
+    ELB classic will not create one without SSLCertificateId, so that clause could not fail and is not
+    written.'
+  what: 'aws_elb: a Classic Load Balancer listener whose front-end Protocol is anything other than HTTPS
+    or SSL — that is, HTTP or raw TCP.'
+CKV_AWS_377:
+  cci:
+  - CCI-000366
+  - CCI-000213
+  impact: 0.5
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-6
+  - AC-3
+  nist_r4:
+  - CM-6
+  - AC-3
+  nist_source: agent-drafted
+  rationale: Without the transfer lock, a registrar transfer needs only the auth code, and a transferred
+    domain takes the DNS zone -- and with it mail delivery and every certificate issued by DNS validation
+    -- to whoever initiated it. Recovering a domain after the fact is a dispute process, not a rollback.
+  severity: medium
+CKV_AWS_378:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A target group registered on HTTP carries requests — including the session cookies and bearer
+    tokens the load balancer just decrypted — in cleartext across the VPC to the target. The perimeter
+    TLS termination protects the internet leg only; anything with a foothold on the path inside reads
+    the rest.
+  severity: medium
+CKV_AWS_382:
+  cci:
+  - CCI-001097
+  - CCI-002080
+  impact: 0.5
+  ksi:
+  - KSI-CNA-NDS
+  nist:
+  - SC-7
+  - SC-7 (5)
+  nist_r4:
+  - SC-7
+  - SC-7 (5)
+  nist_source: agent-drafted
+  rationale: Unrestricted egress is what turns a foothold into an exfiltration channel and a command-and-control
+    channel; the boundary that matters after a compromise is the one on the way out. Rated medium because
+    it is the AWS default rather than an act, so the finding is nearly universal in an account that has
+    not done egress design, and a universal finding is a backlog item rather than an incident.
+  severity: medium
+  stronger: Checkov only sees the egress block if the HCL wrote one. A security group whose Terraform
+    declares no egress at all is silently given the open default by EC2, and reading the deployed permissions
+    is the only way that appears.
+  what: "aws_security_group: an EGRESS permission with IpProtocol \"-1\" whose IpRanges contain 0.0.0.0/0\
+    \ or whose Ipv6Ranges contain ::/0."
+CKV_AWS_383:
+  cci:
+  - CCI-002664
+  - CCI-001097
+  impact: 0.5
+  ksi:
+  - KSI-SVC-VRI
+  nist:
+  - SI-4
+  - AC-4
+  - SC-7
+  nist_r4:
+  - SI-4
+  - AC-4
+  - SC-7
+  nist_source: agent-drafted
+  rationale: A guardrail is the only place the agent's input and output filtering is enforced. Without
+    one attached, prompt content and model responses pass through unfiltered no matter what the application
+    layer intends.
+  severity: medium
+CKV_AWS_385:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  - CA-3
+  nist_r4:
+  - AC-3
+  - AC-6
+  - CA-3
+  nist_source: agent-drafted
+  rationale: A cross-account grant is an interconnection with a system this authorization boundary does
+    not contain, and an unconditioned one has no documented limit on what the far side may do or for how
+    long. It is the kind of access that outlives the project that needed it — the far account keeps the
+    grant after the integration is retired, and nothing in this account's own configuration records that
+    the relationship ever ended.
+  severity: medium
+  what: 'aws_sns_topic_policy: no Allow statement names a concrete principal in an account other than
+    the one being scanned without any Condition on the statement. Checkov''s SNSCrossAccountAccess is
+    broader in one direction and narrower in another: it fails on ANY concrete arn:aws:iam:: principal
+    with no Condition, including one in the scanning account, and it matches only the commercial partition''s
+    ARN prefix. This compares the principal''s account against sts:GetCallerIdentity and reports only
+    genuinely external ones, in any partition — so a same-account unconditioned role grant passes here
+    and fails in Checkov'
+CKV_AWS_389:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure AWS Auto Scaling group launch configuration doesn't have public IP address assignment
+    enabled. Anchors derived from the check's networking category, not reviewed control by control.
+  severity: high
+CKV_AWS_39:
+  cci: *id016
+  impact: 0.5
+  ksi: *id017
+  nist: *id014
+  nist_r4: *id014
+  nist_source: category-derived
+  rationale: Ensure Amazon EKS public endpoint disabled. Anchors derived from the check's kubernetes category,
+    not reviewed control by control.
+  severity: medium
+CKV_AWS_393:
+  cci:
+  - CCI-000213
+  - CCI-000804
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  - IA-8
+  nist_r4:
+  - AC-3
+  - AC-6
+  - IA-8
+  nist_source: agent-drafted
+  rationale: 'A GitHub Actions OIDC trust that does not pin the repository can be assumed from any workflow
+    GitHub will mint a token for, which in the unpinned case is every repository on github.com. An attacker
+    needs no credential and no access to this account — a public repository and a workflow file are enough.
+    A Null condition on the sub claim looks like a constraint and is not one: it only asserts the claim
+    is present, which every GitHub token satisfies.'
+  severity: high
+  what: 'aws_iam_role: every trust statement naming the token.actions.githubusercontent.com federated
+    principal carries a StringEquals or StringLike Condition pinning token.actions.githubusercontent.com:sub
+    to a concrete repo:<org>/<repo> value — not ''*'', not a bare Null presence test, and not one of the
+    abusable first claims (workflow:, environment:, ref:, context:, head_ref:, base_ref:). Checkov''s
+    GithubActionsOIDCTrustPolicyOnRole fails a GH-OIDC trust with no Condition at all, a sub of ''*'',
+    a sub with no value, a ''claim:*'' assertion, an abusable first claim, or a repo: value that is not
+    org/repo-shaped — but its gh_repo_regex ACCEPTS an org-wide repo:<org>/*, which this control rejects.
+    That is a deliberate strengthening, not a reproduction of Checkov''s rule'
+CKV_AWS_42:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure EFS is securely encrypted. Anchors derived from the check's encryption category, not
+    reviewed control by control.
+  severity: high
+CKV_AWS_44:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Neptune storage encryption can only be set when the cluster is created, so an unencrypted
+    graph database stays unencrypted for its whole life. The graph itself is usually identity and relationship
+    data, and it sits on volumes and in automated snapshots that outlive the cluster.
+  severity: high
+CKV_AWS_47:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A DAX cluster holds a copy of the table items it caches, and encryption at rest is off unless
+    it was set at creation. The cached copy is then the unencrypted one even where the source table is
+    encrypted.
+  severity: high
+CKV_AWS_48:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure MQ Broker logging is enabled. Anchors derived from the check's logging category, not
+    reviewed control by control.
+  severity: medium
+CKV_AWS_5:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: A search domain holds a denormalised copy of whatever it indexes, which is usually the same
+    records the source database encrypts. Without encryption at rest the domain's underlying storage and
+    its automated snapshots are readable by anyone who reaches them.
+  severity: high
+CKV_AWS_58:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: Without envelope encryption a Kubernetes Secret is stored in etcd as base64, which is an
+    encoding and not a protection. Anyone who can read the cluster's backing store, or restore it from
+    a backup, reads every credential in it.
+  severity: high
+CKV_AWS_6:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: 'Shard replication and query fan-out cross the network in the clear unless node-to-node encryption
+    is on, so a domain that terminates TLS at its endpoint can still be read off the wire between its
+    own nodes. Note this is asserted on every domain: Checkov exempts single-instance domains, where the
+    traffic is real as soon as the domain is scaled out.'
+  severity: high
+  what: node-to-node encryption is enabled on any domain with more than one instance
+CKV_AWS_60:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A trust policy naming a wildcard principal with no condition lets any AWS account assume
+    the role, so every permission attached to it is available to anyone who knows the role ARN. Role ARNs
+    are not secrets — they appear in logs, in error messages and in support tickets — so the trust policy
+    is the only control standing between the account and the permissions the role carries.
+  severity: high
+  what: 'aws_iam_role: the assume_role_policy has no Allow statement whose Principal is ''*'' or whose
+    Principal.AWS contains ''*'' without a Condition — the role may be assumed only by named services
+    or principals'
+CKV_AWS_61:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.5
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: Trusting an account root delegates the decision about who may assume the role to that account's
+    own IAM, which means the permissions the role carries are available to every identity in that account,
+    present and future, including ones created long after anyone reviewed this trust. The role's blast
+    radius stops being a property of this account's configuration and becomes a property of somebody else's.
+  severity: medium
+  what: 'aws_iam_role: the assume_role_policy has no statement whose Principal.AWS is a bare 12-digit
+    account id or an arn:aws:iam::<account>:root ARN — the role is assumable by named principals, not
+    by an entire account'
+CKV_AWS_62:
+  cci:
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-6
+  nist_r4:
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A customer-managed policy allowing every action on every resource grants administrative access
+    to whatever it is attached to, and defeats least privilege for every identity that holds it. It also
+    removes the ability to reason about blast radius after a credential is compromised, because the answer
+    is always everything.
+  severity: high
+  what: 'aws_iam_policy and the inline-policy types: no policy document has an Allow statement carrying
+    ''*'' in BOTH Action and Resource'
+CKV_AWS_63:
+  cci:
+  - CCI-000225
+  - CCI-000381
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-6
+  - CM-7
+  nist_r4:
+  - AC-6
+  - CM-7
+  nist_source: agent-drafted
+  rationale: An Allow on every action grants every operation in every AWS service the account can reach,
+    including the IAM calls that would let the holder grant itself anything else. Even scoped to a single
+    resource it defeats least privilege, because the set of things it permits grows silently every time
+    AWS ships a new API, and nobody re-reviews a policy because a service added an action.
+  severity: high
+  what: 'aws_iam_policy and the inline-policy types: no policy document has an Allow statement whose Action
+    is the bare ''*'' or ''*:*'' (a prefixed wildcard such as s3:Get* is not this rule). Checkov flags
+    ''*'' alone and treats a statement with no Effect as an Allow; this also flags ''*:*'' and requires
+    an explicit Allow. Only the customer-managed aws_iam_policy documents are read here — iam:ListPolicies
+    is pinned to Scope=Local and the four inline-policy types have no enumeration in this profile, so
+    they are unassessed rather than passing'
+CKV_AWS_67:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.7
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: A single-region trail records nothing in the other enabled regions, and an unused region
+    is where activity is least likely to be noticed. Only a multi-region trail follows the account into
+    a region nobody watches.
+  severity: high
+CKV_AWS_68:
+  cci:
+  - CCI-003173
+  impact: 0.5
+  ksi:
+  - KSI-SCR-MIT
+  nist: &id018
+  - SA-11
+  - SI-10
+  nist_r4: *id018
+  nist_source: category-derived
+  rationale: CloudFront Distribution should have WAF enabled. Anchors derived from the check's application
+    security category, not reviewed control by control.
+  severity: medium
+CKV_AWS_69:
+  cci: *id003
+  impact: 0.7
+  ksi: *id004
+  nist: *id001
+  nist_r4: *id001
+  nist_source: category-derived
+  rationale: Ensure MQ Broker is not publicly exposed. Anchors derived from the check's networking category,
+    not reviewed control by control.
+  severity: high
+CKV_AWS_7:
+  cci: *id007
+  impact: 0.7
+  ksi: *id008
+  nist: *id005
+  nist_r4: *id005
+  nist_source: category-derived
+  rationale: Ensure rotation for customer created CMKs is enabled. Anchors derived from the check's encryption
+    category, not reviewed control by control.
+  severity: high
+CKV_AWS_71:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure Redshift Cluster logging is enabled. Anchors derived from the check's logging category,
+    not reviewed control by control.
+  severity: medium
+CKV_AWS_73:
+  cci:
+  - CCI-000130
+  - CCI-000169
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  - SI-4
+  nist_r4:
+  - AU-2
+  - AU-12
+  - SI-4
+  nist_source: agent-drafted
+  rationale: Without X-Ray tracing an API Gateway stage produces no per-request span, so a latency anomaly
+    or an abused route cannot be reconstructed after the fact. Access logs record that a call happened;
+    the trace is what shows where it went.
+  severity: medium
+CKV_AWS_74:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  nist_source: agent-drafted
+  rationale: DocumentDB storage is unencrypted by default and encryption cannot be turned on after creation
+    -- the cluster has to be restored into a new encrypted one. Finding this on a deployed cluster is
+    finding a migration, which is why it matters that it is found early.
+  severity: high
+CKV_AWS_76:
+  cci:
+  - CCI-000130
+  - CCI-000131
+  - CCI-000169
+  impact: 0.7
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-3
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-3
+  - AU-12
+  nist_source: agent-drafted
+  rationale: A stage with no access log destination keeps no record of who called which route. There is
+    nothing to review after an incident and nothing to feed detection.
+  severity: high
+  stronger: Checkov reads the access_log_settings block in HCL. This reads GetStages, so a stage whose
+    logging was switched off in the console after deploy is assessed too.
+CKV_AWS_81:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: A client_broker setting of PLAINTEXT or TLS_PLAINTEXT keeps a cleartext listener open on
+    every broker, so a producer misconfiguration silently sends the topic's payload unencrypted across
+    the VPC. Requiring TLS removes the option rather than relying on every client to choose it.
+  severity: high
+  what: encryption_info is set and encryption_in_transit does not weaken client_broker or in_cluster
+CKV_AWS_82:
+  cci:
+  - CCI-000382
+  - CCI-000213
+  impact: 0.5
+  ksi:
+  - KSI-CMT-CFG
+  nist:
+  - CM-7
+  - AC-3
+  nist_r4:
+  - CM-7
+  - AC-3
+  nist_source: agent-drafted
+  rationale: Unless the workgroup configuration is enforced, a client can override the result location
+    and the encryption settings per query, so the encryption the workgroup declares is advisory rather
+    than binding.
+  severity: medium
+CKV_AWS_83:
+  cci:
+  - CCI-002418
+  - CCI-002421
+  impact: 0.7
+  ksi:
+  - KSI-SVC-CET
+  nist:
+  - SC-8
+  - SC-8 (1)
+  nist_r4:
+  - SC-8
+  - SC-8 (1)
+  nist_source: agent-drafted
+  rationale: Without enforce_https the domain answers plaintext HTTP, so credentials and query results
+    travel unprotected whenever a client omits the scheme. TLS becomes a client-side choice rather than
+    a property of the service.
+  severity: high
+CKV_AWS_86:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure CloudFront distribution has Access Logging enabled. Anchors derived from the check's
+    logging category, not reviewed control by control.
+  severity: medium
+CKV_AWS_91:
+  cci: *id009
+  impact: 0.5
+  ksi: *id010
+  nist: *id002
+  nist_r4: *id002
+  nist_source: category-derived
+  rationale: Ensure the ELBv2 (Application/Network) has access logging enabled. Anchors derived from the
+    check's logging category, not reviewed control by control.
+  severity: medium
+CKV_AWS_92:
+  cci:
+  - CCI-000169
+  - CCI-000172
+  impact: 0.5
+  ksi:
+  - KSI-MLA-LOG
+  nist:
+  - AU-2
+  - AU-12
+  nist_r4:
+  - AU-2
+  - AU-12
+  nist_source: agent-drafted
+  rationale: Without access logs the load balancer is the one hop in the request path that keeps no record.
+    Client address, path and response code for traffic that never reached a backend exist nowhere else,
+    which is exactly the traffic an investigation needs.
+  severity: medium
+  what: an access_logs block is present and not disabled
+CKV_AWS_99:
+  cci:
+  - CCI-001199
+  - CCI-002475
+  impact: 0.5
+  ksi:
+  - KSI-SVC-CER
+  nist:
+  - SC-28
+  - SC-28 (1)
+  - SC-13
+  - AU-9
+  nist_r4:
+  - SC-28
+  - SC-28 (1)
+  - SC-13
+  - AU-9
+  nist_source: agent-drafted
+  rationale: A Glue security configuration is the only place ETL output, job logs and job bookmarks get
+    encrypted; jobs attached to one that leaves any of the three unencrypted write cleartext to S3 and
+    to CloudWatch Logs. Bookmarks are the one people forget — they hold the primary keys and partition
+    values the job has already processed, which is a description of the source data even when the data
+    itself is encrypted.
+  severity: medium
+  what: a Glue security configuration whose encryption configuration encrypts CloudWatch logs with SSE-KMS,
+    job bookmarks with CSE-KMS, and S3 output with something other than DISABLED

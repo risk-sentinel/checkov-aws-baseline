@@ -1,0 +1,197 @@
+name: Profile lint
+
+# Controls here are generated from a pinned Checkov catalogue, so the failure
+# modes are the fleet's plus one of its own: a control can drift from the rule
+# it claims to implement. `check` and `json` cannot see any of it — they load
+# control files without evaluating a control body or reading a tag's meaning.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by DIGEST, not by tag: a tag can be re-cut onto a different image and
+  # every run after that silently assesses with something else. This digest is
+  # sparc-auditor v1.2.0, cosign-verified against the container-build-sign
+  # workflow identity before it was pinned here.
+  AUDITOR_IMAGE: risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8
+
+jobs:
+  lint:
+    name: InSpec validate + Ruby syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Docker Hub login (auditor image pull)
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          # Optional. The auditor image is public, so an anonymous pull works;
+          # signing in only raises the shared rate limit. Without this guard an
+          # adopter with no Docker Hub secrets fails here, before anything runs.
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "::notice::No Docker Hub credentials set; pulling anonymously."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Ruby syntax (every control + library)
+        run: |
+          set -uo pipefail
+          fail=0
+          for f in $(find controls libraries -name '*.rb' | sort); do
+            docker run --rm -v "$PWD:/work" -w /work --entrypoint sh "${AUDITOR_IMAGE}" \
+              -c "/opt/cinc-workstation/embedded/bin/ruby -c '$f' >/dev/null" \
+              || { echo "::error file=$f::ruby syntax error"; fail=1; }
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "All control and library files parse."
+
+      # `vendor/` is gitignored, so a fresh checkout has no dependencies and
+      # `check` fails before evaluating anything. Locally this is invisible —
+      # a stale vendor/ from earlier work makes it pass.
+      - name: Vendor dependencies
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" vendor . --overwrite
+
+      - name: cinc-auditor check
+        run: |
+          set -uo pipefail
+          # Capture the exit code rather than letting `bash -e` abort here: the
+          # first version of this step died on the docker call BEFORE echoing
+          # $out, so a failing check produced no diagnostic at all — the guard
+          # hid its own evidence.
+          out=$(docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" check . 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::cinc-auditor check exited ${rc} — see output above."
+            exit 1
+          fi
+          echo "$out" | grep -q "Valid : *true" || { echo "::error::profile did not validate"; exit 1; }
+          # A profile that loads ZERO controls validates happily. Assert the
+          # count is non-zero so an empty or wrongly-scoped profile is caught.
+          n=$(echo "$out" | sed -n 's/^Controls *: *\([0-9]*\).*/\1/p')
+          [ "${n:-0}" -gt 0 ] || { echo "::error::check reported ${n:-0} controls"; exit 1; }
+          echo "Controls: $n"
+
+      - name: cinc-auditor json (catches load-time errors check misses)
+        run: |
+          set -uo pipefail
+          out=$(docker run --rm -v "$PWD:/work" -w /work "${AUDITOR_IMAGE}" json . 2>/tmp/json.err) && rc=0 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::cinc-auditor json exited ${rc}"; cat /tmp/json.err; exit 1
+          fi
+          echo "$out" > /tmp/profile.json
+          jq -e '.controls | length > 0' /tmp/profile.json > /dev/null \
+            || { echo "::error::json produced no controls"; exit 1; }
+          echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
+
+      - name: API specs name gems the image ships
+        # A spec whose gem is absent does not fail loudly: the reader rescues the
+        # LoadError, returns no rows, and the control renders Not Applicable.
+        # Four specs shipped in exactly that state.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_api_specs.py
+
+      - name: Stock mappings match the resource pack
+        # A control that reads a stock inspec-aws resource can only be
+        # exec-validated in an account that HAS that resource type. A wrong
+        # enumeration column in a family the test account lacks looks exactly
+        # like a clean Not Applicable, indefinitely. Two were wrong when this
+        # lint was written.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_resource_map.py
+
+      - name: Generated controls are in sync with the data files
+        # controls/CKV_*.rb are rendered from the four data files. A hand-edit
+        # is correct and stale at the same time: the next render drops it.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/render_controls.py --check
+
+      - name: Catalogue drift (controls vs pinned Checkov)
+        # A control naming a check the pinned release does not define is
+        # asserting something no rule asks for; a mapped check with no control
+        # is a gap that looks like finished work. Coverage is printed every run,
+        # so "we cover Checkov" is never claimable without a number beside it.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_catalog_drift.py
+
+      - name: Control-tag completeness
+        # `check` and `json` read tags but assert nothing about them. A control
+        # with no Rev 4 anchor, a tag written twice, or a tag whose value is a
+        # constant all pass both — and the last of those emits `[None]` into the
+        # results while looking present.
+        run: python3 tools/lint_control_tags.py controls
+
+      - name: Resource-scope guard
+        # `check` and `json` do NOT evaluate control bodies, so neither can see
+        # a resource called in a describe body — it only raises on a real exec
+        # against a live target, which this repo cannot run. Hence a linter.
+        run: python3 tools/lint_resource_scope.py controls libraries
+
+      - name: Policy specs match the predicates Ruby implements
+        # The predicate list lives in libraries/_policy_document.rb and the prose
+        # for each lives in tools/render_controls.py. A predicate named in one and
+        # not the other renders a control asserting something nothing implements.
+        # Also asserts the policy-spec bake is current.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/lint_policy_specs.py
+
+      - name: Declared API paths exist in the AWS SDK model
+        # The highest-value static check in this repo. A `fields:` path naming a
+        # member the API does not return does NOT raise: the reader answers nil,
+        # the control's nil filter drops the row, and the check renders Not
+        # Applicable — or, under a collection roll-up, passes vacuously. It found
+        # four real defects the first time it ran, including a spec that made
+        # every Lambda in an account fail a check nothing had assessed.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" \
+            tools/lint_api_paths.rb
+
+      - name: Reader and predicate test suites
+        # `check` and `json` load control files without evaluating a body, so
+        # nothing above this line can see a reader that returns the wrong rows.
+        # These run the real code against stubbed SDK clients and fabricated
+        # rows. Every one of them was written because a bug reached a live exec:
+        # a member returned as `false` read as nil, a lost subtree reported as a
+        # clean region, a policy that could not be parsed reported as compliant.
+        run: |
+          set -uo pipefail
+          fail=0
+          for t in tests/collection_rollup_test.rb \
+                   tests/policy_document_test.rb \
+                   tests/policy_reader_harness.rb \
+                   tests/policy_reader_sdk_harness.rb \
+                   tests/reader_dig_path_test.rb \
+                   tests/reader/api_spec_shapes_test.rb \
+                   tests/reader/two_step_reader_test.rb \
+                   tests/membership/reducer_test.rb; do
+            if docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" "$t"; then
+              echo "PASS $t"
+            else
+              echo "::error file=$t::test suite failed"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+
+      - name: Membership shape end-to-end
+        # Drives cinc-auditor itself against fabricated rows, so it runs on the
+        # host rather than inside the image. It is the only proof that a
+        # membership join can still FAIL: get the key reduction wrong and the
+        # control either fails everything or cannot fail at all, and both are
+        # valid Ruby that check and json accept.
+        run: bash tests/membership/run.sh

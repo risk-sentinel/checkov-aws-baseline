@@ -1,0 +1,901 @@
+# batch2 draft data entries for checkov-aws-baseline.
+#
+# Every API field below was confirmed against the botocore service model shipped
+# in ~/.venvs/checkov-3.3.16/.../botocore/data/<service>/<version>/service-2.json,
+# which is the same wire contract the Ruby SDK generates from. Every stock
+# property/column was confirmed by reading the vendored resource source under
+# vendor/8d70ebd.../libraries/.
+#
+# Two structural constraints drove most of the skips; both are in the reader
+# code, not in my judgement:
+#
+#   1. libraries/aws_api_assets.rb reads ONLY the fields present on the item
+#      returned by a no-argument list call. There is no per-item detail call.
+#      A service whose List* returns bare names or a thin summary therefore has
+#      no expressible mapping, however obvious the check is.
+#
+#   2. The API template rejects rows where the field is nil BEFORE asserting
+#      (`reject { |a| a[:field].nil? }`). So `satisfies: not_empty` on a field
+#      the API omits when the setting is off can never fail -- the failing
+#      population is filtered out and the control renders Not Applicable. Those
+#      are recorded as skips rather than shipped as unfailable controls.
+
+mappings:
+
+  # --- Neptune, read through aws-sdk-neptune ---------------------------------
+
+  CKV_AWS_44:
+    aws_neptune_cluster:
+      reader: api
+      field: storage_encrypted
+      satisfies: equals
+      value: true
+      note: >-
+        DBCluster.StorageEncrypted is a boolean the API always returns, so the
+        unencrypted population is asserted on rather than filtered out.
+
+  CKV_AWS_359:
+    aws_neptune_cluster:
+      reader: api
+      field: iam_database_authentication_enabled
+      satisfies: equals
+      value: true
+
+  CKV_AWS_361:
+    aws_neptune_cluster:
+      reader: api
+      field: backup_retention_period
+      satisfies: greater_than
+      value: 6
+      note: >-
+        Checkov's threshold is `>= 7`; `greater_than: 6` is the same set over
+        the integers the API returns. BackupRetentionPeriod is always present.
+
+  CKV_AWS_362:
+    aws_neptune_cluster:
+      reader: api
+      field: copy_tags_to_snapshot
+      satisfies: equals
+      value: true
+
+  CKV_AWS_102:
+    aws_neptune_cluster_instance:
+      reader: api
+      field: publicly_accessible
+      satisfies: equals
+      value: false
+      note: >-
+        Checkov forbids publicly_accessible = true on the declared instance.
+        DescribeDBInstances reports what the instance actually resolves to,
+        which also catches an instance modified outside Terraform.
+
+  CKV_AWS_279:
+    aws_neptune_cluster_snapshot:
+      reader: api
+      field: storage_encrypted
+      satisfies: equals
+      value: true
+      note: >-
+        Stronger than the IaC check: the check sees only snapshots Terraform
+        declares, while DescribeDBClusterSnapshots also returns automated and
+        manually-taken snapshots, which are the ones that outlive the cluster.
+
+  # --- DocumentDB, read through aws-sdk-docdb --------------------------------
+
+  CKV_AWS_74:
+    aws_docdb_cluster:
+      reader: api
+      field: storage_encrypted
+      satisfies: equals
+      value: true
+
+  CKV_AWS_360:
+    aws_docdb_cluster:
+      reader: api
+      field: backup_retention_period
+      satisfies: greater_than
+      value: 6
+      note: >-
+        The catalogue records this check as kind `value` with expected `True`,
+        which is a mis-derivation: the check body is
+        `conf.get("backup_retention_period", [1])[0] >= 7`. The threshold, not
+        a boolean, is what is asserted here.
+
+  CKV_AWS_292:
+    aws_docdb_global_cluster:
+      reader: api
+      field: storage_encrypted
+      satisfies: equals
+      value: true
+
+  # --- Transfer Family (spec already exists in tools/api_specs.yml) ----------
+
+  CKV_AWS_164:
+    aws_transfer_server:
+      reader: api
+      field: endpoint_type
+      satisfies: in_list
+      value: ['VPC', 'VPC_ENDPOINT']
+      note: >-
+        ListedServer.EndpointType is always returned, so a PUBLIC server is
+        asserted on rather than filtered out. No new api spec needed --
+        aws_transfer_server already declares endpoint_type.
+
+  # --- stock inspec-aws resources -------------------------------------------
+
+  CKV_AWS_153:
+    aws_autoscaling_group:
+      reader: stock
+      enumerate: {resource: aws_auto_scaling_groups, ids: names}
+      assert:
+        resource: aws_auto_scaling_group
+        arg: auto_scaling_group_name
+        property: "tags"
+        satisfies: not_empty
+      note: >-
+        `tags` is built as a Ruby Array by the vendored resource and is [] for an
+        untagged group, so `should_not be_empty` is failable here -- unlike the
+        API reader, the stock template does not filter the empty case out.
+
+  CKV_AWS_119:
+    aws_dynamodb_table:
+      reader: stock
+      enumerate: {resource: aws_dynamodb_tables, ids: table_names}
+      assert:
+        resource: aws_dynamodb_table
+        arg: table_name
+        property: "encrypted?"
+        satisfies: equals
+        value: true
+      note: >-
+        Asserted through the resource's own `encrypted?` predicate, which reads
+        sse_description.status == ENABLED. DescribeTable returns SSEDescription
+        only for a KMS-backed table; a table on the AWS-owned default key
+        returns none and the predicate is false, which is the failing case
+        Checkov is aiming at. It does NOT separate a customer-managed key from
+        the AWS-managed aws/dynamodb key -- neither does Checkov, whose
+        assertion is only that `kms_key_arn` is set. Asserting the predicate
+        rather than the raw `sse_description` attribute is deliberate:
+        sse_description is an Aws::Structure, which has no `empty?`, so
+        `not_empty` on it would raise NoMethodError at exec.
+
+api_specs:
+
+  aws_neptune_cluster:
+    gem: aws-sdk-neptune
+    client: Aws::Neptune::Client
+    list: describe_db_clusters
+    collection: db_clusters
+    id: db_cluster_identifier
+    arn: db_cluster_arn
+    scope: regional
+    fields:
+      storage_encrypted: storage_encrypted
+      kms_key_id: kms_key_id
+      iam_database_authentication_enabled: iam_database_authentication_enabled
+      copy_tags_to_snapshot: copy_tags_to_snapshot
+      backup_retention_period: backup_retention_period
+      deletion_protection: deletion_protection
+      engine: engine
+
+  aws_neptune_cluster_instance:
+    gem: aws-sdk-neptune
+    client: Aws::Neptune::Client
+    list: describe_db_instances
+    collection: db_instances
+    id: db_instance_identifier
+    arn: db_instance_arn
+    scope: regional
+    fields:
+      publicly_accessible: publicly_accessible
+      storage_encrypted: storage_encrypted
+      engine: engine
+
+  aws_neptune_cluster_snapshot:
+    gem: aws-sdk-neptune
+    client: Aws::Neptune::Client
+    list: describe_db_cluster_snapshots
+    collection: db_cluster_snapshots
+    id: db_cluster_snapshot_identifier
+    arn: db_cluster_snapshot_arn
+    scope: regional
+    fields:
+      storage_encrypted: storage_encrypted
+      kms_key_id: kms_key_id
+      engine: engine
+
+  aws_docdb_cluster:
+    gem: aws-sdk-docdb
+    client: Aws::DocDB::Client
+    list: describe_db_clusters
+    collection: db_clusters
+    id: db_cluster_identifier
+    arn: db_cluster_arn
+    scope: regional
+    fields:
+      storage_encrypted: storage_encrypted
+      kms_key_id: kms_key_id
+      backup_retention_period: backup_retention_period
+      deletion_protection: deletion_protection
+      engine: engine
+
+  aws_docdb_global_cluster:
+    gem: aws-sdk-docdb
+    client: Aws::DocDB::Client
+    list: describe_global_clusters
+    collection: global_clusters
+    id: global_cluster_identifier
+    arn: global_cluster_arn
+    scope: regional
+    fields:
+      storage_encrypted: storage_encrypted
+      engine: engine
+
+metadata:
+
+  CKV_AWS_44:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      Neptune storage encryption can only be set when the cluster is created, so
+      an unencrypted graph database stays unencrypted for its whole life. The
+      graph itself is usually identity and relationship data, and it sits on
+      volumes and in automated snapshots that outlive the cluster.
+
+  CKV_AWS_359:
+    severity: medium
+    impact: 0.5
+    nist: ['IA-2', 'IA-5']
+    nist_r4: ['IA-2', 'IA-5']
+    cci: ['CCI-000764', 'CCI-000196']
+    ksi: ['KSI-IAM-CTL']
+    rationale: >-
+      Without IAM database authentication the cluster is reached with a static
+      password that lives in application configuration and does not expire.
+      With it enabled, access is a short-lived token tied to an IAM principal,
+      so revocation and audit happen in one place.
+
+  CKV_AWS_361:
+    what: backup_retention_period is at least 7 days
+    severity: medium
+    impact: 0.5
+    nist: ['CP-9', 'SI-12']
+    nist_r4: ['CP-9', 'SI-12']
+    cci: ['CCI-000535', 'CCI-001678']
+    ksi: ['KSI-RPL-ABO']
+    rationale: >-
+      Automated backups are the only recovery path for a destructive write or a
+      ransomware event on the cluster. A one-day window means the damage has to
+      be noticed within a day; a week of retention gives a realistic detection
+      interval to restore from.
+
+  CKV_AWS_362:
+    severity: low
+    impact: 0.3
+    nist: ['CM-8', 'AU-12']
+    nist_r4: ['CM-8', 'AU-12']
+    cci: ['CCI-000366']
+    ksi: ['KSI-CMT-INV']
+    rationale: >-
+      Snapshots that do not carry the cluster's tags fall out of the inventory
+      the estate is governed by, so ownership, data classification and
+      retention policies that key on tags stop applying to the copies of the
+      data even though they still apply to the source.
+
+  CKV_AWS_102:
+    severity: high
+    impact: 0.7
+    nist: ['SC-7', 'SC-7 (5)']
+    nist_r4: ['SC-7', 'SC-7 (5)']
+    cci: ['CCI-001097', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A publicly accessible Neptune instance resolves to a public address, so
+      the only thing between the database and the internet is a security group
+      rule. Any widening of that rule, deliberate or accidental, exposes the
+      database directly rather than exposing it to the VPC.
+
+  CKV_AWS_279:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A snapshot is a full copy of the database that persists after the cluster
+      is gone and can be shared to another account. An unencrypted snapshot
+      moves that data outside the controls applied to the running cluster.
+
+  CKV_AWS_74:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      DocumentDB storage is unencrypted by default and encryption cannot be
+      turned on after creation -- the cluster has to be restored into a new
+      encrypted one. Finding this on a deployed cluster is finding a migration,
+      which is why it matters that it is found early.
+
+  CKV_AWS_360:
+    severity: medium
+    impact: 0.5
+    nist: ['CP-9', 'SI-12']
+    nist_r4: ['CP-9', 'SI-12']
+    cci: ['CCI-000535', 'CCI-001678']
+    ksi: ['KSI-RPL-ABO']
+    rationale: >-
+      The default retention of one day means a bad write discovered on Monday
+      about a Friday deployment is unrecoverable. Seven days covers a weekend
+      plus the time it takes for a data problem to be reported.
+
+  CKV_AWS_292:
+    severity: high
+    impact: 0.7
+    nist: ['SC-28', 'SC-28 (1)']
+    nist_r4: ['SC-28', 'SC-28 (1)']
+    cci: ['CCI-001199', 'CCI-002475']
+    ksi: ['KSI-SVC-CER']
+    rationale: >-
+      A global cluster replicates the data into additional regions. If the
+      global cluster is unencrypted then every regional copy is unencrypted,
+      which multiplies one configuration mistake across every region the data
+      has been replicated into.
+
+  CKV_AWS_164:
+    severity: high
+    impact: 0.7
+    nist: ['SC-7', 'SC-7 (5)']
+    nist_r4: ['SC-7', 'SC-7 (5)']
+    cci: ['CCI-001097', 'CCI-002080']
+    ksi: ['KSI-CNA-NDS']
+    rationale: >-
+      A PUBLIC Transfer endpoint accepts connections from anywhere on the
+      internet, and Transfer servers front file stores that usually hold bulk
+      data exchanged with partners. A VPC endpoint puts the same service behind
+      security groups and route tables that can be reasoned about.
+
+  CKV_AWS_153:
+    what: the group declares at least one tag
+    severity: low
+    impact: 0.3
+    nist: ['CM-8', 'AU-12']
+    nist_r4: ['CM-8', 'AU-12']
+    cci: ['CCI-000366']
+    ksi: ['KSI-CMT-INV']
+    rationale: >-
+      Instances launched by an untagged Auto Scaling group appear in the account
+      with no owner, environment or data classification, and they appear and
+      disappear on their own schedule. Anything that keys off tags -- cost
+      attribution, backup selection, patch groups -- silently skips them.
+
+  CKV_AWS_119:
+    what: >-
+      server_side_encryption is enabled with a kms_key_arn, rather than the
+      AWS-owned default key
+    severity: medium
+    impact: 0.5
+    nist: ['SC-12', 'SC-28 (1)']
+    nist_r4: ['SC-12', 'SC-28 (1)']
+    cci: ['CCI-002475']
+    ksi: ['KSI-SVC-KMG']
+    rationale: >-
+      A table on the AWS-owned default key is encrypted, but the key is invisible
+      -- it has no key policy to read, no grants to audit, and no CloudTrail
+      record of its use. Moving to a KMS key puts the table's encryption under
+      the same key policy and usage log as everything else.
+
+fixes:
+
+  CKV_AWS_44:
+    aws_neptune_cluster:
+      terraform: |
+        resource "aws_neptune_cluster" "graph" {
+          cluster_identifier                  = "graph"
+          engine                              = "neptune"
+          storage_encrypted                   = true
+          kms_key_arn                         = aws_kms_key.neptune.arn
+          backup_retention_period             = 7
+          iam_database_authentication_enabled = true
+          copy_tags_to_snapshot               = true
+          skip_final_snapshot                 = false
+          final_snapshot_identifier           = "graph-final"
+        }
+      cli: |
+        There is no in-place fix. Neptune storage encryption is set at creation
+        only. Take a snapshot, restore it into a new encrypted cluster, then
+        cut over and delete the original:
+        aws neptune create-db-cluster-snapshot --db-cluster-identifier graph --db-cluster-snapshot-identifier graph-migrate
+        aws neptune restore-db-cluster-from-snapshot --db-cluster-identifier graph-enc --snapshot-identifier graph-migrate --engine neptune --storage-encrypted --kms-key-id <key-arn>
+
+  CKV_AWS_359:
+    aws_neptune_cluster:
+      terraform: |
+        resource "aws_neptune_cluster" "graph" {
+          cluster_identifier                  = "graph"
+          engine                              = "neptune"
+          storage_encrypted                   = true
+          iam_database_authentication_enabled = true
+        }
+      cli: |
+        aws neptune modify-db-cluster --db-cluster-identifier graph --enable-iam-database-authentication --apply-immediately
+
+  CKV_AWS_361:
+    aws_neptune_cluster:
+      terraform: |
+        resource "aws_neptune_cluster" "graph" {
+          cluster_identifier      = "graph"
+          engine                  = "neptune"
+          backup_retention_period = 7
+          preferred_backup_window = "03:00-04:00"
+        }
+      cli: |
+        aws neptune modify-db-cluster --db-cluster-identifier graph --backup-retention-period 7 --apply-immediately
+
+  CKV_AWS_362:
+    aws_neptune_cluster:
+      terraform: |
+        resource "aws_neptune_cluster" "graph" {
+          cluster_identifier    = "graph"
+          engine                = "neptune"
+          copy_tags_to_snapshot = true
+
+          tags = {
+            Owner       = "platform"
+            Environment = "prod"
+          }
+        }
+      cli: |
+        aws neptune modify-db-cluster --db-cluster-identifier graph --copy-tags-to-snapshot --apply-immediately
+        Existing snapshots are not retagged; tag them directly with `aws neptune add-tags-to-resource`.
+
+  CKV_AWS_102:
+    aws_neptune_cluster_instance:
+      terraform: |
+        resource "aws_neptune_cluster_instance" "graph" {
+          identifier          = "graph-1"
+          cluster_identifier  = aws_neptune_cluster.graph.id
+          instance_class      = "db.r5.large"
+          publicly_accessible = false
+        }
+      cli: |
+        aws neptune modify-db-instance --db-instance-identifier graph-1 --no-publicly-accessible --apply-immediately
+
+  CKV_AWS_279:
+    aws_neptune_cluster_snapshot:
+      terraform: |
+        resource "aws_neptune_cluster_snapshot" "graph" {
+          db_cluster_identifier          = aws_neptune_cluster.graph.id
+          db_cluster_snapshot_identifier = "graph-snapshot"
+        }
+
+        # A snapshot inherits the source cluster's encryption, so the fix is on
+        # the cluster, not on the snapshot resource.
+        resource "aws_neptune_cluster" "graph" {
+          cluster_identifier = "graph"
+          engine             = "neptune"
+          storage_encrypted  = true
+          kms_key_arn        = aws_kms_key.neptune.arn
+        }
+      cli: |
+        There is no in-place fix -- a snapshot's encryption cannot be changed.
+        Copy it into an encrypted one and delete the unencrypted original:
+        aws neptune copy-db-cluster-snapshot --source-db-cluster-snapshot-identifier graph-snapshot --target-db-cluster-snapshot-identifier graph-snapshot-enc --kms-key-id <key-arn>
+        aws neptune delete-db-cluster-snapshot --db-cluster-snapshot-identifier graph-snapshot
+
+  CKV_AWS_74:
+    aws_docdb_cluster:
+      terraform: |
+        resource "aws_docdb_cluster" "docs" {
+          cluster_identifier      = "docs"
+          engine                  = "docdb"
+          master_username         = var.master_username
+          master_password         = var.master_password
+          storage_encrypted       = true
+          kms_key_id              = aws_kms_key.docdb.arn
+          backup_retention_period = 7
+          skip_final_snapshot     = false
+          final_snapshot_identifier = "docs-final"
+        }
+      cli: |
+        There is no in-place fix. DocumentDB storage encryption is set at
+        creation only. Snapshot, restore encrypted, cut over, delete the original:
+        aws docdb create-db-cluster-snapshot --db-cluster-identifier docs --db-cluster-snapshot-identifier docs-migrate
+        aws docdb restore-db-cluster-from-snapshot --db-cluster-identifier docs-enc --snapshot-identifier docs-migrate --engine docdb --storage-encrypted --kms-key-id <key-arn>
+
+  CKV_AWS_360:
+    aws_docdb_cluster:
+      terraform: |
+        resource "aws_docdb_cluster" "docs" {
+          cluster_identifier      = "docs"
+          engine                  = "docdb"
+          master_username         = var.master_username
+          master_password         = var.master_password
+          backup_retention_period = 7
+          preferred_backup_window = "03:00-04:00"
+        }
+      cli: |
+        aws docdb modify-db-cluster --db-cluster-identifier docs --backup-retention-period 7 --apply-immediately
+
+  CKV_AWS_292:
+    aws_docdb_global_cluster:
+      terraform: |
+        resource "aws_docdb_global_cluster" "docs" {
+          global_cluster_identifier = "docs-global"
+          engine                    = "docdb"
+          engine_version            = "5.0.0"
+          storage_encrypted         = true
+        }
+      cli: |
+        There is no in-place fix. StorageEncrypted on a global cluster is set at
+        creation. Create a new encrypted global cluster and attach regional
+        clusters restored from encrypted snapshots, then delete the old one.
+
+  CKV_AWS_164:
+    aws_transfer_server:
+      terraform: |
+        resource "aws_transfer_server" "sftp" {
+          identity_provider_type = "SERVICE_MANAGED"
+          protocols              = ["SFTP"]
+          endpoint_type          = "VPC"
+          security_policy_name   = "TransferSecurityPolicy-2024-01"
+
+          endpoint_details {
+            vpc_id             = aws_vpc.main.id
+            subnet_ids         = aws_subnet.private[*].id
+            security_group_ids = [aws_security_group.sftp.id]
+          }
+        }
+      cli: |
+        The endpoint type can be changed, but only while the server is stopped:
+        aws transfer stop-server --server-id <id>
+        aws transfer update-server --server-id <id> --endpoint-type VPC --endpoint-details VpcId=<vpc>,SubnetIds=<subnets>,SecurityGroupIds=<sgs>
+        aws transfer start-server --server-id <id>
+        The hostname changes, so partner configurations have to be updated.
+
+  CKV_AWS_153:
+    aws_autoscaling_group:
+      terraform: |
+        resource "aws_autoscaling_group" "app" {
+          name                = "app"
+          min_size            = 2
+          max_size            = 6
+          desired_capacity    = 2
+          vpc_zone_identifier = aws_subnet.private[*].id
+
+          launch_template {
+            id      = aws_launch_template.app.id
+            version = "$Latest"
+          }
+
+          tag {
+            key                 = "Owner"
+            value               = "platform"
+            propagate_at_launch = true
+          }
+
+          tag {
+            key                 = "Environment"
+            value               = "prod"
+            propagate_at_launch = true
+          }
+        }
+      cli: |
+        aws autoscaling create-or-update-tags --tags ResourceId=app,ResourceType=auto-scaling-group,Key=Owner,Value=platform,PropagateAtLaunch=true
+        Instances already running are not retagged; tag them with `aws ec2 create-tags` or let them roll.
+
+  CKV_AWS_119:
+    aws_dynamodb_table:
+      terraform: |
+        resource "aws_dynamodb_table" "orders" {
+          name         = "orders"
+          billing_mode = "PAY_PER_REQUEST"
+          hash_key     = "order_id"
+
+          attribute {
+            name = "order_id"
+            type = "S"
+          }
+
+          server_side_encryption {
+            enabled     = true
+            kms_key_arn = aws_kms_key.dynamodb.arn
+          }
+
+          point_in_time_recovery {
+            enabled = true
+          }
+        }
+      cli: |
+        aws dynamodb update-table --table-name orders --sse-specification Enabled=true,SSEType=KMS,KMSMasterKeyId=<key-arn>
+        This is an in-place change; the table stays available while it applies.
+
+skipped:
+
+  # --- SageMaker: every List* returns a thin summary, and none of the inspected
+  #     settings are on it. The detail calls (DescribeNotebookInstance,
+  #     DescribeDomain, DescribeModel, DescribeEndpointConfig,
+  #     DescribeFlowDefinition, DescribeDataQualityJobDefinition) all require the
+  #     resource name, and there is no stock inspec-aws SageMaker resource.
+  CKV_AWS_122: >-
+    No stock aws_sagemaker_* resource, and ListNotebookInstances returns
+    NotebookInstanceSummary (name, arn, status, url, instance_type, lifecycle
+    config, code repositories) -- DirectInternetAccess is only on
+    DescribeNotebookInstance, which requires NotebookInstanceName.
+  CKV_AWS_187: >-
+    Same shape problem for both types. ListDomains returns DomainDetails (arn,
+    id, name, status, url) and ListNotebookInstances returns
+    NotebookInstanceSummary; neither carries KmsKeyId.
+  CKV_AWS_22: >-
+    KmsKeyId is on DescribeNotebookInstance, which requires
+    NotebookInstanceName. NotebookInstanceSummary does not carry it.
+  CKV_AWS_306: >-
+    SubnetId is on DescribeNotebookInstance only; the list summary does not
+    carry it.
+  CKV_AWS_307: >-
+    RootAccess is on DescribeNotebookInstance only; the list summary does not
+    carry it.
+  CKV_AWS_367: >-
+    ListDataQualityJobDefinitions returns MonitoringJobDefinitionSummary (name,
+    arn, creation time, endpoint name). The output config KMS key is on
+    DescribeDataQualityJobDefinition, which requires JobDefinitionName.
+  CKV_AWS_368: >-
+    Same summary; VolumeKmsKeyId is on the detail call only.
+  CKV_AWS_369: >-
+    Same summary; NetworkConfig.EnableInterContainerTrafficEncryption is on the
+    detail call only.
+  CKV_AWS_370: >-
+    ListModels returns ModelSummary (model name, arn, creation time).
+    EnableNetworkIsolation is on DescribeModel, which requires ModelName.
+  CKV_AWS_371: >-
+    InstanceMetadataServiceConfiguration is on DescribeNotebookInstance only.
+  CKV_AWS_372: >-
+    ListFlowDefinitions returns FlowDefinitionSummary (name, arn, status,
+    creation time, failure reason). OutputConfig.KmsKeyId is on
+    DescribeFlowDefinition, which requires FlowDefinitionName.
+  CKV_AWS_98: >-
+    ListEndpointConfigs returns EndpointConfigSummary (name, arn, creation
+    time). KmsKeyId is on DescribeEndpointConfig, which requires
+    EndpointConfigName.
+
+  # --- Neptune / DocumentDB skips -------------------------------------------
+  CKV_AWS_101: >-
+    The check requires EnabledCloudwatchLogsExports to CONTAIN "audit". No
+    `satisfies` expresses list membership -- `in_list` renders
+    `should be_in [...]`, which asks whether the whole array is an element of
+    the allowed set, not whether "audit" is in the array. Additionally the API
+    omits EnabledCloudwatchLogsExports entirely when no exports are configured,
+    and the API template filters nil rows out before asserting, so the failing
+    population would never reach an assertion.
+  CKV_AWS_85: >-
+    Same two problems as CKV_AWS_101, for aws_docdb_cluster: the check is
+    "EnabledCloudwatchLogsExports contains profiler or audit", which is list
+    membership, and the field is absent (nil, therefore filtered) when logging
+    is off.
+  CKV_AWS_104: >-
+    The check reads a named parameter (audit_logs) inside a DocumentDB cluster
+    parameter group. DescribeDBClusterParameterGroups enumerates the groups but
+    not their parameters; DescribeDBClusterParameters requires
+    DBClusterParameterGroupName, so it cannot enumerate an account.
+  CKV_AWS_90: >-
+    Same as CKV_AWS_104 -- the `tls` parameter lives behind
+    DescribeDBClusterParameters, which requires the group name.
+  CKV_AWS_347: >-
+    Terraform's `kms_key_arn` is API field KmsKeyId, which Neptune returns only
+    when the cluster is encrypted. The only available assertion is
+    `not_empty`, and the API template rejects nil rows before asserting, so an
+    unencrypted cluster is filtered out rather than failed -- the control could
+    never fail. The encryption question is already answered failably by
+    CKV_AWS_44 on storage_encrypted; separating a customer-managed key from the
+    AWS-managed aws/rds key would need alias resolution, which this schema
+    cannot express.
+  CKV_AWS_280: >-
+    Same unfailable-not_empty problem: DBClusterSnapshot.KmsKeyId is present
+    only for an encrypted snapshot, and nil rows are filtered before assertion.
+    CKV_AWS_279 covers the encrypted/unencrypted question failably.
+  CKV_AWS_182: >-
+    Same unfailable-not_empty problem on DocDB DBCluster.KmsKeyId. CKV_AWS_74
+    covers the encryption question failably.
+
+  # --- Kinesis --------------------------------------------------------------
+  CKV_AWS_43: >-
+    ListStreams returns StreamSummary (stream name, arn, status,
+    StreamModeDetails, creation timestamp). Encryption is on
+    DescribeStreamSummary / DescribeStream, both of which require StreamName.
+    NOTE: the existing aws_kinesis_stream api spec declares
+    `encryption_type: stream_mode_details.stream_mode`, which is not the
+    encryption type at all -- StreamMode is PROVISIONED or ON_DEMAND. Any
+    mapping asserting encryption_type == KMS through that spec would fail every
+    stream in the account.
+  CKV_AWS_185: >-
+    KeyId is on DescribeStreamSummary, which requires StreamName; StreamSummary
+    does not carry it.
+  CKV_AWS_177: >-
+    ListStreams (kinesisvideo) does return StreamInfo.KmsKeyId, but Kinesis
+    Video always populates it -- an unconfigured stream gets the AWS-managed
+    aws/kinesis-video key ARN. So the only expressible assertion, `not_empty`,
+    passes for every stream in every account and can never fail. Distinguishing
+    a customer-managed key needs alias or key-metadata resolution, which the
+    api reader cannot do.
+
+  # --- Kinesis Firehose -----------------------------------------------------
+  CKV_AWS_240: >-
+    ListDeliveryStreams returns DeliveryStreamNames only.
+    DescribeDeliveryStream requires DeliveryStreamName, so the SSE block cannot
+    be enumerated. There is no stock inspec-aws Firehose resource.
+  CKV_AWS_241: >-
+    Same enumeration problem, and the check is a conjunction (enabled AND
+    key_type == CUSTOMER_MANAGED_CMK AND key_arn present) that a single
+    property assertion cannot express.
+
+  # --- SQS ------------------------------------------------------------------
+  CKV_AWS_27: >-
+    The check passes on EITHER sqs_managed_sse_enabled OR kms_master_key_id.
+    The stock aws_sqs_queue exposes both (`sqs_managed_enabled` and
+    `kms_master_key_id`), but the schema asserts one property, and either one
+    alone is wrong: asserting the KMS key fails every SSE-SQS queue, asserting
+    the managed flag fails every SSE-KMS queue. Needs a disjunction the schema
+    does not have.
+  CKV_AWS_72: >-
+    Requires parsing the queue's IAM policy document to find Action "*". Policy
+    document parsing is out of scope for both schemas.
+  CKV_AWS_387: >-
+    Requires parsing the queue policy for wildcard principals/conditions.
+  CKV_AWS_168: >-
+    Requires parsing the queue policy AND relating aws_sqs_queue to
+    aws_sqs_queue_policy -- both a policy document and a cross-resource
+    relationship.
+
+  # --- DLM ------------------------------------------------------------------
+  CKV_AWS_253: >-
+    GetLifecyclePolicies returns LifecyclePolicySummary (policy id,
+    description, state, tags, policy type). PolicyDetails, and therefore
+    Actions[].CrossRegionCopy[].EncryptionConfiguration, is only on
+    GetLifecyclePolicy, which requires PolicyId. There is no stock DLM
+    resource.
+  CKV_AWS_254: >-
+    Same enumeration problem, and the CMK form additionally needs the CmkArn
+    inside a nested array element.
+  CKV_AWS_255: >-
+    Same enumeration problem for the schedules[].cross_region_copy_rule path.
+  CKV_AWS_256: >-
+    Same enumeration problem, plus the nested CMK field.
+
+  # --- DynamoDB -------------------------------------------------------------
+  CKV_AWS_165: >-
+    The check is a no-op. DynamodbGlobalTableRecovery.scan_resource_conf
+    unconditionally returns CheckResult.PASSED, with a comment that the field
+    cannot be set in aws_dynamodb_global_table. There is no assertion to port.
+  CKV_AWS_271: >-
+    Replica KMS settings live in DescribeTable's Replicas[], and DescribeTable
+    requires TableName -- ListTables returns names only. The stock
+    aws_dynamodb_table exposes no replica attributes either (its attr_readers
+    stop at sse_description / global_secondary_indexes).
+
+  # --- Transfer -------------------------------------------------------------
+  CKV_AWS_357: >-
+    ListServers returns ListedServer (arn, domain, identity provider type,
+    endpoint type, logging role, server id, state, user count). Protocols is on
+    DescribeServer, which requires ServerId. The assertion is also negative
+    membership ("FTP" not in the list), which no `satisfies` expresses.
+  CKV_AWS_380: >-
+    SecurityPolicyName is on DescribeServer only, and the assertion is a date
+    computation (policy year-month within 24 months of now), which the
+    declarative `satisfies` set cannot express.
+
+  # --- MWAA -----------------------------------------------------------------
+  CKV_AWS_242: >-
+    ListEnvironments returns environment NAMES only. LoggingConfiguration is on
+    GetEnvironment, which requires Name. No stock MWAA resource.
+  CKV_AWS_243: >-
+    Same -- worker log configuration is only on GetEnvironment.
+  CKV_AWS_244: >-
+    Same -- webserver log configuration is only on GetEnvironment.
+
+  # --- Auto Scaling ---------------------------------------------------------
+  CKV_AWS_315: >-
+    The stock aws_auto_scaling_group exposes launch_configuration_name but
+    neither launch_template nor mixed_instances_policy, so the check can only be
+    inferred by inverting it. That inversion is unsafe here:
+    launch_configuration_name is nil for a launch-template group, and the stock
+    template renders `its('launch_configuration_name') { should be_empty }`,
+    which raises NoMethodError on nil -- the control would error on exactly the
+    population it is meant to pass. Needs the plural resource to register a
+    launch_template column upstream.
+
+  # --- CloudSearch ----------------------------------------------------------
+  CKV_AWS_218: >-
+    DescribeDomains returns DomainStatus, which carries no endpoint options.
+    TLSSecurityPolicy is on DescribeDomainEndpointOptions, which requires
+    DomainName. No stock CloudSearch resource.
+  CKV_AWS_220: >-
+    Same -- EnforceHTTPS is on DescribeDomainEndpointOptions only.
+
+  # --- AppFlow --------------------------------------------------------------
+  CKV_AWS_263: >-
+    ListFlows returns FlowDefinition (arn, description, name, status, connector
+    types, trigger type, timestamps, tags, last run details). KmsArn is on
+    DescribeFlow, which requires FlowName.
+  CKV_AWS_264: >-
+    DescribeConnectorProfiles does enumerate without arguments, but
+    ConnectorProfileDetail carries no kmsArn -- only arn, name, connector type
+    and label, connection mode, credentials arn, profile properties and
+    provisioning state.
+
+  # --- Elastic Beanstalk ----------------------------------------------------
+  CKV_AWS_312: >-
+    The check reads an option setting in the
+    aws:elasticbeanstalk:healthreporting:system namespace. Option settings come
+    from DescribeConfigurationSettings, which requires ApplicationName;
+    DescribeEnvironments does not return them. No stock Beanstalk resource.
+  CKV_AWS_340: >-
+    Same -- the aws:elasticbeanstalk:managedactions namespace is only reachable
+    through DescribeConfigurationSettings.
+
+  # --- Glue -----------------------------------------------------------------
+  CKV_AWS_94: >-
+    GetDataCatalogEncryptionSettings takes no required arguments, but its output
+    is a single DataCatalogEncryptionSettings STRUCTURE, not a collection -- the
+    api reader iterates `Array(page.<collection>)` and calls `.to_h` per item.
+    The check is also a conjunction (encryption at rest SSE-KMS with a key AND
+    connection password encryption on with a key), which one property assertion
+    cannot express. This one is a good candidate for a small purpose-built
+    resource rather than the declarative reader.
+  CKV_AWS_99: >-
+    GetSecurityConfigurations does enumerate, and the encryption configuration
+    is on the item, but the check is a three-way conjunction: CloudWatch mode
+    == SSE-KMS with a key, job bookmarks mode == CSE-KMS with a key, and S3 mode
+    != DISABLED. Mapping any single one of the three would pass configurations
+    that Checkov fails.
+
+  # --- Glacier --------------------------------------------------------------
+  CKV_AWS_167: >-
+    Requires parsing the vault access policy document for wildcard principals.
+    The policy is also not on ListVaults -- GetVaultAccessPolicy requires
+    vaultName.
+
+  # --- Classic ELB policy ---------------------------------------------------
+  CKV_AWS_213: >-
+    Two problems. DescribeLoadBalancerPolicies takes no required arguments, but
+    without a LoadBalancerName it returns AWS's SAMPLE policies rather than the
+    policies attached to the account's load balancers, so it does not enumerate
+    the deployed estate. The assertion is also a scan over a list of
+    name/value attribute pairs looking for forbidden protocol names, which no
+    `satisfies` expresses.
+
+  # --- CodeCommit -----------------------------------------------------------
+  CKV_AWS_257: >-
+    ListApprovalRuleTemplates returns template NAMES only; the content document
+    is on GetApprovalRuleTemplate, which requires the name. The assertion also
+    requires parsing that JSON document for
+    Statements[0].NumberOfApprovalsNeeded.
+
+  # --- Redshift Serverless --------------------------------------------------
+  CKV_AWS_282: >-
+    ListNamespaces does return Namespace.kmsKeyId, but Redshift Serverless
+    always populates it -- a namespace with no explicit key reports the
+    AWS-managed key. The only expressible assertion, `not_empty`, therefore
+    passes for every namespace and can never fail. Distinguishing a
+    customer-managed key needs key-metadata resolution the reader cannot do.
+
+  # --- API Gateway v2 -------------------------------------------------------
+  CKV_AWS_309: >-
+    aws_api_gateway_v2_routes requires api_id (`validate_parameters(required:
+    %i(api_id))` plus an explicit raise), so the plural cannot enumerate an
+    account. The API path has the same problem: GetRoutes requires ApiId.
+    Enumerating routes needs a two-level walk (GetApis then GetRoutes per api)
+    that neither schema expresses.
+
+  # --- SES ------------------------------------------------------------------
+  CKV_AWS_365: >-
+    ListConfigurationSets (SESv2) returns configuration set NAMES only.
+    DeliveryOptions.TlsPolicy is on GetConfigurationSet, which requires
+    ConfigurationSetName. There is no stock inspec-aws SES configuration set
+    resource (only receipt rules, rule sets and templates).

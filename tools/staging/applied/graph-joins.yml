@@ -1,0 +1,378 @@
+# Slice: graph-joins — the 19 checkov graph checks whose deployed reading is a
+# relationship between two resources.
+#
+# What I confirmed before writing anything
+# ----------------------------------------
+# render_stock does treat `enumerate.resource` and `assert.resource` as
+# independent (tools/render_controls.py: it formats `plural=enum['resource']`
+# and `singular=assertion['resource']` from separate keys, and the emitted body
+# is `found = <plural>(aws_region: region).<ids>` then, per id,
+# `describe <singular>(<arg>: id, aws_region: region)`). So a one-hop join IS
+# expressible today — but ONLY when the id the plural yields is the identifier
+# the singular accepts as its argument.
+#
+# That is the test every entry below was held to, and 18 of the 19 fail it.
+# The failures are not "no code exists yet"; they are that the two sides speak
+# different identifiers, or that one side has no reader in the vendored pack at
+# all. Both were confirmed against
+#   vendor/8d70ebd15eaba9b4b52657eef1f9dbb2d0235206/libraries/
+# and against the aws_api_assets reader in libraries/aws_api_assets.rb.
+#
+# Three pack-wide facts that decided most of this slice
+# ----------------------------------------------------
+#   * No wafv2, appsync or AWS Backup resource exists in the VENDORED STOCK
+#     PACK. The only WAF resources are WAF Classic (aws_waf_web_acl /
+#     aws_waf_rule / …), a different service with a different id space.
+#     Confirmed by ls over vendor/*/libraries/ and by
+#     `grep -rn "backup_client\|wafv2\|appsync" vendor/*/libraries/`.
+#   * The stock pack is NOT the whole story, and the first draft of this file
+#     overstated it as "no reader exists". aws-sdk-wafv2, aws-sdk-backup,
+#     aws-sdk-applicationautoscaling and aws-sdk-configservice are all in
+#     tools/image_gems.txt, and tools/api_specs.yml already carries a live
+#     aws_backup_vault row on Aws::Backup::Client. So the SDK is not what
+#     blocks most of this slice; the api reader's call shape and the join shape
+#     are, and each reason below now says which. aws-sdk-appsync is the one gem
+#     genuinely absent, and merge_proposals refuses an api spec naming a gem
+#     the image lacks.
+#   * aws_api_assets calls `api.public_send(@spec["list"])` with NO arguments
+#     (libraries/aws_api_assets.rb), then walks regions and digs dotted field
+#     paths. Checked against botocore: wafv2 ListWebACLs requires Scope and
+#     application-autoscaling DescribeScalableTargets requires ServiceNamespace,
+#     so those are unreachable through it. backup ListProtectedResources and
+#     config DescribeConfigurationRecorders require NOTHING, so those two ARE
+#     reachable — which is why their entries below rest on the assertion shape
+#     rather than on a missing reader.
+
+mappings:
+
+  # The one entry in this slice that is expressible today — and it is
+  # expressible because it is DEGENERATE: the "left" side is a single constant
+  # ARN, so there is nothing to enumerate and no key to match.
+  CKV2_AWS_56:
+    aws_iam_policy_attachment:
+      reader: singleton
+      resource: 'aws_iam_policy(policy_arn: "arn:#{input(''aws_partition'')}:iam::aws:policy/IAMFullAccess")'
+      property: attachment_count
+      satisfies: equals
+      value: 0
+      note: >-
+        Confirmed in vendor/.../libraries/aws_iam_policy.rb: the resource takes
+        require_any_of(policy_arn, policy_name), calls iam_client.get_policy for
+        an arn, and exposes `attachment_count` as an attr_reader assigned from
+        @resp.attachment_count. The botocore member is iam.Policy.AttachmentCount
+        and AWS populates it on every GetPolicy response, so nil is not a state
+        to guard against. AttachmentCount is the count of IAM users, groups and
+        roles the policy is attached to, which is exactly the relationship
+        Checkov asserts does not exist — so 0 is the compliant value.
+
+        WHY THIS IS NOT A JOIN. ListEntitiesForPolicy requires a PolicyArn, but
+        that arn is a CONSTANT (the AWS-managed IAMFullAccess policy), not a
+        discovered parent id. One call, one number, no enumeration — which is
+        the singleton shape, not the stock shape.
+
+        PARTITION. The arn prefix differs by partition, so it is built from the
+        declared `aws_partition` input rather than hardcoded to `arn:aws:`;
+        the input is declared in inspec.yml with a default of `aws`, so it can
+        never render empty. `resource:` is substituted into SINGLETON_TEMPLATE
+        by str.format, which does not re-scan the substituted value, so the
+        Ruby interpolation survives rendering intact.
+
+        STRONGER THAN CHECKOV, in the way this profile is meant to be: Checkov
+        sees only attachments written in the HCL it is given. AttachmentCount
+        counts every attachment that exists, including one made by hand in the
+        console and one made from a module Checkov never scanned. It also picks
+        up SSO permission sets, because an AWS-managed policy attached to a
+        permission set materialises as an attachment to the provisioned
+        AWSReservedSSO_* role in the account.
+
+        KNOWN WART IN THE RENDERED EVIDENCE, flagged rather than hidden:
+        SINGLETON_TEMPLATE opens with a fixed `describe '<tf_type>' … it 'is
+        configured for this account'` assertion whose failure message is 'no
+        account-level policy is set, so nothing constrains this'. That prose was
+        written for the IAM password policy. Here `exists?` is false only when
+        GetPolicy could not be read at all, so the assertion is still the right
+        posture (nothing was assessed => loud failure, never a silent pass) but
+        the sentence describes the wrong condition. Worth a template fix; not a
+        reason to leave the check unassessed.
+
+        SCOPE OF AttachmentCount, read off botocore rather than assumed:
+        iam.Policy carries AttachmentCount and PermissionsBoundaryUsageCount as
+        SEPARATE members, and only the first is read here. A policy named as a
+        permissions BOUNDARY constrains a principal rather than granting to it,
+        so excluding that usage is correct for this rule — but it is a
+        deliberate exclusion, not an oversight, and a boundary that names
+        IAMFullAccess will not show up in this control.
+
+        ANCHOR NARROWED ON REVIEW: an earlier draft tagged AC-6(1) alongside
+        AC-3 and AC-6. It was dropped rather than kept on weak evidence.
+        Neither declared CCI anchors the enhancement, and the spelling
+        'AC-6(1)' does not match the 'XX-N (M)' form every other enhancement in
+        control_metadata.yml uses ('SC-28 (1)', 'SC-7 (5)', 'IA-5 (1)'), so it
+        would not have joined a rollup keyed on the estate's format. What
+        remains is exactly the reviewed IAM convention already in
+        control_metadata.yml (CKV_AWS_79) and its derived siblings.
+
+metadata:
+
+  CKV2_AWS_56:
+    severity: high
+    impact: 0.7
+    nist: ['AC-3', 'AC-6']
+    nist_r4: ['AC-3', 'AC-6']
+    cci: ['CCI-000213', 'CCI-002233']
+    ksi: ['KSI-IAM-CTL']
+    nist_source: agent-drafted
+    rationale: >-
+      IAMFullAccess grants unrestricted iam:* — the ability to create a role,
+      attach AdministratorAccess to it and assume it. Any principal holding it
+      is effectively an account administrator regardless of what its other
+      policies say, so the policy is a privilege-escalation path rather than a
+      permission set. Least privilege is asserted here as "nothing is attached
+      to it at all", which is the only state that can be checked without
+      evaluating every attached principal's intent.
+
+fixes:
+
+  CKV2_AWS_56:
+    aws_iam_policy_attachment:
+      terraform: |
+        # Replace the AWS-managed IAMFullAccess attachment with a customer-managed
+        # policy scoped to the paths and actions the principal actually needs.
+        resource "aws_iam_policy" "iam_admin_scoped" {
+          name        = "iam-admin-scoped"
+          description = "IAM administration limited to the service-role path"
+
+          policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect   = "Allow"
+              Action   = ["iam:CreateRole", "iam:DeleteRole", "iam:AttachRolePolicy",
+                          "iam:DetachRolePolicy", "iam:TagRole"]
+              Resource = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/service-role/*"
+              Condition = {
+                ArnLike = {
+                  "iam:PolicyARN" = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:policy/*"
+                }
+              }
+            }]
+          })
+        }
+
+        resource "aws_iam_role_policy_attachment" "platform_iam_admin" {
+          role       = aws_iam_role.platform.name
+          policy_arn = aws_iam_policy.iam_admin_scoped.arn
+        }
+      cli: |
+        # Find every principal holding it, then detach each one.
+        aws iam list-entities-for-policy --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+        aws iam detach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+        aws iam detach-user-policy --user-name <user> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+        aws iam detach-group-policy --group-name <group> --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+      note: >-
+        Detach last, not first: a principal that administers IAM through this
+        policy may be the only principal able to create its replacement. Also
+        check permission sets — an attachment made through IAM Identity Center
+        is re-provisioned onto the AWSReservedSSO_* role after any manual
+        detach, so it must be removed at the permission set
+        (aws_ssoadmin_managed_policy_attachment) or it comes straight back.
+
+skipped:
+
+  CKV2_AWS_5: >-
+    Two enumerations and a key match, not a one-hop join. Left speaks a security
+    group id (aws_security_groups is an AwsCollectionResourceBase that calls
+    populate_filter_table_from_response, so its columns are the pluralised keys
+    of describe_security_groups — group_ids). The only deployed evidence of
+    attachment is ec2.NetworkInterface.Groups, and the singular
+    aws_ec2_network_interface speaks a network_interface_id (eni-…): it takes
+    required: [:network_interface_id] and calls describe_network_interfaces with
+    network_interface_ids: [opts[...]]. It cannot be looked up by group id.
+    aws_ec2_network_interfaces does register a `groups` column, so both sides
+    exist — but matching them needs the right side enumerated wholesale and
+    keyed, which the stock shape cannot express.
+
+  CKV2_AWS_7: >-
+    Both sides unreachable. aws_emr_clusters yields cluster_ids/cluster_arns and
+    registers no security-group column, and the singular aws_emr_cluster does
+    NOT read ec2_instance_attributes at all — it assigns a fixed list of
+    attr_readers (status, cluster_arn, applications, roles, kerberos, log_uri…)
+    and never calls create_resource_methods, so the five SG members Checkov
+    follows (emr_managed_master/slave, service_access, additional_master/slave)
+    are not exposed by any resource in the pack. Even with them, the assertion
+    is on the matched RIGHT row (the SG's ingress carries no 0.0.0.0/0), which
+    is the "follow then assert about the referent" form the stock shape has no
+    way to say.
+
+  CKV2_AWS_8: >-
+    No AWS Backup resource exists in the vendored stock pack — but, correcting
+    the first draft of this entry, that is NOT the blocker. aws-sdk-backup is in
+    tools/image_gems.txt, tools/api_specs.yml already carries an
+    aws_backup_vault row on Aws::Backup::Client, and botocore confirms backup
+    ListProtectedResources takes no required parameters, so aws_api_assets —
+    which calls its list operation with no arguments — can reach it. The blocker
+    is the ASSERTION shape: the api reader enumerates ONE
+    operation and asserts a flat field per row, so enumerating
+    backup.list_protected_resources would assert something about the resources
+    that ARE protected and say nothing about the RDS clusters that are not.
+    Needs two enumerations matched on the cluster arn. Deliberately NOT
+    substituted with aws_rds_cluster.backup_retention_period: RDS automated
+    backups are a different mechanism from an AWS Backup plan selection, and
+    silently answering a different question is the failure mode this repo is
+    built to avoid.
+
+  CKV2_AWS_9: >-
+    Same blocker as CKV2_AWS_8 — the Backup SDK is present and
+    ListProtectedResources is callable with no arguments; what is missing is a
+    shape that can match two enumerations — plus a key mismatch that would be
+    silent if it were built anyway: left speaks a volume id (vol-…) because
+    ec2.Volume carries no Arn member, while backup ListProtectedResources keys
+    on ResourceArn. A join whose keys never match reports every volume as
+    unprotected — a 100% finding that looks like a result, not like an error.
+
+  CKV2_AWS_18: >-
+    Same blocker as CKV2_AWS_8: AWS Backup is reachable (gem in the image,
+    aws_backup_vault spec already live, ListProtectedResources needs no
+    arguments), and what is missing is the two-enumeration join shape. The EFS
+    side is clean on its own — aws_efs_file_systems registers file_system_ids,
+    and tools/api_specs.yml DOES already carry an aws_efs_file_system row whose
+    arn is file_system_arn, correcting an earlier note that said it did not —
+    but there is nothing to join it to. Checked whether EFS answers this
+    without Backup: it does not — DescribeFileSystems carries no backup policy,
+    and describe_backup_policy is not called anywhere in the pack, so
+    aws_efs_file_system exposes nothing about backups.
+
+  CKV2_AWS_16: >-
+    Not expressible in either direction. The plural
+    aws_application_autoscaling_scalable_targets does validate_parameters(
+    required: %i(service_namespace)) and then explicitly raises "service_namespace
+    must be provided", so the generated enumeration — which calls it as
+    <plural>(aws_region: region) — would raise rather than enumerate (trap 2).
+    The singular speaks a service NAMESPACE, not a table name. And the
+    identifiers differ anyway: aws_dynamodb_tables yields "my-table" while
+    DescribeScalableTargets keys on ResourceId "table/my-table". The api reader
+    cannot serve the right side either, since it passes no arguments to the list
+    call.
+
+  CKV2_AWS_21: >-
+    No reader answers "which groups is this user in". aws_iam_user exposes
+    access keys, attached/inline policies, MFA and login profile — no groups —
+    and aws_iam_users registers no group column; list_groups_for_user appears
+    nowhere in the pack. Reversing the direction (enumerate aws_iam_groups,
+    assert aws_iam_group(group_name:).users is not empty) is a DIFFERENT check:
+    it answers CKV2_AWS_14 (no empty groups) and would pass an account whose
+    users are all outside every group.
+
+  CKV2_AWS_27: >-
+    No reader returns RDS cluster parameter VALUES: describe_db_cluster_parameters
+    appears nowhere in the pack, and there is no aws_rds_cluster_parameter_group
+    resource at all. The left side is broken too — aws_rds_clusters registers
+    cluster_identifier, database_name, cluster_members, engine, engine_version,
+    status, allocated_storage, storage_encrypted, availability_zones, multi_az
+    and arn, and no parameter-group column. Separately, Checkov's own assertion
+    is vacuous when assessed against a deployed cluster: it only checks the
+    parameter NAMES are present, and DescribeDBClusterParameters returns every
+    engine parameter with its default, so a faithful port is a control that
+    cannot fail (trap 6). The honest deployed check is on the VALUE
+    (log_statement != 'none'), which is a different assertion and needs the
+    reader that does not exist.
+
+  CKV2_AWS_30: >-
+    Instance-level twin of CKV2_AWS_27 and blocked the same way.
+    describe_db_parameters is not called anywhere in the pack, and
+    aws_db_parameter_group runs create_resource_methods over the
+    DescribeDBParameterGroups row, which carries only DBParameterGroupName,
+    DBParameterGroupFamily, Description and DBParameterGroupArn — metadata, no
+    parameters. Same vacuity: name-presence passes for every deployed instance.
+
+  CKV2_AWS_69: >-
+    The valuable member of the RDS-parameter family, and still blocked: the
+    values it needs (rds.force_ssl, require_secure_transport, db2comm) come from
+    DescribeDBParameters, which no stock resource calls and which the api reader
+    cannot call because it takes a DBParameterGroupName argument. It also needs
+    a per-family branch on the MATCHED RIGHT ROW (DBParameterGroupFamily decides
+    which parameter name to read), which is the "assert about the referent" form
+    the one-hop shape cannot express even once a reader exists.
+
+  CKV2_AWS_28: >-
+    No wafv2 resource in the vendored stock pack — the only WAF resources are
+    WAF Classic (aws_waf_web_acl and friends), a different service with a
+    different id space. aws-sdk-wafv2 IS in the image, so the gem is not the
+    blocker. aws_albs/aws_alb expose no WebACL association (confirmed against
+    their full column list and attr_readers), so the left side alone cannot
+    answer it. The api reader cannot supply the right side either: both
+    wafv2.list_web_acls and wafv2.list_resources_for_web_acl take arguments and
+    aws_api_assets calls public_send(list) with none. GetWebACLForResource would
+    fit the per-id shape — left yields a load balancer ARN and that call takes a
+    ResourceArn — but there is no resource or spec that makes the call.
+
+  CKV2_AWS_33: >-
+    Same wafv2 blocker as CKV2_AWS_28, and the AppSync side is worse: no stock
+    resource, no api spec, and no aws-sdk-appsync in tools/image_gems.txt.
+    merge_proposals refuses an api spec naming a gem the image lacks, because a
+    LoadError is rescued into unreadable_regions and the control then reads as
+    Not Applicable. So this one is blocked at the SDK — the only entry in this
+    slice of which that is true.
+
+  CKV2_AWS_31: >-
+    The proposal's reference join, and the cleanest one — matched on the WebACL
+    ARN with no key translation — but it is unbuildable here: there is no wafv2
+    resource in the stock pack, and — the binding constraint, since aws-sdk-wafv2
+    is in the image — BOTH of its calls (ListWebACLs, ListLoggingConfigurations)
+    require Scope, confirmed against botocore, which aws_api_assets cannot pass. Left speaks a WebACL ARN and
+    the right side keys on the same ARN, so this is the one to build first once
+    a wafv2 reader that accepts a fixed-enum argument exists.
+
+  CKV2_AWS_47: >-
+    Three hops and an assertion about the referent, on top of the wafv2 blocker
+    described under CKV2_AWS_28 (gem present, no resource, no way to pass
+    Scope). Left is cloudfront DistributionSummary.WebACLId; the rules that must
+    contain AWSManagedRulesAnonymousIpList and AWSManagedRulesKnownBadInputsRuleSet
+    are only on GetWebACL(Name, Scope, Id), not on ListWebACLs. Also an identifier
+    hazard worth recording: WebACLId is a WAFv2 ARN for wafv2 and a bare
+    WAF-Classic id for the old service, so the two sides do not always speak the
+    same identifier even within one account.
+
+  CKV2_AWS_76: >-
+    Same as CKV2_AWS_47 with an ALB left side. The identifiers DO line up here —
+    aws_albs.load_balancer_arns yields exactly the ResourceArn that
+    wafv2.get_web_acl_for_resource takes, so this becomes a straight one-hop the
+    moment a wafv2 singular exists. GetWebACLForResource requires only
+    ResourceArn (botocore), so unlike ListWebACLs it needs no Scope, and
+    aws-sdk-wafv2 is in the image — what is missing is a resource that does a
+    per-id LOOKUP, which the api reader is not: it enumerates a list operation
+    and cannot be handed an id. The assertion is also on the returned WebACL's
+    rule names rather than on the link.
+
+  CKV2_AWS_78: >-
+    Identical to CKV2_AWS_76 with an AppSync left side, and worse off: neither
+    the appsync enumeration nor the wafv2 lookup exists in the pack.
+
+  CKV2_AWS_39: >-
+    No route53 query-logging reader: list_query_logging_configs appears nowhere
+    in the pack, and there is no api spec for it. The identifiers also differ and
+    the mismatch is silent — aws_hosted_zones.ids yields "/hostedzone/Z123…"
+    while route53 QueryLoggingConfig.HostedZoneId is the bare "Z123…", so an
+    unnormalised join matches nothing and reports every zone as unlogged, which
+    renders as a total finding rather than as an error.
+
+  CKV2_AWS_45: >-
+    Not a join and not a singleton either, and — unlike most of this slice — not
+    blocked by a missing reader. config DescribeConfigurationRecorders requires
+    no parameters (botocore), so aws_api_assets could enumerate recorders per
+    region and dig recording_group.all_supported through its dotted field path.
+    It is skipped on the ASSERTION instead: that field alone passes a recorder
+    that is configured for everything and STOPPED, because whether it is
+    recording comes from a second call
+    (DescribeConfigurationRecorderStatus) that the api reader cannot make. Half
+    a conjunction rendered as the whole answer is exactly the silent
+    wrong-question failure this repo exists to avoid. The other two shapes do
+    not rescue it either: there is no aws_config_recorders
+    plural in the pack, so the stock shape has nothing to enumerate, and
+    aws_config_recorder is ONE PER REGION while render_singleton emits no region
+    loop at all — a singleton mapping would assess only the region the
+    credentials default to and report that as an account-wide answer, which is
+    exactly the silent under-scoping this profile exists to avoid. It also needs
+    two properties ANDed (recording_group.all_supported on the recorder AND
+    recording on its status); the singular already makes both calls internally
+    (recording_all_resource_types and recording?), so this drops out cleanly
+    once a per-region singleton enumeration exists.

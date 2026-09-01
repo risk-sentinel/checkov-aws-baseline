@@ -1,0 +1,1528 @@
+# Checkov AWS GRAPH checks -> deployed-asset assertions
+#
+# Scope: the 74 graph checks in
+#   checkov/terraform/checks/graph_checks/aws/*.json  (80 files)
+# minus the 6 already mapped in tools/resource_map.yml
+#   (CKV_AWS_18, CKV_AWS_19, CKV_AWS_20, CKV_AWS_21, CKV2_AWS_6, CKV2_AWS_61).
+# Every one of the 74 appears exactly once below.  40 A / 19 B / 15 C.
+#
+# HOW THE THREE BUCKETS ARE MEANT HERE
+# ------------------------------------
+# The buckets are about the CONTROL SHAPE, not about whether a library already
+# exists.  A check is:
+#
+#   single_field  the assertion is one field on one asset, reachable from a
+#                 single enumeration (optionally plus a per-asset lookup keyed
+#                 by that asset's own id -- which the CURRENT stock shape
+#                 already does: `enumerate` and `assert.resource` are
+#                 independent, so `aws_vpcs.vpc_ids -> aws_flow_log(vpc_id:)`
+#                 is expressible TODAY).  Each entry carries a `needs:` saying
+#                 what is missing: `nothing` (merge as-is), an api_specs row,
+#                 a one-line field on an existing reader, or a new predicate.
+#
+#   join          two independent enumerations whose rows must be matched.
+#                 Not expressible in any form today.
+#
+#   unreachable   no deployed answer, or the enumeration itself needs a parent
+#                 id (rule 2 -- that is the parent/child worker's tranche), or
+#                 the linkage exists only in HCL.  Each carries `reason_class`:
+#                   parent_child       enumeration requires a parent resource id
+#                   hcl_only           no deployed counterpart at all
+#                   no_signal          every deployed instance passes; vacuous
+#                   policy_document    needs an IAM policy-JSON evaluator, not
+#                                      a relationship read
+#
+# Every operation and member below was read out of
+#   botocore/data/<service>/<version>/service-2.json(.gz)
+# in the checkov-3.3.16 venv, and every InSpec property out of
+#   checkov-aws-baseline/vendor/8d70ebd.../libraries/*.rb.
+
+
+# =====================================================================
+# A.  single_field -- 40 checks
+# =====================================================================
+single_field:
+
+  # --- ready to merge, no code change at all -------------------------
+
+  CKV2_AWS_1:
+    aws_network_acl:
+      reader: stock
+      enumerate: {resource: aws_network_acls, ids: network_acl_ids}
+      assert:
+        resource: aws_network_acl
+        arg: network_acl_id
+        property: associated_subnet_ids
+        satisfies: not_empty
+      needs: nothing
+      note: >-
+        DescribeNetworkAcls returns Associations[].SubnetId on the ACL itself,
+        so the "attached to a subnet" relationship is a field, not a join.
+        The stock singular already exposes associated_subnet_ids (and an
+        associated? predicate).  A failure means an ACL exists that governs
+        no subnet -- dead config, and any subnet relying on it is on the VPC
+        default ACL instead.
+
+  CKV2_AWS_10:
+    aws_cloudtrail:
+      reader: stock
+      enumerate: {resource: aws_cloudtrail_trails, ids: names}
+      assert:
+        resource: aws_cloudtrail_trail
+        arg: trail_name
+        property: cloud_watch_logs_log_group_arn
+        satisfies: not_empty
+      needs: nothing
+      note: >-
+        botocore cloudtrail.Trail carries CloudWatchLogsLogGroupArn; the stock
+        singular assigns it to @cloud_watch_logs_log_group_arn.  Absent for a
+        trail with no CloudWatch integration, so nil is the failing state and
+        not_empty is the right matcher.
+
+  CKV2_AWS_11:
+    aws_vpc:
+      reader: stock
+      enumerate: {resource: aws_vpcs, ids: vpc_ids}
+      assert:
+        resource: aws_flow_log
+        arg: vpc_id
+        property: exists?
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        aws_flow_log accepts vpc_id and filters DescribeFlowLogs on
+        resource-id, so "does this VPC have a flow log" is one call per VPC
+        with no second enumeration.  This is the template for every
+        reverse-lookup graph check that already fits the current schema.
+
+  CKV2_AWS_14:
+    aws_iam_group:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_iam_groups, ids: group_names}
+      assert:
+        resource: aws_iam_group
+        arg: group_name
+        property: users
+        satisfies: not_empty
+      needs: nothing
+      note: >-
+        GetGroup returns Users; the stock singular maps it to @users.  An
+        empty group is the deployed equivalent of Checkov's missing
+        aws_iam_group_membership.
+
+  CKV2_AWS_19:
+    aws_eip:
+      reader: stock
+      enumerate: {resource: aws_ec2_eips, ids: public_ips}
+      assert:
+        resource: aws_ec2_eip
+        arg: public_ip
+        property: association_id
+        satisfies: not_empty
+      needs: nothing
+      note: >-
+        ec2.Address carries AssociationId, InstanceId and NetworkInterfaceId.
+        AssociationId is set for every attachment form Checkov accepts
+        (instance, NAT gateway, Transfer server) and unset for a dangling
+        allocation, which is the billable failure this rule is about.  The
+        `vpc`/`domain` guard is unnecessary deployed: EC2-Classic is retired,
+        every address comes back Domain=vpc.
+
+  CKV2_AWS_22:
+    aws_iam_user:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_iam_users, ids: usernames}
+      assert:
+        resource: aws_iam_user
+        arg: user_name
+        property: has_console_password
+        satisfies: equals
+        value: false
+      needs: nothing
+      note: >-
+        Checkov looks for the ABSENCE of an aws_iam_user_login_profile.  The
+        deployed read is GetLoginProfile, which the stock resource already
+        wraps as has_console_password.  Strictly better than the IaC check --
+        it catches a console password added by hand.
+
+  CKV2_AWS_34:
+    aws_ssm_parameter:
+      reader: stock
+      enumerate: {resource: aws_ssm_parameters, ids: names}
+      assert:
+        resource: aws_ssm_parameter
+        arg: name
+        property: type
+        satisfies: equals
+        value: SecureString
+      needs: nothing
+      note: >-
+        ssm.ParameterMetadata.Type comes back on DescribeParameters (no
+        required args) and on the singular.  Not a relationship at all --
+        Checkov ships it as a graph policy but the definition is a single
+        attribute condition.
+
+  CKV2_AWS_42:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: ssl_certificate
+        satisfies: not_equals
+        value: cloudfront
+      needs: nothing
+      note: >-
+        cloudfront.ViewerCertificate has CertificateSource, one of
+        "cloudfront" | "iam" | "acm".  The stock singular stores it as
+        @ssl_certificate.  Checkov's "IAMCertificateId or ACMCertificateArn
+        exists" is exactly "CertificateSource != cloudfront".
+
+  CKV2_AWS_49:
+    aws_dms_endpoint:
+      reader: stock
+      enumerate: {resource: aws_dms_endpoints, ids: endpoint_arns}
+      assert:
+        resource: aws_dms_endpoint
+        arg: endpoint_arn
+        property: ssl_mode
+        satisfies: not_equals
+        value: none
+      needs: nothing
+      note: >-
+        DescribeEndpoints returns SslMode on every endpoint.  STRICTER than
+        Checkov: Checkov exempts s3/dynamodb/kinesis/kafka/etc engines that
+        have no SslMode concept, and the current schema has no `where` to
+        express that.  Those engines report SslMode="none" and will fail.
+        Flag as stronger; the exemption belongs in exempt_assets or in a
+        `where` guard.
+
+  CKV2_AWS_50:
+    aws_elasticache_replication_group:
+      reader: stock
+      enumerate: {resource: aws_elasticache_replication_groups, ids: ids}
+      assert:
+        resource: aws_elasticache_replication_group
+        arg: replication_group_id
+        property: auto_failover?
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        The stock singular defines auto_failover? over
+        DescribeReplicationGroups.AutomaticFailover, which deployed reports
+        "enabled"|"disabled"|"enabling"|"disabling" -- a richer answer than
+        Terraform's boolean, and it catches a group stuck mid-transition.
+
+  CKV2_AWS_52:
+    aws_opensearch_domain:
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: advanced_security_options.enabled
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        DescribeElasticsearchDomain -> DomainStatus.AdvancedSecurityOptions
+        .Enabled; the singular runs create_resource_methods over the whole
+        DomainStatus hash, so the dotted property works the same way
+        CKV_AWS_116's dead_letter_config.target_arn already does.
+        DescribeElasticsearchDomains (plural) requires DomainNames, so the
+        per-domain singular is the only route -- which is the shape we have.
+
+  CKV2_AWS_59:
+    aws_opensearch_domain:
+      reader: stock
+      enumerate: {resource: aws_elasticsearchservice_domains, ids: domain_names}
+      assert:
+        resource: aws_elasticsearchservice_domain
+        arg: domain_name
+        property: elasticsearch_cluster_config.dedicated_master_enabled
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        Same enumeration and the same create_resource_methods singular as
+        CKV2_AWS_52.  NAME DIVERGENCE -- Terraform calls the block
+        `cluster_config`, but the DescribeElasticsearchDomain response member is
+        ElasticsearchClusterConfig, so the deployed path is
+        elasticsearch_cluster_config.dedicated_master_enabled.  A mapping that
+        copies Checkov's `cluster_config.` prefix reads nil and, because nil is
+        filtered out for value comparisons, renders Not Applicable for every
+        domain -- a silent pass.  On the opensearch (not es) client the member
+        is ClusterConfig; inspec-aws only ships the elasticsearchservice
+        client, which still answers for OpenSearch domains.
+
+  CKV2_AWS_54:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: custom_origin_ssl_protocols
+        satisfies: excludes
+        value: SSLv3
+      needs: nothing
+      note: >-
+        The singular collects origin_ssl_protocols.items across every custom
+        origin into @custom_origin_ssl_protocols.  Do NOT use the resource's
+        own has_disallowed_custom_origin_ssl_protocols? -- its default
+        disallow list is SSLv3+TLSv1+TLSv1_2016, which is a different (and
+        stricter) rule than the one Checkov states.
+
+  CKV2_AWS_55:
+    aws_emr_cluster:
+      reader: stock
+      enumerate: {resource: aws_emr_clusters, ids: cluster_ids}
+      assert:
+        resource: aws_emr_cluster
+        arg: cluster_id
+        property: security_configuration_name
+        satisfies: not_empty
+      needs: nothing
+      note: >-
+        emr.Cluster.SecurityConfiguration confirmed in botocore; the stock
+        singular exposes it as security_configuration_name.  Terminated
+        clusters still list -- consider a `where` on status_state, otherwise
+        history fails the control.
+
+  CKV2_AWS_57:
+    aws_secretsmanager_secret:
+      reader: api
+      field: rotation_enabled
+      satisfies: equals
+      value: true
+      needs: nothing
+      note: >-
+        tools/api_specs.yml ALREADY describes aws_secretsmanager_secret with a
+        rotation_enabled field off ListSecrets (no required args).  Checkov's
+        connection to aws_secretsmanager_secret_rotation is literally this
+        boolean deployed.
+
+  CKV2_AWS_58:
+    aws_neptune_cluster:
+      reader: api
+      field: deletion_protection
+      satisfies: equals
+      value: true
+      needs: nothing
+      note: >-
+        api_specs.yml already has aws_neptune_cluster with deletion_protection
+        off DescribeDBClusters.  Pure attribute check -- no connection block in
+        the definition despite living in graph_checks/.
+
+  CKV2_AWS_60:
+    aws_db_instance:
+      reader: stock
+      enumerate: {resource: aws_rds_instances, ids: db_instance_identifiers}
+      assert:
+        resource: aws_rds_instance
+        arg: db_instance_identifier
+        property: copy_tags_to_snapshot
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        rds.DBInstance.CopyTagsToSnapshot; aws_rds_instance runs
+        create_resource_methods over the instance hash.  Checkov excludes
+        engines neptune/aurora/docdb -- DescribeDBInstances does not return
+        those as db instances anyway (they are cluster members), so the
+        divergence is benign here.
+
+  CKV2_AWS_63:
+    aws_networkfirewall_firewall:
+      reader: stock
+      enumerate: {resource: aws_network_firewall_firewalls, ids: firewall_names}
+      assert:
+        resource: aws_network_firewall_logging_configuration
+        arg: firewall_name
+        property: exists?
+        satisfies: equals
+        value: true
+      needs: nothing
+      note: >-
+        network-firewall ListFirewalls has no required args and
+        DescribeLoggingConfiguration takes firewall_name.  Same reverse-lookup
+        shape as CKV2_AWS_11.  Caveat -- verify at exec that the stock resource
+        reports exists?=false rather than raising when a firewall has no
+        logging configuration; that is the whole population this check is for.
+
+  CKV2_AWS_65:
+    aws_s3_bucket_ownership_controls:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: bucket_ownership_controls
+        satisfies: equals
+        value: BucketOwnerEnforced
+      needs: nothing
+      note: >-
+        GetBucketOwnershipControls -> OwnershipControls.Rules[0]
+        .ObjectOwnership; the stock resource returns exactly that string.
+        Note the stock reader indexes [0] unguarded -- a bucket that has never
+        had ownership controls set raises OwnershipControlsNotFoundError, which
+        catch_aws_errors turns into a failed resource, not a false pass.  Worth
+        confirming at exec.
+
+  CKV2_AWS_73:
+    aws_sqs_queue:
+      reader: stock
+      enumerate: {resource: aws_sqs_queues, ids: queue_urls}
+      assert:
+        resource: aws_sqs_queue
+        arg: queue_url
+        property: kms_master_key_id
+        satisfies: not_equals
+        value: alias/aws/sqs
+      needs: nothing
+      note: >-
+        API DIVERGENCE, read it before merging.  Checkov passes a queue with NO
+        kms_master_key_id (its first `or` branch is not_exists).  Deployed, an
+        unencrypted queue and an SSE-SQS queue both return no KmsMasterKeyId,
+        so not_equals also passes them -- faithful to Checkov but weaker than
+        the rule's title.  A queue encrypted with the AWS-managed key returns
+        the literal string "alias/aws/sqs", so the one case the rule names is
+        caught.
+
+  CKV_AWS_378:
+    aws_lb_target_group:
+      reader: stock
+      enumerate: {resource: aws_elasticloadbalancingv2_target_groups, ids: target_group_arns}
+      assert:
+        resource: aws_elasticloadbalancingv2_target_group
+        arg: target_group_arn
+        property: protocol
+        satisfies: not_equals
+        value: HTTP
+      needs: nothing
+      note: >-
+        elbv2 DescribeTargetGroups takes no required args (confirmed) and the
+        stock plural passes none.  STRICTER than Checkov, deliberately:
+        Checkov's second branch forgives an HTTP target group whose listener is
+        not HTTP, and listeners are unenumerable without a parent LB arn (see
+        CKV_AWS_103 below).  Cleartext to the target is the finding either way.
+
+  # --- one api_specs row away ----------------------------------------
+
+  CKV2_AWS_48:
+    aws_config_configuration_recorder:
+      reader: api
+      field: recording_group_include_global_resource_types
+      satisfies: equals
+      value: true
+      needs: api_specs row
+      api_spec:
+        aws_config_configuration_recorder:
+          client: Aws::ConfigService::Client
+          gem: aws-sdk-configservice
+          list: describe_configuration_recorders
+          collection: configuration_recorders
+          id: name
+          arn: arn
+          scope: regional
+          fields:
+            recording_group_all_supported: recording_group.all_supported
+            recording_group_include_global_resource_types: recording_group.include_global_resource_types
+            role_arn: role_arn
+      note: >-
+        config DescribeConfigurationRecorders has no required args (confirmed)
+        and RecordingGroup.includeGlobalResourceTypes is a plain boolean, so
+        dig_path handles it.  The stock aws_config_recorder is a SINGLETON
+        resource with no plural -- it does not fit `enumerate` -- which is why
+        the api reader is the right home.
+
+  CKV2_AWS_32:
+    aws_cloudfront_distribution:
+      reader: api
+      field: response_headers_policy_id
+      satisfies: not_empty
+      needs: api_specs row + collection-path support
+      api_spec:
+        aws_cloudfront_distribution:
+          client: Aws::CloudFront::Client
+          gem: aws-sdk-cloudfront
+          list: list_distributions
+          collection: distribution_list.items   # <-- NESTED, see caveat
+          id: id
+          arn: arn
+          scope: global
+          fields:
+            web_acl_id: web_acl_id
+            response_headers_policy_id: default_cache_behavior.response_headers_policy_id
+            enabled: enabled
+      note: >-
+        cloudfront.DistributionSummary confirmed to carry WebACLId and
+        DefaultCacheBehavior.ResponseHeadersPolicyId, so ListDistributions
+        answers this in one call.  CAVEAT -- aws_api_assets treats `collection`
+        as a single response attribute; CloudFront nests items under
+        distribution_list.  Either teach the spec reader a dotted collection
+        path (one `dig_path` call in AwsApiAssets#collect) or keep using the
+        stock plural and add the two columns there.  Same api_spec unblocks
+        CKV2_AWS_47 and CKV2_AWS_46's OAC half.
+
+  CKV2_AWS_71:
+    aws_acm_certificate:
+      reader: api
+      field: domain_name
+      satisfies: excludes
+      value: '*'
+      needs: api_specs field addition
+      api_spec_delta:
+        aws_acm_certificate:
+          fields:
+            domain_name: domain_name
+            subject_alternative_names: subject_alternative_name_summaries
+      note: >-
+        acm.CertificateSummary carries DomainName AND
+        SubjectAlternativeNameSummaries directly on ListCertificates -- no
+        DescribeCertificate needed.  api_specs already has
+        aws_acm_certificate with id: domain_name, so only the two field rows
+        are new.  `excludes` renders `should_not include '*'`, which on a
+        String is a substring test -- correct.  The SAN half needs an
+        any-element predicate the matcher table does not have; see shape_notes.
+
+  CKV2_AWS_15:
+    aws_autoscaling_group:
+      reader: api
+      field: health_check_type
+      satisfies: equals
+      value: ELB
+      needs: api_specs row + where-guard
+      api_spec:
+        aws_autoscaling_group:
+          client: Aws::AutoScaling::Client
+          gem: aws-sdk-autoscaling
+          list: describe_auto_scaling_groups
+          collection: auto_scaling_groups
+          id: auto_scaling_group_name
+          arn: auto_scaling_group_arn
+          scope: regional
+          fields:
+            health_check_type: health_check_type
+            load_balancer_names: load_balancer_names
+            target_group_arns: target_group_arns
+      note: >-
+        autoscaling.AutoScalingGroup carries LoadBalancerNames AND
+        TargetGroupARNs AND HealthCheckType on one row of a no-required-args
+        call, so Checkov's aws_autoscaling_attachment relationship is a field,
+        not a join.  The stock aws_auto_scaling_group exposes health_check_type
+        but NOT the two attachment lists, hence the api row.  Needs the
+        `where` guard (assert only when one of the two lists is non-empty) --
+        without it every standalone ASG fails.
+
+  CKV2_AWS_66:
+    aws_mwaa_environment:
+      reader: stock-shaped, new singular
+      enumerate: {resource: aws_mwaa_environments, ids: names}
+      assert:
+        resource: aws_mwaa_environment
+        arg: name
+        property: webserver_access_mode
+        satisfies: equals
+        value: PRIVATE_ONLY
+      needs: new reader (2 calls)
+      note: >-
+        mwaa ListEnvironments has no required args but returns NAMES ONLY;
+        WebserverAccessMode lives on GetEnvironment(Name).Environment
+        (confirmed).  That is exactly the enumerate-then-singular shape we
+        already have, so it needs a small singular resource, not a new control
+        shape.  api_specs cannot express it -- the spec reader makes one call
+        and extracts fields, it never follows up per row.
+
+  CKV2_AWS_37:
+    aws_codecommit_repository:
+      reader: stock-shaped, new singular
+      enumerate: {resource: aws_codecommit_repositories, ids: repository_names}
+      assert:
+        resource: aws_codecommit_repository_approval_rule_templates
+        arg: repository_name
+        property: approval_rule_template_names
+        satisfies: not_empty
+      needs: new reader (2 calls)
+      note: >-
+        codecommit ListRepositories takes no required args (confirmed);
+        ListAssociatedApprovalRuleTemplatesForRepository takes repositoryName.
+        Same two-call shape as CKV2_AWS_66.  Worth asking whether it earns the
+        build -- CodeCommit is closed to new AWS customers and SPARC's forge is
+        GitHub/GitLab, so this may be a permanently zero-asset control.
+
+  CKV2_AWS_38:
+    aws_route53_zone:
+      scope: global
+      reader: stock-shaped, new singular
+      enumerate: {resource: aws_route53_hosted_zones, ids: hosted_zone_ids}
+      assert:
+        resource: aws_route53_hosted_zone_dnssec
+        arg: hosted_zone_id
+        property: status.serve_signature
+        satisfies: equals
+        value: SIGNING
+      needs: new reader (2 calls) + where-guard
+      note: >-
+        route53 ListHostedZones has no required args; GetDNSSEC takes
+        HostedZoneId and returns Status.ServeSignature.  There is NO stock
+        hosted-zone resource in inspec-aws at all (only
+        aws_route53_record_sets, which needs a zone id) -- so this and
+        CKV2_AWS_39 both want the same new enumeration.  Needs a `where` on
+        Config.PrivateZone == false: GetDNSSEC on a private zone errors, and
+        Checkov exempts private zones too.
+
+  CKV2_AWS_41:
+    aws_instance:
+      field: iam_instance_profile
+      satisfies: not_empty
+      needs: one field on aws_compute_assets
+      note: >-
+        aws_compute_assets already enumerates aws_instance via
+        DescribeInstances; its row builder (libraries/aws_compute_assets.rb,
+        #instances) does not yet emit the profile.  One line --
+        `iam_instance_profile: i.iam_instance_profile&.arn` -- and this maps
+        through the existing custom-reader path with no new shape at all.
+        Deployed is strictly better than Checkov here: it sees a profile
+        detached after apply.
+
+  CKV2_AWS_2:
+    aws_ebs_volume:
+      reader: stock
+      enumerate: {resource: aws_ebs_volumes, ids: volume_ids}
+      assert:
+        resource: aws_ebs_volume
+        arg: volume_id
+        property: encrypted
+        satisfies: equals
+        value: true
+      needs: where-guard
+      stronger: true
+      note: >-
+        The relationship IS a field -- ec2.Volume.Attachments comes back on
+        DescribeVolumes and the stock plural already registers an `attachments`
+        column, so volume-to-instance needs no join.  What is missing is the
+        SCOPE: Checkov only demands encryption of ATTACHED volumes.  Without a
+        `where attachments not empty`, this asserts encryption on every volume
+        -- defensible, and stronger, but say so rather than let it read as a
+        faithful port.
+
+  CKV2_AWS_12:
+    aws_default_security_group:
+      reader: stock
+      enumerate: {resource: aws_security_groups, ids: group_ids}
+      assert:
+        resource: aws_security_group
+        arg: group_id
+        property: inbound_rules
+        satisfies: empty
+      needs: where-guard + second property
+      note: >-
+        Two gaps, both listed in shape_notes.  (1) `where group_name ==
+        'default'` -- otherwise this asserts every SG has no ingress, which is
+        absurd.  (2) Checkov requires ingress AND egress empty; the schema
+        asserts one property.  A freshly created VPC's default SG always has
+        one self-referencing ingress rule and one allow-all egress rule, so
+        without both halves the control passes VPCs that are in fact wide open
+        outbound.
+
+  CKV2_AWS_46:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: s3_origin_access
+        satisfies: not_empty
+      needs: OAC field (partial today)
+      note: >-
+        PARTIAL, and the gap is the modern case.  The stock singular walks
+        config.origins.items and collects s3_origin_config.origin_access_identity
+        into @s3_origin_access -- that is Checkov's OAI branch.  It never reads
+        cloudfront.Origin.OriginAccessControlId, which botocore confirms is on
+        the same Origin shape and is what AWS now recommends.  As written this
+        FAILS every OAC-secured distribution.  Either add the OAC field to the
+        api_spec proposed under CKV2_AWS_32, or hold the check.
+
+  CKV2_AWS_72:
+    aws_cloudfront_distribution:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_cloudfront_distributions, ids: distribution_ids}
+      assert:
+        resource: aws_cloudfront_distribution
+        arg: distribution_id
+        property: custom_origin_protocol_policies
+        satisfies: not_in_list
+        value: [http-only, match-viewer]
+      needs: set-vs-set matcher
+      note: >-
+        @custom_origin_protocol_policies is an ARRAY (one entry per custom
+        origin) and `not_in_list` compares a scalar against a list -- wrong
+        direction.  What is needed is "no element of the array is in this list".
+        See shape_notes: this is the same any-element predicate CKV2_AWS_71's
+        SAN half wants.  Checkov's mediastore/mediapackage/elb domain-name
+        exemptions are not expressible either and would make this stronger.
+
+  # --- needs a new predicate on an existing reader --------------------
+
+  CKV2_AWS_35:
+    aws_route_table:
+      reader: stock
+      enumerate: {resource: aws_route_tables, ids: route_table_ids}
+      assert:
+        resource: aws_route_table
+        arg: route_table_id
+        property: default_route_via_instance?
+        satisfies: equals
+        value: false
+      needs: new predicate on aws_route_table
+      note: >-
+        READER DIVERGENCE worth knowing: aws_route_tables FLATTENS routes into
+        parallel per-column arrays (destination_cidr_block: [...],
+        instance_id: [...]), so the pairing between a route's CIDR and its
+        target is LOST in the plural -- a table with a 0.0.0.0/0-via-NAT route
+        and a 10.0.0.0/8-via-instance route looks identical to the failing
+        case.  The SINGULAR aws_route_table runs create_resource_methods over
+        the raw hash, so `routes` keeps the pairing.  The predicate is three
+        lines over `routes`; do NOT build this off the plural columns.
+
+  CKV2_AWS_44:
+    aws_route_table:
+      reader: stock
+      enumerate: {resource: aws_route_tables, ids: route_table_ids}
+      assert:
+        resource: aws_route_table
+        arg: route_table_id
+        property: permissive_peering_route?
+        satisfies: equals
+        value: false
+      needs: new predicate on aws_route_table
+      note: >-
+        Same flattening trap as CKV2_AWS_35, same fix.  The predicate is "any
+        route with vpc_peering_connection_id set whose destination_cidr_block
+        is 0.0.0.0/0 or destination_ipv_6_cidr_block is ::/0".
+
+  CKV2_AWS_62:
+    aws_s3_bucket:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: has_event_notifications?
+        satisfies: equals
+        value: true
+      needs: new predicate on aws_s3_bucket
+      note: >-
+        GetBucketNotificationConfiguration answers this in one call per bucket
+        (TopicConfigurations / QueueConfigurations / LambdaFunctionConfigurations
+        / EventBridgeConfiguration all non-empty-or-absent).  No stock property
+        exposes it.  Note the API returns 200 with an empty body for "no
+        notifications" -- an absent key, not an error -- so the predicate must
+        treat empty as false rather than nil-skip.
+
+  CKV_AWS_144:
+    aws_s3_bucket:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: has_enabled_replication_rule?
+        satisfies: equals
+        value: true
+      needs: new predicate on aws_s3_bucket
+      note: >-
+        GetBucketReplication -> ReplicationConfiguration.Rules[].Status ==
+        "Enabled".  Raises ReplicationConfigurationNotFoundError when unset, so
+        the predicate must rescue that to false -- an unrescued raise here
+        turns "no replication" (the finding) into an errored control.
+
+  CKV_AWS_145:
+    aws_s3_bucket:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: default_sse_algorithm
+        satisfies: equals
+        value: aws:kms
+      needs: new predicate on aws_s3_bucket
+      note: >-
+        The stock has_default_encryption_enabled? is a BOOLEAN -- it cannot
+        distinguish AES256 from aws:kms, which is the entire point of this
+        rule.  GetBucketEncryption ->
+        ServerSideEncryptionConfiguration.Rules[0]
+        .ApplyServerSideEncryptionByDefault.SSEAlgorithm gives the string.
+        Since 2023 every bucket returns AES256 by default, so this control has
+        a real failing population -- do not assume it is vacuous.
+
+  CKV_AWS_57:
+    aws_s3_bucket:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: public_write_acl?
+        satisfies: equals
+        value: false
+      needs: new predicate on aws_s3_bucket
+      note: >-
+        DO NOT reuse the `public?` property that CKV_AWS_20 was mapped to.
+        `public?` wraps GetBucketPolicyStatus, which reports on the BUCKET
+        POLICY, not the ACL -- CKV_AWS_20's existing mapping is a proxy, and
+        copying it here would ship two controls asserting the same non-ACL
+        fact.  The honest read is GetBucketAcl grants (already exposed as
+        `bucket_acl`): fail when a grant's Grantee.URI is the AllUsers group
+        and Permission is WRITE / WRITE_ACP / FULL_CONTROL.
+
+  CKV2_AWS_43:
+    aws_s3_bucket_acl:
+      scope: global
+      reader: stock
+      enumerate: {resource: aws_s3_buckets, ids: bucket_names}
+      assert:
+        resource: aws_s3_bucket
+        arg: bucket_name
+        property: authenticated_users_acl?
+        satisfies: equals
+        value: false
+      needs: new predicate on aws_s3_bucket
+      note: >-
+        Same `bucket_acl` grants list, different grantee URI
+        (.../groups/global/AuthenticatedUsers).  Build one grant-inspection
+        helper and both this and CKV_AWS_57 fall out of it.
+
+
+# =====================================================================
+# B.  join -- 19 checks.  None of these is expressible today.
+# =====================================================================
+joins:
+
+  # --- recurring family 1: "is this asset covered by AWS Backup"
+  #     one right side (backup ListProtectedResources, no required args)
+  #     serves all three.  Design it once.
+
+  CKV2_AWS_8:
+    shape: join
+    left:
+      type: "aws_rds_cluster"
+      enumerate: "aws_rds_clusters (stock)"
+      key: "arn"
+    right:
+      type: "aws_backup_protected_resource"
+      enumerate: "api_spec: backup.list_protected_resources -> results"
+      key: "resource_arn"
+    assert: every_left_referenced
+    note: >-
+      A failure means an Aurora/RDS cluster that AWS Backup has never taken a
+      recovery point for.  DIVERGENCE, state it in the control: Checkov asserts
+      a backup_selection EXISTS in the plan; ListProtectedResources reports
+      what has actually been BACKED UP (it carries LastBackupTime).  A cluster
+      selected by a plan that has not yet run reports absent.  That is arguably
+      the better question, but it is a different one.
+      GetBackupSelection/ListBackupSelections would match Checkov exactly and
+      both require a BackupPlanId, so they are parent/child work.
+
+  CKV2_AWS_9:
+    shape: join
+    left:
+      type: "aws_ebs_volume"
+      enumerate: "aws_ebs_volumes (stock)"
+      key: "volume_ids"
+    right:
+      type: "aws_backup_protected_resource"
+      enumerate: "api_spec: backup.list_protected_resources -> results"
+      key: "resource_arn"
+    assert: every_left_referenced
+    note: >-
+      KEY MISMATCH the join shape must handle.  The left key is a volume ID
+      (vol-0abc...); the right key is an ARN
+      (arn:<partition>:ec2:<region>:<account>:volume/vol-0abc...).
+      DescribeVolumes does NOT return a volume ARN -- confirmed in botocore,
+      ec2.Volume has no Arn member.  So the join needs either a suffix match or
+      an ARN constructed from partition+region+account, which
+      aws_compute_assets already does (#arn_for).  Do not assume both sides key
+      the same way.
+
+  CKV2_AWS_18:
+    shape: join
+    left:
+      type: "aws_efs_file_system"
+      enumerate: "aws_efs_file_systems (stock)"
+      key: "file_system_arn"
+    right:
+      type: "aws_backup_protected_resource"
+      enumerate: "api_spec: backup.list_protected_resources -> results"
+      key: "resource_arn"
+    assert: every_left_referenced
+    note: >-
+      Cleanest of the three: DescribeFileSystems returns FileSystemArn, so both
+      sides key on an ARN directly.  Note the stock aws_efs_file_systems
+      registers file_system_ids but NOT the ARN column, so this wants the
+      api_specs aws_efs_file_system row (which already exists and has
+      arn: file_system_arn).
+
+  # --- recurring family 2: "is this thing associated with a WAFv2 WebACL"
+  #     right side is wafv2; ListWebACLs/ListLoggingConfigurations take a
+  #     Scope, and ListResourcesForWebACL takes a WebACLArn.
+
+  CKV2_AWS_28:
+    shape: join
+    left:
+      type: "aws_lb"
+      enumerate: "api_spec: elbv2.describe_load_balancers -> load_balancers (where type=application and scheme=internet-facing)"
+      key: "load_balancer_arn"
+    right:
+      type: "aws_wafv2_web_acl_association"
+      enumerate: "wafv2.list_web_acls(Scope=REGIONAL) then list_resources_for_web_acl(WebACLArn) per ACL"
+      key: "resource_arns"
+    assert: every_left_referenced
+    note: >-
+      A failure means an internet-facing ALB with no WebACL in front of it.
+      elbv2 DescribeLoadBalancers takes no required args and carries Scheme and
+      Type on the summary, so the left side is a clean enumeration -- but there
+      is NO stock aws_elbv2_load_balancers resource in inspec-aws (only
+      listener / listener_rule / listener_certificate / target_group), so this
+      needs an api_specs row.  Alternative right side:
+      GetWebACLForResource(ResourceArn) is one call per ALB and fits the
+      EXISTING per-id shape -- worth preferring if the ALB count is small,
+      because it needs no join at all.
+
+  CKV2_AWS_33:
+    shape: join
+    left:
+      type: "aws_appsync_graphql_api"
+      enumerate: "api_spec: appsync.list_graphql_apis -> graphql_apis"
+      key: "arn"
+    right:
+      type: "aws_wafv2_web_acl_association"
+      enumerate: "wafv2 list_web_acls(Scope=REGIONAL) + list_resources_for_web_acl"
+      key: "resource_arns"
+    assert: every_left_referenced
+    note: >-
+      appsync ListGraphqlApis takes no required args (confirmed).  Same right
+      side as CKV2_AWS_28, and the same GetWebACLForResource shortcut applies.
+
+  CKV2_AWS_31:
+    shape: join
+    left:
+      type: "aws_wafv2_web_acl"
+      enumerate: "wafv2.list_web_acls(Scope=REGIONAL) + (Scope=CLOUDFRONT, us-east-1 only)"
+      key: "arn"
+    right:
+      type: "aws_wafv2_web_acl_logging_configuration"
+      enumerate: "wafv2.list_logging_configurations(Scope=...)"
+      key: "resource_arn"
+    assert: every_left_referenced
+    note: >-
+      The purest join in the set -- two same-service list calls, matched on the
+      WebACL ARN, no key translation.  Use it as the reference implementation.
+      SCOPE CAVEAT: both calls require Scope, which is a fixed enum
+      (REGIONAL | CLOUDFRONT), not a parent resource id -- so this is NOT
+      parent/child work; the enumerator just calls twice.  CLOUDFRONT scope is
+      only servable from us-east-1.
+
+  CKV2_AWS_47:
+    shape: join
+    left:
+      type: "aws_cloudfront_distribution"
+      enumerate: "cloudfront.list_distributions (where web_acl_id set)"
+      key: "web_acl_id"
+    right:
+      type: "aws_wafv2_web_acl"
+      enumerate: "wafv2.list_web_acls(Scope=CLOUDFRONT) then get_web_acl(Name,Scope,Id) per ACL"
+      key: "rules[].statement.managed_rule_group_statement.name"
+    assert: left_key_in_right_keys
+    note: >-
+      THREE hops, and the assertion is on the RIGHT side's contents, not on
+      whether the link exists -- the join shape must support "follow the
+      reference, then assert about the referent".  The referent's rule names
+      must include both AWSManagedRulesAnonymousIpList and
+      AWSManagedRulesKnownBadInputsRuleSet.  ListWebACLs returns only
+      Name/Id/ARN; the rules need GetWebACL(Name, Scope, Id) -- all three from
+      the summary, so no parent id is needed.  DistributionSummary.WebACLId is
+      the ACL ARN for WAFv2 and a WAF-Classic id for the old service; a
+      non-ARN value means WAF Classic and this rule cannot apply.
+
+  CKV2_AWS_76:
+    shape: join
+    left:
+      type: "aws_lb"
+      enumerate: "api_spec: elbv2.describe_load_balancers (where scheme=internet-facing)"
+      key: "load_balancer_arn"
+    right:
+      type: "aws_wafv2_web_acl"
+      enumerate: "wafv2.get_web_acl_for_resource(ResourceArn) then rules[]"
+      key: "rules[].statement.managed_rule_group_statement.name"
+    assert: left_key_in_right_keys
+    note: >-
+      Same "follow then assert about the referent" as CKV2_AWS_47.
+      GetWebACLForResource returns the FULL WebACL including Rules, so for ALBs
+      this is one call per LB and no ListWebACLs walk -- cheaper than the
+      CloudFront path.  Checkov passes an ALB with NO WebACL here (its second
+      branch); CKV2_AWS_28 is the check that catches that, so keep the two
+      populations distinct or you double-count.
+
+  CKV2_AWS_78:
+    shape: join
+    left:
+      type: "aws_appsync_graphql_api"
+      enumerate: "api_spec: appsync.list_graphql_apis"
+      key: "arn"
+    right:
+      type: "aws_wafv2_web_acl"
+      enumerate: "wafv2.get_web_acl_for_resource(ResourceArn) then rules[]"
+      key: "rules[].statement.managed_rule_group_statement.name"
+    assert: left_key_in_right_keys
+    note: Identical to CKV2_AWS_76 with an AppSync left side.
+
+  # --- recurring family 3: "is this DB's parameter group configured"
+  #     left = db instance/cluster, right = parameter values.
+
+  CKV2_AWS_30:
+    shape: join
+    left:
+      type: "aws_db_instance"
+      enumerate: "aws_rds_instances (stock, where engine=postgres)"
+      key: "db_parameter_groups[].db_parameter_group_name"
+    right:
+      type: "aws_db_parameter_group"
+      enumerate: "rds.describe_db_parameter_groups then describe_db_parameters(DBParameterGroupName) per group"
+      key: "parameters[].parameter_name"
+    assert: left_key_in_right_keys
+    note: >-
+      Assert the referenced group's parameters include log_statement and
+      log_min_duration_statement (Checkov only checks the names are PRESENT,
+      not their values -- deployed, DescribeDBParameters returns every engine
+      parameter with a default, so a name-presence test passes vacuously.
+      The honest deployed check is on the VALUE: log_statement != 'none'.
+      Say so; a faithful port here is a control that cannot fail).
+      DescribeDBParameterGroups has no required args; DescribeDBParameters
+      takes the group NAME, which comes from the left row -- so this is a
+      join, not parent/child.  No stock resource exposes parameter VALUES:
+      aws_db_parameter_group only carries name/family/arn.
+
+  CKV2_AWS_27:
+    shape: join
+    left:
+      type: "aws_rds_cluster"
+      enumerate: "aws_rds_clusters (stock, where engine=aurora-postgresql)"
+      key: "db_cluster_parameter_group"
+    right:
+      type: "aws_rds_cluster_parameter_group"
+      enumerate: "rds.describe_db_cluster_parameter_groups then describe_db_cluster_parameters(DBClusterParameterGroupName)"
+      key: "parameters[].parameter_name"
+    assert: left_key_in_right_keys
+    note: >-
+      Cluster-level twin of CKV2_AWS_30, same vacuity warning.  The stock
+      aws_rds_clusters plural does NOT register the parameter-group column
+      (it has cluster_identifier / engine / arn / storage_encrypted only), so
+      the left side needs either a column addition or the singular
+      aws_rds_cluster, which runs create_resource_methods over the whole
+      cluster hash.
+
+  CKV2_AWS_69:
+    shape: join
+    left:
+      type: "aws_db_instance"
+      enumerate: "aws_rds_instances (stock)"
+      key: "db_parameter_groups[].db_parameter_group_name"
+    right:
+      type: "aws_db_parameter_group"
+      enumerate: "rds.describe_db_parameter_groups + describe_db_parameters"
+      key: "parameters[?name==rds.force_ssl].parameter_value"
+    assert: left_key_in_right_keys
+    note: >-
+      Family-conditional: rds.force_ssl==1 for postgres/sqlserver,
+      require_secure_transport==1 for mysql/mariadb, db2comm==SSL for db2-ae.
+      The family is on the RIGHT row (DBParameterGroup.DBParameterGroupFamily),
+      so the join needs a per-family branch on the matched right row.  Unlike
+      CKV2_AWS_27/30 this one is NOT vacuous -- the parameter values are real
+      and default to off.  Highest-value member of this family.
+
+  # --- one-offs
+
+  CKV2_AWS_5:
+    shape: join
+    left:
+      type: "aws_security_group"
+      enumerate: "aws_security_groups (stock)"
+      key: "group_id"
+    right:
+      type: "aws_network_interface"
+      enumerate: "aws_ec2_network_interfaces (stock)"
+      key: "groups[].group_id"
+    assert: every_left_referenced
+    note: >-
+      Checkov lists 68 possible attachment resource types.  Deployed, nearly
+      all of them collapse to ONE fact: ec2.NetworkInterface.Groups.  RDS,
+      ElastiCache, Lambda-in-VPC, ECS, EKS, EFS mount targets and ALBs all
+      materialise an ENI carrying the SG.  Both sides are stock resources with
+      no required args and the stock plural already registers a `groups`
+      column, so this is the cheapest high-value join in the set.
+      KNOWN FALSE POSITIVES to state in the control: (a) an SG referenced only
+      as a SOURCE in another SG's rules has no ENI and will fail -- Checkov
+      passes it too, so this is faithful but noisy; (b) VPC endpoints and
+      Client VPN endpoints do create ENIs, so those are fine.
+
+  CKV2_AWS_7:
+    shape: join
+    left:
+      type: "aws_emr_cluster"
+      enumerate: "aws_emr_clusters (stock) then aws_emr_cluster(cluster_id).ec2_instance_attributes"
+      key: "emr_managed_master_security_group + emr_managed_slave_security_group + service_access_security_group + additional_master_security_groups[] + additional_slave_security_groups[]"
+    right:
+      type: "aws_security_group"
+      enumerate: "aws_security_groups (stock)"
+      key: "group_id"
+    assert: left_key_in_right_keys
+    note: >-
+      "Follow then assert about the referent" again: match the cluster's SG ids
+      to SGs, then assert the matched SG's ingress carries no 0.0.0.0/0.
+      emr.Ec2InstanceAttributes confirmed to carry all five SG members.
+      Not expressible as a per-id lookup because the assertion lives on the
+      right-hand row, and one cluster fans out to up to five SGs.
+
+  CKV2_AWS_16:
+    shape: join
+    left:
+      type: "aws_dynamodb_table"
+      enumerate: "aws_dynamodb_tables (stock, where billing_mode != PAY_PER_REQUEST)"
+      key: "table_name"
+    right:
+      type: "aws_appautoscaling_target"
+      enumerate: "application-autoscaling.describe_scalable_targets(ServiceNamespace='dynamodb')"
+      key: "resource_id (format: table/<name>)"
+    assert: every_left_referenced
+    note: >-
+      KEY TRANSLATION: the right side keys on the string "table/<name>", not on
+      the bare name.  DescribeScalableTargets requires ServiceNamespace, but
+      like wafv2's Scope that is a fixed enum, not a parent id -- one call
+      covers the account.  Checkov also wants an appautoscaling_policy attached
+      to the target; DescribeScalingPolicies(ServiceNamespace='dynamodb') is a
+      second right side keyed the same way.  The where-guard matters: an
+      on-demand table has nothing to scale and must be Not Applicable, not
+      Failed.
+
+  CKV2_AWS_21:
+    shape: join
+    left:
+      type: "aws_iam_user"
+      enumerate: "aws_iam_users (stock)"
+      key: "username"
+    right:
+      type: "aws_iam_group"
+      enumerate: "aws_iam_groups (stock)"
+      key: "users[]"
+    assert: every_left_referenced
+    note: >-
+      ListGroupsForUser requires UserName, so the obvious direction is
+      parent/child -- but the REVERSE reads cleanly: aws_iam_groups already
+      registers a `users` column, so a group-side enumeration answers it.
+      BETTER OPTION worth considering for the whole IAM family: iam
+      GetAccountAuthorizationDetails takes NO required arguments and returns
+      UserDetailList (each with GroupList AND AttachedManagedPolicies),
+      GroupDetailList, RoleDetailList and every policy DOCUMENT in one paginated
+      call.  That single call collapses CKV2_AWS_14, CKV2_AWS_21, CKV2_AWS_40
+      and CKV2_AWS_56 into one enumeration.
+
+  CKV2_AWS_45:
+    shape: join
+    left:
+      type: "aws_config_configuration_recorder"
+      enumerate: "config.describe_configuration_recorders -> configuration_recorders"
+      key: "name"
+    right:
+      type: "aws_config_configuration_recorder_status"
+      enumerate: "config.describe_configuration_recorder_status -> configuration_recorders_status"
+      key: "name"
+    assert: left_key_in_right_keys
+    note: >-
+      Both calls take no required args (confirmed).  Match on `name`, then
+      assert the LEFT row's recording_group.all_supported is true AND the RIGHT
+      row's recording is true.  A two-sided assertion, which the join shape must
+      support -- it is not enough to prove the link exists.  Note the stock
+      aws_config_recorder singular ALREADY makes both calls internally
+      (recording_all_resource_types + recording?), so if the schema ever grows
+      a two-property AND, this drops out of `joins` into `single_field`.
+
+  CKV2_AWS_39:
+    shape: join
+    left:
+      type: "aws_route53_zone"
+      enumerate: "route53.list_hosted_zones -> hosted_zones (where config.private_zone == false)"
+      key: "id"
+    right:
+      type: "aws_route53_query_log"
+      enumerate: "route53.list_query_logging_configs -> query_logging_configs"
+      key: "hosted_zone_id"
+    assert: every_left_referenced
+    note: >-
+      Both no-required-args, both global.  KEY FORMAT: ListHostedZones returns
+      Id as "/hostedzone/Z123..." while QueryLoggingConfig.HostedZoneId is the
+      bare "Z123..." -- normalise or the join silently matches nothing and
+      every zone reads as unlogged.  This is the failure mode to guard against:
+      a broken join looks exactly like a total finding.
+
+  CKV2_AWS_56:
+    shape: join
+    left:
+      type: "aws_iam_policy_attachment"
+      enumerate: "iam.list_entities_for_policy(PolicyArn='arn:aws:iam::aws:policy/IAMFullAccess')"
+      key: "policy_users[] + policy_groups[] + policy_roles[]"
+    right:
+      type: "none"
+      enumerate: "none"
+      key: "none"
+    assert: no_left_referenced
+    note: >-
+      Degenerate but it belongs here because it is a relationship question, not
+      an attribute one.  ListEntitiesForPolicy requires a PolicyArn, but that
+      arn is a CONSTANT (the AWS-managed IAMFullAccess policy), not a discovered
+      parent -- so this is one call and the assertion is "the result is empty".
+      GetAccountAuthorizationDetails is the alternative if you would rather have
+      one IAM enumeration serving four checks.  In a GovCloud/China partition
+      the arn prefix differs; take the partition from the existing
+      aws_partition input.
+
+
+# =====================================================================
+# C.  unreachable -- 15 checks
+# =====================================================================
+unreachable:
+
+  CKV2_AWS_4:
+    reason_class: parent_child
+    reason: >-
+      Needs apigateway method settings per stage.  apigateway GetStages
+      requires restApiId and GetStage requires restApiId + stageName; the stock
+      aws_api_gateway_stages declares validate_parameters(required:
+      %i(rest_api_id)).  So the enumeration itself needs a parent id -- this is
+      the parent/child worker's tranche, not a graph shape.  Once a
+      restapi->stage walk exists, the assertion (methodSettings['*/*']
+      .loggingLevel in ERROR|INFO and .metricsEnabled) is a plain field.
+
+  CKV2_AWS_29:
+    reason_class: parent_child
+    reason: >-
+      Same stage enumeration as CKV2_AWS_4, plus a WAF association read.
+      Blocked on the parent/child walk first.
+
+  CKV2_AWS_51:
+    reason_class: parent_child
+    reason: >-
+      clientCertificateId lives on the stage; stage enumeration requires
+      restApiId.  Parent/child tranche.  (apigatewayv2 GetApis takes no
+      required args but GetStages there also requires ApiId.)
+
+  CKV2_AWS_53:
+    reason_class: parent_child
+    reason: >-
+      requestValidatorId lives on a METHOD.  aws_api_gateway_methods requires
+      rest_api_id + resource_id + http_method -- a three-level walk
+      (GetRestApis -> GetResources -> GetMethod).  Deepest parent/child chain
+      in the set.
+
+  CKV2_AWS_77:
+    reason_class: parent_child
+    reason: >-
+      Needs the API Gateway stage ARN to ask wafv2 about it, and stages are
+      parent/child.  Blocked on the same walk as CKV2_AWS_4/29/51.
+
+  CKV2_AWS_20:
+    reason_class: parent_child
+    reason: >-
+      Listener enumeration.  API DIVERGENCE WORTH RECORDING: botocore's
+      elbv2.DescribeListenersInput lists NO required members, so an automated
+      "does this operation take required arguments" test passes it -- but the
+      service rejects a call carrying neither LoadBalancerArn nor ListenerArns,
+      and inspec-aws's aws_elasticloadbalancingv2_listeners declares
+      validate_parameters(required: %i(load_balancer_arn)) for exactly that
+      reason.  Any tooling that trusts the botocore `required` list to decide
+      enumerability will get this one wrong.
+
+  CKV_AWS_103:
+    reason_class: parent_child
+    reason: >-
+      Listener ssl_policy.  Same DescribeListeners trap as CKV2_AWS_20.
+      Once a load-balancer -> listener walk exists this is a plain
+      `ssl_policy starts_with ELBSecurityPolicy-TLS-1-2|FS-1-2|TLS13` field
+      assertion, and elbv2 DescribeLoadBalancers (no required args) gives the
+      parent side for free.
+
+  CKV2_AWS_74:
+    reason_class: parent_child
+    reason: >-
+      Listener ssl_policy against a deny-list of weak policies.  Same walk as
+      CKV_AWS_103; the two should be built together off one listener
+      enumeration.
+
+  CKV2_AWS_23:
+    reason_class: parent_child
+    reason: >-
+      route53 ListResourceRecordSets requires HostedZoneId, and the stock
+      aws_route53_record_sets declares it required.  Also note that even with
+      the walk, Checkov's "attached resource" is a Terraform reference; the
+      deployed equivalent is AliasTarget.DNSName pointing at a live ELB/S3/CF
+      endpoint, which is a reachability test, not a field read.
+
+  CKV2_AWS_75:
+    reason_class: parent_child
+    reason: >-
+      lambda ListFunctionUrlConfigs requires FunctionName (confirmed), and
+      ListFunctions' FunctionConfiguration carries no URL information at all.
+      So answering "does this function have a URL, and is its CORS open" is one
+      call per function -- a parent/child walk over aws_lambdas.  The assertion
+      itself (Cors.AllowOrigins includes "*") is then trivial.
+
+  CKV2_AWS_36:
+    reason_class: hcl_only
+    reason: >-
+      The relationship is `data.http` reading an aws_ssm_parameter -- a
+      Terraform data source wired to a plaintext parameter at PLAN time.
+      Nothing is deployed: there is no AWS resource representing "a terraform
+      run fetched this over HTTP".  No API can reconstruct it.  This one is
+      genuinely IaC-only and should be recorded as such rather than left
+      looking unmapped.
+
+  CKV2_AWS_64:
+    reason_class: no_signal
+    reason: >-
+      Every KMS key has a key policy -- AWS attaches a default one at creation
+      and a key cannot exist without it.  kms GetKeyPolicy(KeyId) always
+      returns a document, so the deployed control would pass 100% of the
+      population by construction.  Checkov's version is meaningful (a Terraform
+      key with no `policy` argument inherits an implicit default the author
+      never reviewed); the deployed version is vacuous.  Mapping it would ship
+      a control that cannot fail, which is the silence-as-success pattern.
+      If the intent is "the policy is not overly broad", that is a different
+      rule and needs a policy-document evaluator.
+
+  CKV2_AWS_3:
+    reason_class: no_api
+    reason: >-
+      The detector half (enable == true) is already CKV_AWS_238's territory.
+      The organization half -- auto_enable / auto_enable_organization_members
+      -- is only readable via guardduty DescribeOrganizationConfiguration,
+      which requires a DetectorId AND is only servable to the GuardDuty
+      DELEGATED ADMINISTRATOR account.  From a standalone or member account it
+      errors, so there is no deployed value to assert.  Separately, memory
+      records that aws_guardduty_detectors yields non-String ids at exec, which
+      broke CKV_AWS_238 -- fix that before building anything on this
+      enumeration.
+
+  CKV2_AWS_40:
+    reason_class: policy_document
+    reason: >-
+      Not a relationship at all: the definition is three jsonpath_not_equals
+      conditions over a policy DOCUMENT
+      (policy.Statement[?(@.Effect==Allow)].Action[*] != "iam:*" / "*").
+      Reachable -- iam GetAccountAuthorizationDetails (no required args)
+      returns every inline and managed policy document in the account -- but
+      what it needs is a JSON policy evaluator, which
+      libraries/aws_api_assets.rb explicitly declares out of scope ("Anything
+      needing real logic -- a policy document, a relationship between two
+      resources -- is not expressible here").  Belongs with an IAM
+      policy-document tranche, not the join shape.
+
+  CKV2_AWS_68:
+    reason_class: policy_document
+    reason: >-
+      Three hops plus a policy evaluator: ListNotebookInstances (no required
+      args, but the summary carries NO RoleArn -- confirmed in botocore
+      sagemaker.NotebookInstanceSummary) -> DescribeNotebookInstance(Name) for
+      RoleArn -> the role's inline + attached policies -> assert no Allow
+      statement with Action "*".  The last step is the same evaluator
+      CKV2_AWS_40 needs.  Build that first; this becomes a thin consumer of it.
+
+
+# =====================================================================
+# What the join control shape must support that the schema cannot
+# =====================================================================
+shape_notes:
+
+  what_the_current_schema_is: >-
+    Two readers, both one-enumeration-one-assertion.
+      reader: stock -> `found = <plural>(aws_region: r).<ids>` at control scope,
+        then per id `describe <singular>(<arg>: id, aws_region: r) do its('<prop>')
+        { <matcher> } end`.
+      reader: api   -> aws_api_assets enumerates one api_specs row and asserts one
+        flat `field`.
+    Matchers available (render_controls.matcher_for): equals, not_equals,
+    in_list, not_in_list, empty, not_empty, greater_than, at_least, at_most,
+    less_than, includes, excludes, matches.
+
+  finding_1_the_existing_shape_is_already_a_one_hop_join: >-
+    `enumerate.resource` and `assert.resource` are INDEPENDENT in render_stock --
+    nothing requires the singular to be the plural's own singular.  So
+    "enumerate X, then look up Y keyed by X's id" is expressible TODAY, and that
+    covers a large share of the graph checks: CKV2_AWS_11 (vpc -> flow log),
+    CKV2_AWS_63 (firewall -> logging config), and the same trick for
+    CKV2_AWS_37/38/66 once their singulars exist.  Do not build a join shape for
+    these.  What distinguishes a real join is that the right side cannot be
+    fetched BY the left side's id -- it must be enumerated wholesale and matched.
+
+  gap_1_two_enumerations_and_a_key_match: >-
+    The core new thing.  The control needs to evaluate BOTH enumerations at
+    control scope, build the right side's key set once, and then iterate the
+    left.  Three assertion forms appear in the 19 joins:
+      every_left_referenced   every left key appears in the right key set
+                              (backup coverage, SG attachment, WAF association,
+                              query logging, users-in-groups)   -- 11 of 19
+      no_left_referenced      the right side must be empty (IAMFullAccess)  -- 1
+      left_key_in_right_keys  follow the reference, then assert about the
+                              MATCHED RIGHT ROW's contents, not about the link
+                              (WAF rule names, SG ingress cidrs, DB parameter
+                              values, recorder status)                     -- 7
+    The third form is the one that will be under-designed if you only think
+    about "is X attached".  Seven of nineteen need it.
+
+  gap_2_keys_do_not_match_across_sides: >-
+    Four of the joins need key normalisation and each failure mode is silent:
+      EBS volume id vs backup ARN -- ec2.Volume has NO Arn member, the ARN must
+        be built from partition/region/account (aws_compute_assets#arn_for
+        already does this).
+      Route53 "/hostedzone/Z123" vs QueryLoggingConfig "Z123".
+      DynamoDB "my-table" vs scalable target "table/my-table".
+      CloudFront WebACLId is a WAFv2 ARN or a WAF-Classic id depending on age.
+    A join whose keys never match reports every left asset as unreferenced --
+    which renders as a 100% finding, not as an error.  The shape needs a
+    guard analogous to the existing `unusable` blank-id check: if ZERO left keys
+    matched and both sides were non-empty, that is an enumeration bug and must
+    surface as a failed "join produced matches" example, not as 40 findings.
+
+  gap_3_a_where_guard_on_the_enumerated_population: >-
+    Independent of joins and needed by 9 checks:
+      CKV2_AWS_2  (only ATTACHED volumes)        CKV2_AWS_12 (only the DEFAULT sg)
+      CKV2_AWS_15 (only ASGs behind an LB)       CKV2_AWS_16 (only PROVISIONED tables)
+      CKV2_AWS_27/30 (only postgres engines)     CKV2_AWS_38/39 (only PUBLIC zones)
+      CKV2_AWS_49 (only ssl-capable dms engines)
+    Today the only scoping is `exempt_assets`, which is a per-asset-id
+    allow-list -- the wrong instrument for a predicate over a field.  Without
+    `where`, each of these ships either as a stronger-than-Checkov control (say
+    so explicitly, there is a `stronger` key already) or as a control that fails
+    a population the rule does not apply to.  Note the interaction with the
+    existing `applicable`/only_if logic: a where-guard that empties the
+    population must render Not Applicable, and the "enumeration is broken"
+    guard must still be able to distinguish that from a bad ids column.
+
+  gap_4_multi_property_assertions: >-
+    `assert` holds ONE property.  Five checks need an AND:
+      CKV2_AWS_12 (ingress empty AND egress empty)
+      CKV2_AWS_45 (all_supported true AND recording true)
+      CKV2_AWS_47/76/78 (two managed rule groups both present)
+    Splitting them into separate checks is not available -- the check id is the
+    control identity and lint_catalog_drift.py asserts file name, control id and
+    tag agree.  The shape needs `assert:` to accept a LIST of
+    property/satisfies/value triples rendered as sibling `its(...)` lines inside
+    one describe.
+
+  gap_5_any_element_predicates_over_arrays: >-
+    Four checks assert over the ELEMENTS of an array field, which none of the 13
+    matchers expresses:
+      CKV2_AWS_71 no SAN contains '*'
+      CKV2_AWS_72 no origin protocol policy is in [http-only, match-viewer]
+      CKV2_AWS_35/44 no ROUTE pairs a 0.0.0.0/0 destination with an instance or
+        peering target -- and note the stock aws_route_tables plural FLATTENS
+        routes into parallel columns, destroying the pairing, so this must be
+        built on the singular's `routes`.
+    Suggest `satisfies: none_of` / `any_of` taking a value or list and applying
+    it per element, plus a documented rule that a nil array is empty, not a pass.
+
+  gap_6_a_singleton_resource_has_no_plural_to_enumerate: >-
+    aws_config_recorder is one-per-region and inspec-aws ships no plural.  The
+    stock shape has no way to say "enumerate exactly one, per region".  Routing
+    it through the api reader (proposed under CKV2_AWS_48) sidesteps this
+    cleanly and is the recommendation, but the same problem will recur.
+
+  gap_7_the_api_spec_reader_makes_exactly_one_call: >-
+    aws_api_assets enumerates one operation and digs flat dotted paths out of
+    each row.  Three shapes it cannot serve, all of which appear above:
+      a nested collection path (cloudfront distribution_list.items) -- one
+        dig_path call away from working;
+      a per-row follow-up call (mwaa GetEnvironment, route53 GetDNSSEC,
+        codecommit approval templates, rds DescribeDBParameters);
+      list indexing / wildcards in a field path.
+    The first is worth fixing now; the second is what makes these checks want a
+    small bespoke singular instead, which is the shape we already have.
+
+  recommended_build_order: >-
+    1. `where` guard + multi-property assert (gaps 3 and 4).  They unblock 12
+       checks between them and need no new reader.
+    2. The join shape, designed around all three assertion forms and with the
+       zero-match guard from gap 2.  Prototype it on CKV2_AWS_31 (wafv2 acl vs
+       logging config) -- two same-service calls, no key translation, no
+       follow-up hop.
+    3. The three-check AWS Backup family off ONE api_specs row for
+       backup.list_protected_resources.
+    4. The wafv2 family, preferring GetWebACLForResource per asset (which fits
+       the EXISTING per-id shape) over ListResourcesForWebACL wherever the left
+       population is small.
+
+  api_divergences_found:
+    - >-
+      elbv2 DescribeListeners: botocore declares NO required input members, but
+      the service rejects a call with neither LoadBalancerArn nor ListenerArns.
+      Any "is this enumerable" heuristic that reads botocore's `required` list
+      will classify listener checks as reachable when they are not.
+    - >-
+      wafv2 ListWebACLs / ListLoggingConfigurations and
+      application-autoscaling DescribeScalableTargets require an argument that
+      is a FIXED ENUM (Scope, ServiceNamespace), not a discovered parent id.
+      These are enumerable -- call once per enum value -- and must not be swept
+      into the parent/child tranche.
+    - >-
+      iam GetAccountAuthorizationDetails takes no required arguments and
+      returns users-with-groups, groups, roles, attached managed policies and
+      every policy DOCUMENT in one paginated call.  It collapses CKV2_AWS_14,
+      21, 40 and 56 into a single enumeration.
+    - >-
+      backup ListProtectedResources answers "is it backed up" for every
+      resource type at once with no required arguments -- but it reports what
+      has actually been backed up, not what a plan SELECTS.  ListBackupSelections
+      requires a BackupPlanId, so the faithful-to-Checkov reading is
+      parent/child while the better question is free.
+    - >-
+      ec2.Volume carries no Arn member, so any join between EBS volumes and an
+      ARN-keyed service needs a constructed ARN.
+    - >-
+      cloudfront ListDistributions returns everything these checks need on
+      DistributionSummary (WebACLId, ViewerCertificate, Origins with both
+      S3OriginConfig and OriginAccessControlId, DefaultCacheBehavior
+      .ResponseHeadersPolicyId) -- but the stock inspec-aws plural registers
+      none of those columns and the stock singular reads OAI while ignoring
+      OriginAccessControlId, so CKV2_AWS_46 as-mapped fails every
+      OAC-secured distribution.
+    - >-
+      The stock aws_route_tables plural flattens each table's routes into
+      parallel per-attribute arrays, discarding which destination goes with
+      which target.  Two checks (CKV2_AWS_35, 44) are unanswerable from it and
+      must use the singular.
+    - >-
+      s3 GetBucketPolicyStatus (the stock `public?`) reports on the bucket
+      POLICY, not the ACL.  CKV_AWS_20 is already mapped to it; treat that as a
+      proxy rather than a precedent for the two remaining ACL checks.
+    - >-
+      Nine of the 74 "graph" checks contain no `connection` condition at all
+      (CKV2_AWS_34, 40, 41, 42, 43, 48, 49, 50, 52, 53, 54, 55, 58, 59, 60, 65,
+      66, 71, 72, 73 and CKV_AWS_144/145 in part).  Checkov ships them as graph
+      policies for authoring convenience; they are plain attribute checks and
+      should not be held back waiting on a join shape.
