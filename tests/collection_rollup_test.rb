@@ -15,8 +15,12 @@
 # `Aws::Structure#to_h` produces -- symbol keys, nested hashes and arrays, and
 # NO key at all for a member the response omitted.
 #
-#     docker run --rm -v "$PWD:/work" -w /work \
-#       risksentinel/sparc-auditor:v0.5.0 ruby tests/collection_rollup_test.rb
+#     docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby \
+#       risksentinel/sparc-auditor:v0.5.0 tests/collection_rollup_test.rb
+#
+# `--entrypoint ruby` is not optional: the image's entrypoint is cinc-auditor, so
+# without it the command becomes `cinc-auditor ruby ...` and dies with "Could not
+# find command ruby" — which is how the first version of this header was wrong.
 #
 # The lambdas below are copied from what tools/render_controls.py renders for
 # CKV_AWS_24 and CKV_AWS_127; if predicate_for changes, they change with it.

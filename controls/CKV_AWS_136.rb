@@ -75,13 +75,36 @@ control 'CKV_AWS_136' do
     end
   end
 
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_ecr_repository enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_ecr_repository in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
   # A field the API did not return is nil, and nil is not a failing value:
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt)
-                   .reject { |a| a[:encryption_type].nil? }
+  in_scope = enumerated
+                        .reject { |a| a[:encryption_type].nil? }
 
-  applicable = !in_scope.empty?
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
   impact 0.5
   impact 0.0 unless applicable
   only_if('no aws_ecr_repository in scope expressing this setting') { applicable }

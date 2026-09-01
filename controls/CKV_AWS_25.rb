@@ -156,27 +156,52 @@ control 'CKV_AWS_25' do
     end
   end
 
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_security_group enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_security_group in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
   # A collection roll-up is not nil-filtered: an asset that does not
   # express the field is part of the population the guard below counts,
   # and for any_of it is precisely the failing case.
-  in_scope = assets.assets(exempt: exempt)
+  in_scope = enumerated
 
   # none_of is vacuously TRUE over an empty collection, so an asset that did
   # not carry this field passes without being examined. For one asset with no
   # elements that is the right answer; when it is EVERY asset the control can no
   # longer fail, and a control that cannot fail reads as compliant rather than as
-  # a mapping naming a field this API does not return.
+  # a mapping naming a field this API does not return. The condition paths one
+  # level down are checked statically instead — tools/lint_api_paths.rb.
   exposing = in_scope.count { |a| !a[:ip_permissions].nil? }
+
   describe 'aws_security_group ip_permissions' do
     it 'was returned for at least one asset in scope' do
       expect(exposing).to be_positive,
         'no asset in scope exposed ip_permissions, so the roll-up below cannot fail: '\
-        'either resource_map.yml names a field this API does not return, or '\
+        'either tools/api_specs.yml names a field this API does not return, or '\
         'nothing in this boundary expresses it'
     end
   end
 
-  applicable = !in_scope.empty?
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_security_group in scope expressing this setting') { applicable }

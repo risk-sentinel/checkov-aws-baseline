@@ -51,10 +51,16 @@
 # is correct for one asset that genuinely has no elements and catastrophic when
 # it is EVERY asset, because a field name this API does not return then produces
 # a control that is structurally unable to fail -- which reads as 100% compliant.
-# This module does NOT paper over that: it reports what it was given. The
-# generated control carries a separate, control-scope expectation that at least
-# one in-scope asset exposed the field, so the mapping bug is a visible failure
-# rather than a clean pass.
+# This module does NOT paper over that: it reports what it was given. Two things
+# outside it close the gap. The generated control carries a control-scope
+# expectation that at least one in-scope asset exposed the field, so a `field:`
+# the API does not return is a visible failure rather than a clean pass. And the
+# dotted paths INSIDE a condition -- where a typo has the identical effect one
+# level down, because a condition that never resolves takes its `when_absent`
+# verdict on every element -- are resolved against the AWS SDK's own response
+# model by tools/lint_api_paths.rb, before anything ships. That check is static
+# on purpose: the runtime form of it cannot tell a misspelled path from an
+# account whose security group rules simply never use a CIDR.
 #
 # Reached by CONSTANT, never included into ::Inspec::Rule. A module included into
 # Rule is available on the control and NOT inside a `subject`/`it` block, and the

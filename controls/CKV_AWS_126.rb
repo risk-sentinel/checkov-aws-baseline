@@ -67,7 +67,7 @@ control 'CKV_AWS_126' do
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
-                   .reject { |a| a[:detailed_monitoring].nil? }
+                        .reject { |a| a[:detailed_monitoring].nil? }
 
   applicable = !in_scope.empty?
 

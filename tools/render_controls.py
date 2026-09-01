@@ -66,10 +66,17 @@ mapping that cannot fail:
     IpPermission with IpProtocol "-1" carries no FromPort or ToPort, and AWS
     means "every port" by that. Do not use it to paper over a path you have not
     confirmed: it turns an unverified field name into a decided answer.
-  * `none_of` and `all_of` are vacuously TRUE over an empty collection, so the
-    generated control carries a control-scope expectation that at least one
-    in-scope asset actually exposed the field. Without it, a field name this API
-    does not return renders as a fully compliant control.
+  * `none_of` and `all_of` are vacuously TRUE over an empty collection, and a
+    condition whose path never resolves takes its `when_absent` verdict on every
+    element. Either one, applied to the whole population, is a control that
+    CANNOT fail and therefore reads as 100% compliant. Two different guards,
+    because the two mistakes are not the same kind of thing. A `field:` the API
+    does not return is answered at runtime, by a control-scope expectation that
+    some in-scope asset exposed it. A misspelled path INSIDE a condition is
+    answered statically, by tools/lint_api_paths.rb, which resolves every
+    declared path against the AWS SDK's own response model — run it in the
+    auditor image whenever you touch these files. Neither `check` nor `json`
+    evaluates a control body, so nothing else in the pipeline sees either.
 
 Usage:
     python3 tools/render_controls.py            # rewrite controls/CKV_*.rb
@@ -298,10 +305,33 @@ control '{cid}' do
     end
   end
 
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count {{ |a| "#{{a[:id]}}".strip.empty? }}
+  if unusable.positive?
+    describe "{tf_type} enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{{unusable}} row(s) had a blank id — the `id` for {tf_type} in "\\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
 {nil_filter_comment}
-  in_scope = assets.assets(exempt: exempt){nil_filter}
+  in_scope = enumerated{nil_filter}
 {collection_guard}
-  applicable = !in_scope.empty?
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
   impact {impact}
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope expressing this setting') {{ applicable }}
@@ -668,7 +698,7 @@ def nil_filter_for(satisfies, field):
     if satisfies in ("not_empty", "empty"):
         return ("", "  # A nil field is the FAILING state for a presence check, so it is\n"
                     "  # deliberately not filtered out here.")
-    return (f"\n                   .reject {{ |a| a[:{field}].nil? }}",
+    return (f"\n                        .reject {{ |a| a[:{field}].nil? }}",
             "  # A field the API did not return is nil, and nil is not a failing value:\n"
             "  # the asset does not express this setting, so it is out of scope for this\n"
             "  # check rather than in breach of it.")
@@ -731,7 +761,7 @@ def matcher_for(cid, satisfies, value):
         return ("should satisfy('be unset or empty') { |v| "
                 "v.nil? || (v.respond_to?(:empty?) && v.empty?) }")
     if satisfies == "greater_than":
-        return f"should be > {value}"
+        return f"should be > {ruby_literal(value)}"
     if satisfies == "in_list":
         return "should be_in [" + ", ".join(ruby_literal(v) for v in value) + "]"
     if satisfies == "not_equals":
@@ -741,11 +771,11 @@ def matcher_for(cid, satisfies, value):
     if satisfies == "at_least":
         # `greater_than` is strict, so a policy demanding "at least 14" failed on
         # exactly 14 — the boundary the requirement names.
-        return f"should be >= {value}"
+        return f"should be >= {ruby_literal(value)}"
     if satisfies == "at_most":
-        return f"should be <= {value}"
+        return f"should be <= {ruby_literal(value)}"
     if satisfies == "less_than":
-        return f"should be < {value}"
+        return f"should be < {ruby_literal(value)}"
     if satisfies == "includes":
         return f"should include {ruby_literal(value)}"
     if satisfies == "excludes":
@@ -780,13 +810,13 @@ def predicate_for(cid, satisfies, value):
     if satisfies == "empty":
         return "->(v) { v.nil? || (v.respond_to?(:empty?) && v.empty?) }"
     if satisfies == "greater_than":
-        return f"->(v) {{ v > {value} }}"
+        return f"->(v) {{ v > {ruby_literal(value)} }}"
     if satisfies == "less_than":
-        return f"->(v) {{ v < {value} }}"
+        return f"->(v) {{ v < {ruby_literal(value)} }}"
     if satisfies == "at_least":
-        return f"->(v) {{ v >= {value} }}"
+        return f"->(v) {{ v >= {ruby_literal(value)} }}"
     if satisfies == "at_most":
-        return f"->(v) {{ v <= {value} }}"
+        return f"->(v) {{ v <= {ruby_literal(value)} }}"
     if satisfies == "in_list":
         return "->(v) { [" + ", ".join(ruby_literal(v) for v in value) + "].include?(v) }"
     if satisfies == "not_in_list":
@@ -840,6 +870,16 @@ def condition_parts(cid, condition):
     if not isinstance(when_absent, bool):
         raise SystemExit(f"{cid}: `when_absent` is the VERDICT when the path reaches nothing, "
                          f"so it must be true or false, got {when_absent!r}")
+    if satisfies == "empty" and "when_absent" not in condition:
+        # `empty` is the one verb the default inverts. An API member the response
+        # OMITTED is the strongest form of "empty", and the default verdict says
+        # it is not — so `path: x, satisfies: empty` silently answers the opposite
+        # of what it reads like on exactly the elements it most needs to catch.
+        # Every other verb's default is the safe direction; this one has to be
+        # said out loud.
+        raise SystemExit(f"{cid}: a condition using `empty` must state `when_absent` "
+                         f"explicitly — an omitted member is the strongest case of empty, "
+                         f"and the default verdict (false) says it is not")
 
     where = paths[0] if len(paths) == 1 else "(" + " or ".join(paths) + ")"
     prose = f"{where} {verb_prose(satisfies, condition.get('value'))}"
@@ -916,28 +956,50 @@ def collection_guard_for(satisfies, tf_type, field):
     `none_of` and `all_of` are both vacuously TRUE over an empty collection. For
     one asset that genuinely has no elements that is the right answer; when it is
     EVERY asset, the control cannot fail, and a control that cannot fail reads as
-    a clean pass rather than as a broken mapping. A field name this API does not
-    return produces exactly that.
+    a clean pass rather than as a broken mapping. A `field:` this API does not
+    return produces exactly that, and nothing else in the pipeline sees it —
+    `check` and `json` do not evaluate a control body.
 
     So it is asserted, not filtered — filtering removes the population and
     renders Not Applicable, which is the same silence wearing a different label.
-    `any_of` needs none of this: an absent collection satisfies nothing, so the
-    same mistake shows up as every asset failing.
+
+    The question asked is whether ANY in-scope asset exposed the field, not
+    whether every one did. A field name that is wrong is wrong for the whole
+    population, so one asset carrying it settles the mapping; an individual nil
+    is a real state — a security group with no ingress rules, an ELB with no
+    listeners — and it passes for the same reason a nil scalar is filtered out of
+    scope under the other verbs. Demanding it of every asset would fail a
+    compliant account for being empty.
+
+    Rendered under all three verbs. `any_of` cannot pass vacuously (an absent
+    collection satisfies nothing, so a wrong field shows up as every asset
+    failing), but a diagnosed mass failure beats an undiagnosed one.
+
+    The paths INSIDE a condition are NOT guarded here. A typo there is the same
+    catastrophe one level down, and the runtime version of this guard was written
+    for it and then removed: asking the population whether a path ever resolved
+    cannot tell a typo from a tidy account, and `ip_ranges.cidr_ip` reaches
+    nothing in an account whose rules all reference peer security groups — an
+    account that is COMPLIANT and would have been failed for it. That question is
+    static and exact, and it lives in tools/lint_api_paths.rb, which resolves
+    every declared path against the AWS SDK's own response model.
     """
-    if satisfies not in ("none_of", "all_of"):
+    if satisfies not in COLLECTION_VERBS:
         return ""
     return f"""
   # {satisfies} is vacuously TRUE over an empty collection, so an asset that did
   # not carry this field passes without being examined. For one asset with no
   # elements that is the right answer; when it is EVERY asset the control can no
   # longer fail, and a control that cannot fail reads as compliant rather than as
-  # a mapping naming a field this API does not return.
+  # a mapping naming a field this API does not return. The condition paths one
+  # level down are checked statically instead — tools/lint_api_paths.rb.
   exposing = in_scope.count {{ |a| !a[:{field}].nil? }}
+
   describe '{tf_type} {field}' do
     it 'was returned for at least one asset in scope' do
       expect(exposing).to be_positive,
         'no asset in scope exposed {field}, so the roll-up below cannot fail: '\\
-        'either resource_map.yml names a field this API does not return, or '\\
+        'either tools/api_specs.yml names a field this API does not return, or '\\
         'nothing in this boundary expresses it'
     end
   end

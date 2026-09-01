@@ -198,6 +198,7 @@ inputs.yml                        reference inputs — clone-to-results
 controls/inventory.rb             what the scan found, and where it could not look
 controls/CKV_AWS_*.rb             generated — one per rule
 libraries/aws_compute_assets.rb   deployed assets + the fields checks assert on
+libraries/_checkov_collection.rb  roll a condition up over a collection-valued field
 tools/build_catalog.py            derive the catalogue from a pinned Checkov
 tools/render_controls.py          render controls from the data files (--check for drift)
 tools/checkov_catalog.yml         derived
@@ -207,4 +208,7 @@ tools/fix_examples.yml            authored
 tools/lint_catalog_drift.py       controls <-> catalogue, both directions
 tools/lint_control_tags.py        fleet tag gate
 tools/lint_resource_scope.py      fleet scope gate
+tools/lint_api_paths.rb           every declared path exists in the SDK model (in the image)
+tests/collection_rollup_test.rb   roll-up semantics, against hand-built rows
+tests/rollup_exec_probe.py        the GENERATED roll-up, evaluated under -t local://
 ```

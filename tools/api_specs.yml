@@ -159,11 +159,15 @@ aws_kinesis_stream:
   id: stream_name
   list: list_streams
 aws_lambda_function:
+  # No code_signing_config_arn here: ListFunctions returns FunctionConfiguration,
+  # which does not carry it — it is answered by GetFunctionCodeSigningConfig, one
+  # call per function, which this reader cannot express. Declared here until
+  # tools/lint_api_paths.rb resolved the name against the SDK model and found it
+  # absent; CKV_AWS_272's mapping went with it.
   arn: function_arn
   client: Aws::Lambda::Client
   collection: functions
   fields:
-    code_signing_config_arn: code_signing_config_arn
     kms_key_arn: kms_key_arn
     runtime: runtime
     tracing_mode: tracing_config.mode
