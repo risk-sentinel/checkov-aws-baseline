@@ -196,6 +196,20 @@ API_SPECS = {
     'list' => 'describe_endpoints',
     'scope' => 'regional'
   },
+  'aws_docdb_cluster' => {
+    'arn' => 'db_cluster_arn',
+    'client' => 'Aws::DocDB::Client',
+    'collection' => 'db_clusters',
+    'fields' => {
+      'backup_retention_period' => 'backup_retention_period',
+      'engine' => 'engine',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-docdb',
+    'id' => 'db_cluster_identifier',
+    'list' => 'describe_db_clusters',
+    'scope' => 'regional'
+  },
   'aws_ebs_volume' => {
     'client' => 'Aws::EC2::Client',
     'collection' => 'volumes',
@@ -498,6 +512,22 @@ API_SPECS = {
     'gem' => 'aws-sdk-kafka',
     'id' => 'cluster_name',
     'list' => 'list_clusters',
+    'scope' => 'regional'
+  },
+  'aws_neptune_cluster' => {
+    'arn' => 'db_cluster_arn',
+    'client' => 'Aws::Neptune::Client',
+    'collection' => 'db_clusters',
+    'fields' => {
+      'backup_retention_period' => 'backup_retention_period',
+      'copy_tags_to_snapshot' => 'copy_tags_to_snapshot',
+      'engine' => 'engine',
+      'iam_database_authentication_enabled' => 'iam_database_authentication_enabled',
+      'storage_encrypted' => 'storage_encrypted'
+    },
+    'gem' => 'aws-sdk-neptune',
+    'id' => 'db_cluster_identifier',
+    'list' => 'describe_db_clusters',
     'scope' => 'regional'
   },
   'aws_network_acl' => {
