@@ -648,13 +648,29 @@ control '{cid}' do
 
   assets = aws_compute_assets(regions: scan_regions)
 
+  # aws_compute_assets records a denied or unreachable region rather than
+  # swallowing it, and says why: "a control that treats it as 'nothing here'
+  # passes vacuously". Nothing read it, so that is exactly what these controls
+  # did. Asserted here, and carried into `applicable` below, because when every
+  # region is denied there are zero rows AND an error — so only_if would
+  # otherwise skip the control and this assertion along with it, rendering
+  # impact 0.0 and Not Applicable over an estate nobody managed to look at.
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe 'aws_compute_assets enumeration' do
+      it 'read every region it attempted' do
+        expect(unreadable.map {{ |r| "#{{r[:region]}}: #{{r[:error]}}" }}).to be_empty
+      end
+    end
+  end
+
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
 {nil_filter_comment}
   in_scope = assets.assets_of(applies_to, exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  applicable = !in_scope.empty? || !unreadable.empty?
 
   # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
   # on the argument node, and a ternary is an IfNode with none — it aborts
