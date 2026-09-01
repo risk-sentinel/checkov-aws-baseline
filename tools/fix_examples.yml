@@ -987,6 +987,22 @@ CKV_AWS_319:
       \           = 10\n  comparison_operator = \"GreaterThanThreshold\"\n  treat_missing_data  = \"notBreaching\"\
       \n\n  actions_enabled = true                       # the default; state it\n  alarm_actions   =\
       \ [aws_sns_topic.alerts.arn]\n  ok_actions      = [aws_sns_topic.alerts.arn]\n}\n"
+CKV_AWS_32:
+  aws_ecr_repository_policy:
+    cli: "aws ecr set-repository-policy --repository-name <name> --policy-text file://policy.json\n# Or,\
+      \ where nothing outside the account should pull at all, remove it entirely:\naws ecr delete-repository-policy\
+      \ --repository-name <name>\n"
+    note: A repository with NO policy is not a finding — access then falls back to IAM, which is the safe
+      default. Deleting the policy is a legitimate fix, not a workaround.
+    terraform: "# Name the accounts and roles that may pull, and nothing else. Where the\n# images really\
+      \ are public, use ECR Public (aws_ecrpublic_repository) —\n# a wildcard principal on a private repository\
+      \ is an accident, not a\n# publishing decision.\nresource \"aws_ecr_repository_policy\" \"example\"\
+      \ {\n  repository = aws_ecr_repository.example.name\n\n  policy = jsonencode({\n    Version = \"\
+      2012-10-17\"\n    Statement = [{\n      Sid    = \"PullFromThisOrganisation\"\n      Effect = \"\
+      Allow\"\n      Principal = {\n        AWS = [\"arn:aws:iam::111122223333:root\"]\n      }\n    \
+      \  Action = [\n        \"ecr:GetDownloadUrlForLayer\",\n        \"ecr:BatchGetImage\",\n       \
+      \ \"ecr:BatchCheckLayerAvailability\",\n      ]\n      Condition = {\n        StringEquals = { \"\
+      aws:PrincipalOrgID\" = \"o-abcd1234\" }\n      }\n    }]\n  })\n}\n"
 CKV_AWS_320:
   aws_redshift_cluster:
     cli: "Set at creation; renaming requires a new cluster.\n"
@@ -1359,6 +1375,32 @@ CKV_AWS_6:
     cli: "aws opensearch update-domain-config --domain-name <name> --node-to-node-encryption-options Enabled=true\n"
     terraform: "resource \"aws_opensearch_domain\" \"search\" {\n  domain_name    = \"search\"\n  engine_version\
       \ = \"OpenSearch_2.11\"\n\n  node_to_node_encryption {\n    enabled = true\n  }\n}\n"
+CKV_AWS_60:
+  aws_iam_role:
+    cli: "aws iam update-assume-role-policy --role-name <name> --policy-document file://trust.json\n"
+    note: The deployed trust policy is what this control reads, so a role widened in the console shows
+      the finding even when the Terraform is correct. Re-applying the Terraform is the fix in that case,
+      and the control is what tells you it is needed.
+    terraform: "# A trust policy names WHO may assume the role. `\"AWS\" = \"*\"` names\n# everyone with\
+      \ an AWS account, so scope it to the principals that need\n# it — and where a wildcard is genuinely\
+      \ required, constrain it with a\n# Condition (aws:PrincipalOrgID, aws:SourceAccount, sts:ExternalId).\n\
+      resource \"aws_iam_role\" \"example\" {\n  name = \"example\"\n\n  assume_role_policy = jsonencode({\n\
+      \    Version = \"2012-10-17\"\n    Statement = [{\n      Effect = \"Allow\"\n      Principal = {\n\
+      \        Service = \"ecs-tasks.amazonaws.com\"\n      }\n      Action = \"sts:AssumeRole\"\n   \
+      \   Condition = {\n        StringEquals = { \"aws:SourceAccount\" = data.aws_caller_identity.current.account_id\
+      \ }\n      }\n    }]\n  })\n}\n"
+CKV_AWS_62:
+  aws_iam_policy:
+    cli: "aws iam create-policy-version --policy-arn <arn> --policy-document file://policy.json --set-as-default\n"
+    note: A policy is versioned, and this control reads the DEFAULT version. Creating a scoped version
+      without --set-as-default leaves the administrative version in force, and the finding correctly persists.
+    terraform: "# Replace the wildcard with the actions the workload actually calls, and\n# the ARNs it\
+      \ actually touches. Where the action list genuinely has to be\n# broad, the resource list must not\
+      \ be — and vice versa; it is the\n# combination of both stars that this rule is about.\nresource\
+      \ \"aws_iam_policy\" \"example\" {\n  name = \"example\"\n\n  policy = jsonencode({\n    Version\
+      \ = \"2012-10-17\"\n    Statement = [{\n      Effect = \"Allow\"\n      Action = [\n        \"s3:GetObject\"\
+      ,\n        \"s3:PutObject\",\n      ]\n      Resource = [\"${aws_s3_bucket.example.arn}/*\"]\n \
+      \   }]\n  })\n}\n"
 CKV_AWS_64:
   aws_redshift_cluster:
     cli: "aws redshift modify-cluster --cluster-identifier <id> --encrypted --kms-key-id <key-arn>\n"

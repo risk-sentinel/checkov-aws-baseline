@@ -2,9 +2,10 @@
 """Fold per-slice staging files into the live data files, deterministically.
 
 Why this exists rather than letting each drafting pass edit the data files
-directly: every proposal lands in the SAME four files -- resource_map_derived,
-api_specs, control_metadata_derived, fix_examples. Several passes running at
-once therefore collide on all four, and the collisions are the silent kind:
+directly: every proposal lands in the SAME five files -- resource_map_derived,
+api_specs, policy_specs, control_metadata_derived, fix_examples. Several passes
+running at once therefore collide on all five, and the collisions are the silent
+kind:
 last-writer-wins on a YAML mapping drops the other pass's entry without any
 diff conflict to notice.
 
@@ -23,11 +24,20 @@ silently dropped entry:
   * an api spec naming a gem the image lacks        -> refused here as well as
     in lint_api_specs, because a LoadError is rescued into unreadable_regions
     and reads as Not Applicable
+  * a policy mapping naming a predicate nobody implements, or a source with no
+    policy spec -> refused; both render, pass `check` AND `json`, and raise only
+    on a real exec
+
+A merge that adds to policy_specs must be followed by
+`python3 tools/render_policy_specs.py` -- the bake in libraries/_policy_specs.rb
+is what the reader actually reads. tools/lint_policy_specs.py fails when it is
+stale.
 
 Staging schema (all keys optional, check-id keyed):
 
     mappings:   {CKV_AWS_1: {aws_foo: {reader: stock, ...}}}
     api_specs:  {aws_foo: {client:, list:, collection:, id:, gem:, fields:}}
+    policy_specs: {aws_foo: {client:, list:, collection:, id:, gem:, document|fetch:}}
     metadata:   {CKV_AWS_1: {severity:, impact:, nist:, nist_r4:, cci:, ksi:,
                              rationale:, nist_source:}}
     fixes:      {CKV_AWS_1: {aws_foo: {terraform:, cli:, note:}}}
@@ -51,6 +61,7 @@ STAGING = HERE / "staging"
 LIVE = {
     "mappings":  HERE / "resource_map_derived.yml",
     "api_specs": HERE / "api_specs.yml",
+    "policy_specs": HERE / "policy_specs.yml",
     "metadata":  HERE / "control_metadata_derived.yml",
     "fixes":     HERE / "fix_examples.yml",
 }
@@ -70,7 +81,16 @@ SHAPE_REQUIRED = {
     "api":       {"_self": ("field",)},
     "singleton": {"_self": ("resource", "property")},
     "custom":    {"_self": ()},
+    # A policy mapping names a PREDICATE, not a `satisfies` verb: the unit of
+    # judgement is a statement and the verdict depends on Effect, Principal,
+    # Action, Resource and Condition together. `source` is optional and defaults
+    # to the Terraform type.
+    "policy":    {"_self": ("predicate",)},
 }
+
+# Readers whose mapping carries no `satisfies` at all. Defaulting these to
+# "equals" would then demand a `value` and refuse every valid mapping.
+VERBLESS_READERS = ("policy",)
 
 
 def known_verbs():
@@ -85,6 +105,19 @@ def known_verbs():
     return sorted(set(re.findall(r'satisfies == "([a-z_]+)"', body)))
 
 
+def known_predicates():
+    """The policy predicates, read out of the Ruby rather than copied.
+
+    Same reason as known_verbs: a list kept by hand here drifts from the one
+    that actually runs, and a mapping naming a predicate nobody implemented
+    renders, passes `check` and `json`, and raises only at exec.
+    """
+    import re
+    text = (HERE.parent / "libraries" / "_policy_document.rb").read_text()
+    match = re.search(r"PREDICATES\s*=\s*%w\[(.*?)\]", text, re.S)
+    return sorted(match.group(1).split()) if match else []
+
+
 def load_yaml(path, default=None):
     if not path.is_file():
         return default if default is not None else {}
@@ -93,7 +126,8 @@ def load_yaml(path, default=None):
 
 def collect(files):
     """Read every staging file, refusing any check two of them both claim."""
-    merged = {k: {} for k in ("mappings", "api_specs", "metadata", "fixes", "skipped")}
+    merged = {k: {} for k in ("mappings", "api_specs", "policy_specs", "metadata",
+                              "fixes", "skipped")}
     owner = {k: {} for k in merged}
     errors = []
     for path in files:
@@ -124,6 +158,7 @@ def validate(merged, owner, verbs):
     live_meta = load_yaml(LIVE["metadata"])
     authored_meta = load_yaml(AUTHORED["metadata"])
     live_specs = load_yaml(LIVE["api_specs"])
+    live_policy_specs = load_yaml(LIVE["policy_specs"])
     catalog = load_yaml(HERE / "checkov_catalog.yml").get("checks", {})
     gems = {l.strip() for l in (HERE / "image_gems.txt").read_text().splitlines() if l.strip()}
 
@@ -161,10 +196,23 @@ def validate(merged, owner, verbs):
                     if not target.get(key):
                         errors.append(f"{cid}/{tf_type} ({where}): "
                                       f"{block if block != '_self' else reader}.{key} is required")
+            if reader == "policy":
+                predicate = body.get("predicate")
+                if predicate and predicate not in known_predicates():
+                    errors.append(f"{cid}/{tf_type} ({where}): predicate '{predicate}' is not "
+                                  f"implemented. libraries/_policy_document.rb has: "
+                                  f"{', '.join(known_predicates())}")
+                source = body.get("source") or tf_type
+                if source not in live_policy_specs and source not in merged["policy_specs"]:
+                    errors.append(f"{cid}/{tf_type} ({where}): policy source '{source}' is not "
+                                  f"in tools/policy_specs.yml")
+
             # `satisfies` sits on the assert block for stock, on the body otherwise.
             holder = body.get("assert", body) if reader == "stock" else body
             verb = holder.get("satisfies", "equals")
-            if verb not in verbs:
+            if reader in VERBLESS_READERS:
+                pass
+            elif verb not in verbs:
                 errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is not "
                               f"implemented. matcher_for knows: {', '.join(verbs)}")
             elif verb in ("equals", "not_equals", "greater_than", "at_least", "at_most",
@@ -206,6 +254,25 @@ def validate(merged, owner, verbs):
             errors.append(f"{tf_type} ({where}): gem '{gem}' is not in the auditor image. "
                           f"A LoadError is rescued into unreadable_regions and the control "
                           f"reads as Not Applicable. Park it in api_specs_pending_gems.yml.")
+
+    # A policy spec is validated the same way an api spec is, and for the same
+    # reason: a missing gem, a missing member or a source declared twice all end
+    # in a control that reads as an answer. The one extra rule is that the bake
+    # in libraries/_policy_specs.rb is what the reader actually reads, so a merge
+    # here must be followed by `python3 tools/render_policy_specs.py`.
+    for source, spec in merged["policy_specs"].items():
+        where = owner["policy_specs"][source]
+        if source in live_policy_specs:
+            errors.append(f"{source} ({where}): policy spec already live")
+        missing = [k for k in SPEC_REQUIRED if not spec.get(k)]
+        if missing:
+            errors.append(f"{source} ({where}): policy spec missing {missing}")
+        if not spec.get("document") and not spec.get("fetch"):
+            errors.append(f"{source} ({where}): policy spec declares neither `document` nor "
+                          f"`fetch`, so no policy is ever read and every asset is undecidable")
+        gem = spec.get("gem")
+        if gem and gem not in gems:
+            errors.append(f"{source} ({where}): gem '{gem}' is not in the auditor image.")
 
     for cid in merged["fixes"]:
         if cid not in catalog:

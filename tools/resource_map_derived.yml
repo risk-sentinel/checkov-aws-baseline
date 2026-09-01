@@ -2034,3 +2034,51 @@ checks:
       note: access_log_enabled? reads DescribeLoadBalancerAttributes (.access_log.enabled), which is the
         deployed form of the `access_logs` block Checkov looks for.
       reader: stock
+
+  # ---------------------------------------------------------------------------
+  # Policy-document mappings (reader: policy).
+  #
+  # These name a PREDICATE rather than a `satisfies` verb, because the unit of
+  # judgement is a statement and no field comparison expresses it. The predicate
+  # is implemented once in libraries/_policy_document.rb; where the document
+  # lives is declared once per source in tools/policy_specs.yml. `source`
+  # defaults to the Terraform type and is spelled out here only when it differs.
+  #
+  # Grouped rather than interleaved so a reviewer can see the whole shape at
+  # once; YAML does not care about key order.
+  # ---------------------------------------------------------------------------
+  CKV_AWS_32:
+    aws_ecr_repository_policy:
+      reader: policy
+      predicate: no_wildcard_principal
+      note: 'Checkov parses the repository_policy `policy` argument and runs cloudsplaining''s
+        internet_accessible_actions over it, which is no_wildcard_principal with a curated
+        condition allow-list. Deployed, the document is fetched with ecr:GetRepositoryPolicy
+        per repository enumerated by ecr:DescribeRepositories (both confirmed against the
+        botocore ECR model). A repository with no policy raises RepositoryPolicyNotFoundException,
+        which policy_specs declares as absent_when — no policy is not public, so it passes.'
+      stronger: 'Stronger than Checkov: it reads the policy AWS actually has, so a statement
+        added in the console or by another tool after the apply is seen. It also sees repositories
+        the Terraform never declared at all.'
+  CKV_AWS_60:
+    aws_iam_role:
+      reader: policy
+      predicate: no_wildcard_principal
+      note: 'The trust policy, not a permissions policy. iam:ListRoles returns
+        AssumeRolePolicyDocument inline — the botocore IAM model documents ListRoles as
+        omitting only PermissionsBoundary, RoleLastUsed and Tags — so no second call is
+        needed. It arrives URL-encoded (RFC 3986); the parser tries JSON first and
+        percent-decodes only on failure, so the encoding is not declared per source.'
+      stronger: 'Stronger than Checkov: a wildcard trust policy is usually not written in
+        HCL at all — it is added in the console, or left behind by a tool. Reading the
+        deployed trust document is the only way to see that.'
+  CKV_AWS_62:
+    aws_iam_policy:
+      reader: policy
+      predicate: no_admin_star_star
+      note: 'Customer-managed policies only: iam:ListPolicies defaults to Scope=All, which
+        returns ~1,200 AWS-managed policies including AdministratorAccess — assessing those
+        would bury every actionable finding under policies this account cannot change, so
+        policy_specs pins Scope=Local. The default version''s document comes from
+        iam:GetPolicyVersion(PolicyArn, VersionId), taking VersionId from the list item''s
+        DefaultVersionId (all three members confirmed against the botocore IAM model).'

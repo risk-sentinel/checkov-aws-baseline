@@ -2,30 +2,86 @@
 #
 # Rule:        CKV_AWS_32 (checkov 3.3.16)
 # Applies to:  aws_ecr_repository_policy
-# Status:      PLANNED — no deployed-asset reader exists for aws_ecr_repository_policy yet.
+# Read with:   aws_policy_documents — aws_ecr_repository_policy → no_wildcard_principal
+#              predicate: libraries/_policy_document.rb
+#              fetch:     tools/policy_specs.yml
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_32'] || []
 
 control 'CKV_AWS_32' do
-  impact 0.0
   title 'Ensure ECR policy is not set to public'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_ecr_repository_policy in this profile, so there is nothing to assert against.
+    Checkov asserts this against the policy document in the Terraform. This
+    profile fetches the policy AWS actually has on each
+    aws_ecr_repository_policy and evaluates the same question over its
+    statements: no Allow statement grants a wildcard principal with no
+    Condition.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Stronger than Checkov: it reads the policy AWS actually has, so a
+    statement added in the console or by another tool after the apply is
+    seen. It also sees repositories the Terraform never declared at all.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A repository policy that allows a wildcard principal with no condition
+    makes every image in the repository readable by any AWS account, and by
+    an anonymous caller. Container images routinely carry configuration,
+    embedded credentials and the shape of the internal application, so the
+    exposure is not limited to the code that was intended to be public.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure ECR policy is not set to public
+    Checkov looks for: aws_ecr_repository_policy: the policy document has no
+    Allow statement whose Principal is '*' or whose Principal.AWS contains
+    '*' without a Condition constraining it (Checkov runs cloudsplaining's
+    internet_accessible_actions, which is the same test with a curated
+    condition allow-list)
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository_policy
+    Terraform — aws_ecr_repository_policy:
+
+      # Name the accounts and roles that may pull, and nothing else. Where the
+      # images really are public, use ECR Public (aws_ecrpublic_repository) —
+      # a wildcard principal on a private repository is an accident, not a
+      # publishing decision.
+      resource "aws_ecr_repository_policy" "example" {
+        repository = aws_ecr_repository.example.name
+
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [{
+            Sid    = "PullFromThisOrganisation"
+            Effect = "Allow"
+            Principal = {
+              AWS = ["arn:aws:iam::111122223333:root"]
+            }
+            Action = [
+              "ecr:GetDownloadUrlForLayer",
+              "ecr:BatchGetImage",
+              "ecr:BatchCheckLayerAvailability",
+            ]
+            Condition = {
+              StringEquals = { "aws:PrincipalOrgID" = "o-abcd1234" }
+            }
+          }]
+        })
+      }
+
+    Out of band — aws_ecr_repository_policy:
+
+      aws ecr set-repository-policy --repository-name <name> --policy-text file://policy.json
+      # Or, where nothing outside the account should pull at all, remove it entirely:
+      aws ecr delete-repository-policy --repository-name <name>
+
+    Note (aws_ecr_repository_policy): A repository with NO policy is not a
+    finding — access then falls back to IAM, which is the safe default. Deleting
+    the policy is a legitimate fix, not a workaround.
   FIX
 
   tag checkov_id:            'CKV_AWS_32'
@@ -34,9 +90,72 @@ control 'CKV_AWS_32' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_ecr_repository_policy]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecr_repository_policy'
-  tag implementation_status: 'planned'
+  tag policy_source:         'aws_ecr_repository_policy'
+  tag policy_predicate:      'no_wildcard_principal'
+  tag nist:                  ['AC-3', 'AC-6']
+  tag nist_r4:               ['AC-3', 'AC-6']
+  tag cci:                   ['CCI-000213', 'CCI-000225']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_32 — no deployed-asset reader for aws_ecr_repository_policy" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_policy_documents(type: 'aws_ecr_repository_policy', source: 'aws_ecr_repository_policy',
+                                predicate: 'no_wildcard_principal', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A denied call or an unreachable endpoint ends up
+  # here, and without this assertion it renders as "no assets" and the control
+  # reports Not Applicable: the worst case reported as "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe 'aws_ecr_repository_policy enumeration' do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # An asset whose policy could not be read or parsed has NO VERDICT. It is not
+  # in `assets` below, because a nil offender list compared against [] would
+  # pass — a denied GetPolicy silently reporting the least-visible estate as the
+  # cleanest one. It fails here instead, naming the asset and the reason.
+  #
+  # An asset with no policy at all is NOT here: that is a real answer and a
+  # passing one, recorded on the row as policy_present: false.
+  undecidable = assets.undecidable
+  unless undecidable.empty?
+    describe 'aws_ecr_repository_policy policy documents' do
+      it 'could all be read and parsed' do
+        expect(undecidable).to be_empty
+      end
+    end
+  end
+
+  in_scope = assets.assets(exempt: exempt)
+
+  # Both failure lists keep the control APPLICABLE. only_if suppresses the whole
+  # control, including the two assertions above, so a guard that skips when the
+  # enumeration broke is no guard at all: it would suppress exactly the case it
+  # exists to catch.
+  applicable = !in_scope.empty? || !undecidable.empty? || !unreadable.empty?
+
+  # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
+  # on the argument node, and a ternary is an IfNode with none — it aborts
+  # `check` for the whole profile before a single control runs.
+  impact 0.7
+  impact 0.0 unless applicable
+
+  only_if('no aws_ecr_repository_policy in scope') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_ecr_repository_policy #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      it 'no Allow statement grants a wildcard principal with no Condition' do
+        expect(asset[:offenders]).to eq([]),
+          "#{asset[:offenders].length} offending statement(s) — " \
+          "#{asset[:offenders].join(' | ')}"
+      end
+    end
   end
 end

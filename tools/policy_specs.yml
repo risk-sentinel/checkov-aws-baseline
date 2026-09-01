@@ -1,0 +1,120 @@
+# How to get a policy DOCUMENT out of AWS, per source.
+#
+# The sibling of tools/api_specs.yml, and separate from it on purpose: an api
+# spec enumerates assets and extracts scalar FIELDS, and it says so in its own
+# header that "anything needing real logic -- a policy document, a relationship
+# between two resources -- is not expressible here and should not be forced into
+# it". A policy is not a field: it usually needs a second, per-asset call, it is
+# sometimes URL-encoded, and its absence is a legitimate answer rather than a
+# missing column.
+#
+# Read by libraries/aws_policy_documents.rb via the bake in
+# libraries/_policy_specs.rb. Regenerate with:
+#
+#     python3 tools/render_policy_specs.py
+#
+# Keys
+# ----
+#   gem         SDK gem to require. MUST be in tools/image_gems.txt: a LoadError
+#               is raised as a profile error, never rescued, because a rescued
+#               one yields no rows and the control renders Not Applicable.
+#   client      SDK client class.
+#   scope       `global` (IAM, S3, CloudFront) or `regional` (the default).
+#               A global service returns the same objects from every region, so
+#               walking regions multiplies both the API calls and the results.
+#   list        the enumeration call.
+#   list_args   arguments it takes. `scope: Local` on iam:ListPolicies is not
+#               optional: without it every AWS-managed policy in the catalogue
+#               is assessed, including the ones AWS ships with `*` on `*`.
+#   collection  the member of the response holding the items.
+#   id          the item member naming the asset.
+#   arn         the item member holding its ARN, where there is one. Exemptions
+#               match on ARN first and id second.
+#
+# Then EITHER the document is already on the list item:
+#
+#   document    a dotted path into the item.
+#
+#   document_absent_is_no_policy
+#               false unless declared. An ABSENT document member (the path
+#               resolves to nil) makes the asset UNDECIDABLE, because `#{nil}`
+#               is `""` and `""` is the spelling of "no policy", which passes:
+#               a mistyped path would otherwise render every asset compliant
+#               having read nothing. Set it true ONLY where the API genuinely
+#               omits the member when there is no policy —
+#               sqs:GetQueueAttributes omits `Policy` on a queue with none.
+#               iam:ListRoles always returns AssumeRolePolicyDocument, so
+#               aws_iam_role must NOT set it.
+#
+# OR it needs a second call per asset:
+#
+#   fetch:
+#     call         the per-asset call.
+#     args         its arguments. A plain value is a literal; {from: id} and
+#                  {from: arn} take the row's identifier; {from_item: <path>}
+#                  takes another member of the list item.
+#     document     a dotted path into the RESPONSE.
+#     absent_when  error class names (demodulized) that mean "this asset has no
+#                  policy", which is a real answer and a passing one. Any other
+#                  error makes the asset UNDECIDABLE and fails the control --
+#                  a denied GetBucketPolicy must never read as "no policy".
+
+aws_iam_role:
+  # iam:ListRoles returns AssumeRolePolicyDocument inline -- it omits only
+  # PermissionsBoundary, RoleLastUsed and Tags (confirmed in the botocore IAM
+  # model's ListRoles documentation), so no second call is needed for the trust
+  # policy. It is URL-encoded; the parser handles that without being told.
+  gem: aws-sdk-iam
+  client: Aws::IAM::Client
+  scope: global
+  list: list_roles
+  collection: roles
+  id: role_name
+  arn: arn
+  document: assume_role_policy_document
+
+aws_iam_policy:
+  # Customer-managed policies only. iam:ListPolicies defaults to `All`, which
+  # includes ~1,200 AWS-managed policies -- several of which legitimately carry
+  # `*` on `*` (AdministratorAccess) and none of which this account can change.
+  # Assessing them would bury every real finding in noise the reader cannot act
+  # on. Scope=Local is the deployed equivalent of Checkov only ever seeing the
+  # policies the Terraform declares.
+  gem: aws-sdk-iam
+  client: Aws::IAM::Client
+  scope: global
+  list: list_policies
+  list_args:
+    scope: Local
+  collection: policies
+  id: policy_name
+  arn: arn
+  fetch:
+    call: get_policy_version
+    args:
+      policy_arn:
+        from: arn
+      version_id:
+        from_item: default_version_id
+    document: policy_version.document
+
+aws_ecr_repository_policy:
+  # ECR repositories are regional. GetRepositoryPolicy raises
+  # RepositoryPolicyNotFoundException when no policy was ever attached, which is
+  # the normal state for a private repository and is a PASS, not an error: a
+  # repository with no policy is not public.
+  gem: aws-sdk-ecr
+  client: Aws::ECR::Client
+  scope: regional
+  list: describe_repositories
+  collection: repositories
+  id: repository_name
+  arn: repository_arn
+  fetch:
+    call: get_repository_policy
+    args:
+      repository_name:
+        from: id
+    document: policy_text
+    absent_when:
+      - RepositoryPolicyNotFoundException

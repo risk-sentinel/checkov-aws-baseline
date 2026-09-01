@@ -60,6 +60,24 @@ CKV2_AWS_14:
   severity: low
   what: an IAM group that contains at least one user, rather than a group carrying permissions that nobody
     holds
+CKV2_AWS_18:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: An EFS file system is usually shared mutable state for several workloads at once, so a bad
+    write reaches all of them and there is no single owner who would notice. Without a recovery point
+    there is nothing to roll back to.
+  severity: medium
 CKV2_AWS_19:
   cci:
   - CCI-000366
@@ -376,6 +394,42 @@ CKV2_AWS_73:
   rationale: Queue payloads encrypted under the AWS-managed key alias/aws/sqs cannot have their key policy,
     rotation schedule or grants controlled by the account, and the key cannot be disabled to revoke access
     in an incident. A customer-managed key makes those decisions the boundary's to make.
+  severity: medium
+CKV2_AWS_8:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.7
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A database cluster with no recovery point cannot be restored. Encryption, deletion protection
+    and multi-AZ all protect availability of the running cluster; only a backup protects against the data
+    itself being wrong, and a backup plan that has never produced a recovery point protects nothing.
+  severity: high
+CKV2_AWS_9:
+  cci:
+  - CCI-000535
+  - CCI-001678
+  impact: 0.5
+  ksi:
+  - KSI-RPL-RCY
+  nist:
+  - CP-9
+  - CP-10
+  nist_r4:
+  - CP-9
+  - CP-10
+  nist_source: agent-drafted
+  rationale: A volume with no recovery point is unrecoverable from corruption, ransomware or a mistaken
+    detach-and-delete. Snapshots taken by hand are not a control, because nothing asserts they were taken;
+    a backup plan that has produced a recovery point is evidence that they were.
   severity: medium
 CKV_AWS_102:
   cci:
@@ -1322,6 +1376,28 @@ CKV_AWS_319:
     notifies nobody. It is the failure mode that looks most like working monitoring, which is why it survives
     unnoticed for so long.
   severity: medium
+CKV_AWS_32:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A repository policy that allows a wildcard principal with no condition makes every image
+    in the repository readable by any AWS account, and by an anonymous caller. Container images routinely
+    carry configuration, embedded credentials and the shape of the internal application, so the exposure
+    is not limited to the code that was intended to be public.
+  severity: high
+  what: 'aws_ecr_repository_policy: the policy document has no Allow statement whose Principal is ''*''
+    or whose Principal.AWS contains ''*'' without a Condition constraining it (Checkov runs cloudsplaining''s
+    internet_accessible_actions, which is the same test with a curated condition allow-list)'
 CKV_AWS_322:
   cci: *id011
   impact: 0.5
@@ -1928,6 +2004,46 @@ CKV_AWS_6:
     traffic is real as soon as the domain is scaled out.'
   severity: high
   what: node-to-node encryption is enabled on any domain with more than one instance
+CKV_AWS_60:
+  cci:
+  - CCI-000213
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-3
+  - AC-6
+  nist_r4:
+  - AC-3
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A trust policy naming a wildcard principal with no condition lets any AWS account assume
+    the role, so every permission attached to it is available to anyone who knows the role ARN. Role ARNs
+    are not secrets — they appear in logs, in error messages and in support tickets — so the trust policy
+    is the only control standing between the account and the permissions the role carries.
+  severity: high
+  what: 'aws_iam_role: the assume_role_policy has no Allow statement whose Principal is ''*'' or whose
+    Principal.AWS contains ''*'' without a Condition — the role may be assumed only by named services
+    or principals'
+CKV_AWS_62:
+  cci:
+  - CCI-000225
+  impact: 0.7
+  ksi:
+  - KSI-IAM-CTL
+  nist:
+  - AC-6
+  nist_r4:
+  - AC-6
+  nist_source: agent-drafted
+  rationale: A customer-managed policy allowing every action on every resource grants administrative access
+    to whatever it is attached to, and defeats least privilege for every identity that holds it. It also
+    removes the ability to reason about blast radius after a credential is compromised, because the answer
+    is always everything.
+  severity: high
+  what: 'aws_iam_policy and the inline-policy types: no policy document has an Allow statement carrying
+    ''*'' in BOTH Action and Resource'
 CKV_AWS_67:
   cci:
   - CCI-000169
@@ -2122,57 +2238,3 @@ CKV_AWS_92:
     which is exactly the traffic an investigation needs.
   severity: medium
   what: an access_logs block is present and not disabled
-CKV2_AWS_8:
-  cci:
-  - CCI-000535
-  - CCI-001678
-  impact: 0.7
-  ksi:
-  - KSI-RPL-RCY
-  nist:
-  - CP-9
-  - CP-10
-  nist_r4:
-  - CP-9
-  - CP-10
-  nist_source: agent-drafted
-  rationale: A database cluster with no recovery point cannot be restored. Encryption, deletion protection
-    and multi-AZ all protect availability of the running cluster; only a backup protects against the
-    data itself being wrong, and a backup plan that has never produced a recovery point protects nothing.
-  severity: high
-CKV2_AWS_9:
-  cci:
-  - CCI-000535
-  - CCI-001678
-  impact: 0.5
-  ksi:
-  - KSI-RPL-RCY
-  nist:
-  - CP-9
-  - CP-10
-  nist_r4:
-  - CP-9
-  - CP-10
-  nist_source: agent-drafted
-  rationale: A volume with no recovery point is unrecoverable from corruption, ransomware or a mistaken
-    detach-and-delete. Snapshots taken by hand are not a control, because nothing asserts they were taken;
-    a backup plan that has produced a recovery point is evidence that they were.
-  severity: medium
-CKV2_AWS_18:
-  cci:
-  - CCI-000535
-  - CCI-001678
-  impact: 0.5
-  ksi:
-  - KSI-RPL-RCY
-  nist:
-  - CP-9
-  - CP-10
-  nist_r4:
-  - CP-9
-  - CP-10
-  nist_source: agent-drafted
-  rationale: An EFS file system is usually shared mutable state for several workloads at once, so a bad
-    write reaches all of them and there is no single owner who would notice. Without a recovery point
-    there is nothing to roll back to.
-  severity: medium
