@@ -43,6 +43,8 @@ import sys
 
 import yaml
 
+import yaml_dump
+
 HERE = pathlib.Path(__file__).resolve().parent
 STAGING = HERE / "staging"
 
@@ -233,8 +235,10 @@ def write_merged(merged, dry_run):
         else:
             doc.update(additions)
             count = len(additions)
-        body = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False, width=100,
-                              allow_unicode=True)
+        # yaml_dump, not yaml.safe_dump: a plain scalar that wraps onto a line
+        # beginning with ":" is a Ruby Symbol to Psych, and tools/lint_api_paths.rb
+        # then cannot load the file at all.
+        body = yaml_dump.dump(doc)
         out = "\n".join(header).rstrip("\n") + "\n" + body if header else body
         if not dry_run:
             path.write_text(out)

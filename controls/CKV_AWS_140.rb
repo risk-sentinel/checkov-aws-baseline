@@ -80,22 +80,36 @@ control 'CKV_AWS_140' do
     end
   end
 
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_rds_global_cluster enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_rds_global_cluster in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
   # A field the API did not return is nil, and nil is not a failing value:
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.
-  in_scope = assets.assets(exempt: exempt)
-                   .reject { |a| a[:storage_encrypted].nil? }
+  in_scope = enumerated
+                        .reject { |a| a[:storage_encrypted].nil? }
 
-  # `!unreadable.empty?` is load-bearing, and its absence was the bug this line
-  # was written to prevent. InSpec's only_if does not merely mark the control
-  # skipped: Inspec::Rule.prepare_checks DISCARDS every check and substitutes a
-  # single no-op, so the enumeration assertion above never runs. A denied
-  # ListX in every region therefore produced zero assets, zero assertions,
-  # impact 0.0 and a "skipped" result — which HDF rolls up as Not Applicable.
-  # The single most likely real failure of this profile reported as "this rule
-  # does not apply here". Same reasoning as `unusable.positive?` in the stock
-  # shape.
-  applicable = !in_scope.empty? || !unreadable.empty?
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_rds_global_cluster in scope expressing this setting') { applicable }

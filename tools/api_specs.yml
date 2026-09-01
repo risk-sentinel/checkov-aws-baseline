@@ -246,25 +246,14 @@ aws_efs_file_system:
   gem: aws-sdk-efs
   id: file_system_id
   list: describe_file_systems
-aws_eks_cluster:
-  arg: name
-  arn: arn
-  client: Aws::EKS::Client
-  collection: cluster
+aws_elb:
+  client: Aws::ElasticLoadBalancing::Client
+  collection: load_balancer_descriptions
   fields:
-    encryption_config: encryption_config
-    endpoint_private_access: resources_vpc_config.endpoint_private_access
-    endpoint_public_access: resources_vpc_config.endpoint_public_access
-    public_access_cidrs: resources_vpc_config.public_access_cidrs
-    status: status
-    version: version
-  gem: aws-sdk-eks
-  id: name
-  list: describe_cluster
-  parent:
-    collection: clusters
-    id: _self
-    list: list_clusters
+    listener_descriptions: listener_descriptions
+  gem: aws-sdk-elasticloadbalancing
+  id: load_balancer_name
+  list: describe_load_balancers
   scope: regional
 aws_emr_cluster:
   arn: cluster_arn
@@ -283,23 +272,6 @@ aws_glue_crawler:
   gem: aws-sdk-glue
   id: name
   list: get_crawlers
-aws_guardduty_detector:
-  arg: detector_id
-  client: Aws::GuardDuty::Client
-  collection: _response
-  fields:
-    cloudtrail_status: data_sources.cloud_trail.status
-    finding_publishing_frequency: finding_publishing_frequency
-    s3_logs_status: data_sources.s3_logs.status
-    status: status
-  gem: aws-sdk-guardduty
-  id: _parent
-  list: get_detector
-  parent:
-    collection: detector_ids
-    id: _self
-    list: list_detectors
-  scope: regional
 aws_kinesis_stream:
   arn: stream_arn
   client: Aws::Kinesis::Client
@@ -399,13 +371,24 @@ aws_secretsmanager_secret:
   gem: aws-sdk-secretsmanager
   id: name
   list: list_secrets
+aws_security_group:
+  arn: security_group_arn
+  client: Aws::EC2::Client
+  collection: security_groups
+  fields:
+    ip_permissions: ip_permissions
+    ip_permissions_egress: ip_permissions_egress
+  gem: aws-sdk-ec2
+  id: group_id
+  list: describe_security_groups
+  scope: regional
 aws_security_group_rule:
   arn: security_group_rule_arn
   client: Aws::EC2::Client
   collection: security_group_rules
   fields:
-    cidr_ipv4: cidr_ipv4
-    cidr_ipv6: cidr_ipv6
+    cidr_ipv_4: cidr_ipv_4
+    cidr_ipv_6: cidr_ipv_6
     description: description
     from_port: from_port
     group_id: group_id

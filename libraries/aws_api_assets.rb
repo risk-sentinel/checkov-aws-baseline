@@ -412,11 +412,11 @@ class AwsApiAssets < AwsResourceBase
     # access block describes a bucket without ever naming it), so the parent id is
     # the row's identity. Interpolated rather than .to_s: to_s can answer nil for a
     # null response, and a nil id crashes the exemption match rather than failing.
-    raw = @spec["id"] == "_parent" ? parent_id : item[@spec["id"].to_sym]
+    raw = @spec["id"] == "_parent" ? parent_id : dig_path(item, @spec["id"])
     row = { id: "#{raw}", region: region || "global",
             account_id: @account_id, type: @type }
     row[:parent_id] = "#{parent_id}" unless parent_id.nil?
-    row[:arn] = item[@spec["arn"].to_sym] if @spec["arn"]
+    row[:arn] = dig_path(item, @spec["arn"]) if @spec["arn"]
     (@spec["fields"] || {}).each { |name, path| row[name.to_sym] = dig_path(item, path) }
     row
   end

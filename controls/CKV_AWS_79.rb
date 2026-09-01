@@ -126,7 +126,7 @@ control 'CKV_AWS_79' do
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
-                   .reject { |a| a[:imds_tokens_or_disabled].nil? }
+                        .reject { |a| a[:imds_tokens_or_disabled].nil? }
 
   # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
   # the assertion above is reachable: only_if suppresses every describe in the

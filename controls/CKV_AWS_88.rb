@@ -103,7 +103,7 @@ control 'CKV_AWS_88' do
   # the asset does not express this setting, so it is out of scope for this
   # check rather than in breach of it.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
-                   .reject { |a| a[:public_ip].nil? }
+                        .reject { |a| a[:public_ip].nil? }
 
   # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
   # the assertion above is reachable: only_if suppresses every describe in the

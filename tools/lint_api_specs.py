@@ -33,6 +33,15 @@ tools/proposals/parentchild.yml drafts five such keys (args, batch,
 absent_errors, per-parent region routing, a third level). None is implemented.
 So an unknown key is refused here rather than ignored at runtime, and the
 refusal names what implementing it would take.
+
+It also asserts the BAKE is current. tools/api_specs.yml is what the linters
+read; libraries/_api_specs.rb is what the reader reads, and only
+tools/render_api_specs.py connects them. When the two drift, every static
+guarantee about the specs -- this lint, and every path tools/lint_api_paths.rb
+resolves against the SDK model -- is a guarantee about a file nothing executes.
+That is not hypothetical: a field removed from the YAML because ListFunctions
+does not return it stayed in the bake, so the reader went on declaring a member
+the lint had just proved absent.
 """
 import argparse
 import pathlib
