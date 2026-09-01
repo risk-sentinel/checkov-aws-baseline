@@ -1,0 +1,191 @@
+# Slice pc-a — the two-step (parent -> child) api reader.
+#
+# Twelve checks were handed to this slice from tools/proposals/parentchild.yml
+# and the parent_child entries in tools/proposals/custom.yml. NONE is mapped.
+#
+# The slice originally shipped one mapping, CKV_AWS_165 on a new
+# aws_dynamodb_global_table two-step spec. An adversarial review withdrew it:
+# every member name in it was right, and the enumeration was still wrong in two
+# independent ways, one of which fails a COMPLIANT account. The full reasoning is
+# recorded in the skip entry rather than in a commit message, because the next
+# pass will otherwise redraft exactly the same spec — it looks correct member by
+# member, which is how it got drafted in the first place.
+#
+# Every member name, required-input list, error set and paginator below was
+# resolved against the SDK model shipped in risksentinel/sparc-auditor:v0.5.0
+# (Seahorse shape walk), not from memory. Note that the auditor image carries no
+# botocore, so any claim sourced from "botocore documents..." was NOT verifiable
+# here; where a request-parameter default mattered it was taken from the AWS API
+# Reference and is cited as such.
+
+skipped:
+
+  # -- the parent list call is not scoped to the region it is issued in -------
+  CKV_AWS_165: >-
+    aws_dynamodb_global_table. WITHDRAWN AFTER REVIEW — this was drafted as a
+    mapped two-step spec (parent dynamodb.ListGlobalTables -> child
+    DescribeContinuousBackups(TableName), collection continuous_backups_description,
+    id _parent, field point_in_time_recovery_description.point_in_time_recovery_status
+    == ENABLED). Every member name in that draft is real and correctly spelled;
+    the spec is still not shippable, for two reasons independent of each other.
+    (1) THE PARENT LEG IS NOT REGION-SCOPED AND THE CHILD LEG IS, so the control
+    fails a COMPLIANT account. ListGlobalTables takes an OPTIONAL RegionName
+    parameter — "Lists the global tables in a specific Region" (AWS API
+    Reference) — and the spec schema has no way to put a literal argument on the
+    parent call at all (`args:` is listed as NOT IMPLEMENTED in
+    tools/api_specs.yml, and is child-side even when it lands). So the call goes
+    out with no RegionName in every region of the walk, and the operation's own
+    summary line — "Lists all global tables that have a replica in the specified
+    Region" — names a Region that was never specified. AWS does not document a
+    fallback to the endpoint's region. If there is no such fallback, then in
+    every region holding no replica the parent leg returns the account's global
+    tables anyway and the child DescribeContinuousBackups raises
+    TableNotFoundException — which is in that operation's declared error set,
+    confirmed on the model. children_of records that per parent in
+    parent_failures, and the generated control asserts parent_failures is empty,
+    so a single v1 global table with PITR correctly enabled in both replica
+    regions FAILS the control once per region it is not replicated into. Loud
+    rather than silent, but wrong, and wrong on the compliant case. This is the
+    same defect tools/api_specs.yml already documents under "parent region
+    routing" for S3 — "an S3 two-step spec will record a parent failure per
+    bucket — loud and wrong, which is the safe direction, but do not ship it that
+    way." The rule applies here unchanged.
+    (2) THE PARENT LEG TRUNCATES SILENTLY. Confirmed on the model:
+    Client.api.operation(:list_global_tables)[:pager] is nil, and the output
+    shape carries last_evaluated_global_table_name — an operation that declares a
+    continuation token and has no paginator to drive it. each_page wraps it in a
+    NullPager and yields exactly one page. The AWS API Reference documents Limit
+    as "if the parameter is not specified DynamoDB defaults to 100", so global
+    table 101 onward is never enumerated, never assessed, and absent renders as
+    Not Applicable, which is a claim. That is the same defect that skips
+    CKV_AWS_240 and CKV_AWS_241 below (firehose, ten per region); the only
+    difference is the size of the bound, and "no account will reach 100
+    deprecated global tables" is an assumption about the account, not a property
+    of the reader.
+    Do NOT redraft this with parent ListTables instead: that enumerates every
+    table in the region, duplicating CKV_AWS_28 (live, stock reader,
+    aws_dynamodb_table.point_in_time_recovery) while failing ordinary tables
+    under a rule whose subject is global tables.
+    Two further things to carry forward if a parent-side literal-argument
+    capability lands and this is re-opened. First,
+    PointInTimeRecoveryDescription is OPTIONAL on ContinuousBackupsDescription —
+    confirmed, required is [continuous_backups_status] alone — so a response
+    omitting it yields a nil field, the control's nil filter drops the row, and
+    the control renders Not Applicable instead of failing; that needs confirming
+    against a real response before it ships. Second, do not assert
+    continuous_backups_status instead: it is ENABLED for every table that exists,
+    so a control built on it could never fail. Worth recording either way:
+    Checkov's own CKV_AWS_165 is a placeholder whose scan_resource_conf returns
+    PASSED unconditionally, so any deployed version of this rule is the only one
+    that assesses anything.
+
+  # -- a third level, and a child call taking two arguments ------------------
+  CKV_AWS_59: >-
+    aws_api_gateway_method. Reaching a method is GetRestApis -> GetResources(restApiId)
+    -> GetMethod(restApiId, resourceId, httpMethod): three levels, and the third
+    call takes two required arguments (confirmed: GetMethod required inputs are
+    [:rest_api_id, :resource_id, :http_method]). GetResources can inline
+    resourceMethods, but only when embed=["methods"] is passed, which is a literal
+    child argument (`args:`) the schema deliberately does not carry. Needs BOTH
+    `parents:` and `args:`, so depth alone would not unlock it.
+  CKV_AWS_100: >-
+    aws_eks_node_group. Confirmed against Aws::EKS::Client: ListClusters takes no
+    required arguments, ListNodegroups requires [:cluster_name] and returns
+    `nodegroups`, a list of NAMES only, and DescribeNodegroup requires
+    [:cluster_name, :nodegroup_name]. remoteAccess.ec2SshKey and
+    remoteAccess.sourceSecurityGroups exist nowhere but DescribeNodegroup, so this
+    needs `parents:` (depth 3) AND a two-argument child. The assertion is also
+    conditional — an SSH key with no source SG is the violation, an absent key is
+    out of scope — which is the conditional_scope gap on top.
+  CKV_AWS_265: >-
+    aws_keyspaces_table. Confirmed against Aws::Keyspaces::Client: ListKeyspaces
+    takes no required arguments, ListTables requires [:keyspace_name] and its
+    TableSummary carries only keyspace_name/table_name/resource_arn, and GetTable
+    requires [:keyspace_name, :table_name]. encryption_specification is a member
+    of the GetTable response and of nothing else, so this is depth 3 plus a
+    two-argument child.
+  CKV_AWS_332: >-
+    aws_ecs_service. Confirmed against Aws::ECS::Client: DescribeServices requires
+    [:services] — a LIST, so it needs `batch:` — and also takes `cluster`, which
+    is not optional in practice because ListServices without a cluster only
+    enumerates the default cluster. So the honest path is ListClusters ->
+    ListServices(cluster) -> DescribeServices(cluster, services): depth 3, a
+    two-argument child, and a list-valued argument. Three missing features, not
+    one.
+
+  # -- the child returns a JSON string, not a structure ----------------------
+  CKV_AWS_112: >-
+    aws_ssm_document. THE PROPOSAL'S REASON FOR THIS ONE IS WRONG: tools/proposals/
+    parentchild.yml skips it as "SSM document is not public ... DescribeDocumentPermission
+    requires PermissionType", which is CKV_AWS_303's check, not this one.
+    CKV_AWS_112 is "Ensure Session Manager data is encrypted in transit", and the
+    real path is ListDocuments (no required arguments) -> GetDocument(Name).
+    Confirmed against Aws::SSM::Client: GetDocument requires [:name] and its
+    `content` member is a StringShape — the document body as JSON or YAML — and
+    the assertion is inputs.kmsKeyId inside it. That needs a json_path capability
+    the reader does not have, plus a `when` scope on document_type == 'Session'.
+    The vendored aws_ssm_document resource calls DescribeDocument, which returns
+    metadata only and never the body.
+  CKV_AWS_171: >-
+    aws_emr_security_configuration. Confirmed against Aws::EMR::Client:
+    ListSecurityConfigurations takes no required arguments and paginates, and
+    DescribeSecurityConfiguration(Name) returns `security_configuration` as a
+    StringShape — the whole configuration as a JSON string. EncryptionConfiguration
+    .AtRestEncryptionConfiguration.S3EncryptionConfiguration.EncryptionMode lives
+    inside that string. Matching it with a regex would be a brittle control that
+    reads as precise, so this waits on json_path.
+  CKV_AWS_257: >-
+    aws_codecommit_approval_rule_template. Confirmed against Aws::CodeCommit::Client:
+    ListApprovalRuleTemplates takes no required arguments and paginates, and
+    GetApprovalRuleTemplate(approvalRuleTemplateName) returns
+    approvalRuleTemplate.approval_rule_template_content as a StringShape. The
+    "at least 2 approvals" number is the NumberOfApprovalsNeeded key inside that
+    JSON, so this needs json_path plus a numeric comparison on the extracted
+    value.
+
+  # -- the parent list call truncates, silently ------------------------------
+  CKV_AWS_240: >-
+    aws_kinesis_firehose_delivery_stream. The two-step shape is mechanically
+    correct and every member checks out (DeliveryStreamDescription.
+    DeliveryStreamEncryptionConfiguration.{status,key_type,key_arn}), which is
+    why tools/proposals/parentchild.yml drafted it — but the PARENT leg does not
+    enumerate the account. Confirmed on the model: firehose.ListDeliveryStreams
+    has NO paginator (Client.api.operation(:list_delivery_streams)[:pager] is
+    nil) while its output carries `has_more_delivery_streams` and its input
+    carries `exclusive_start_delivery_stream_name` — an operation that declares a
+    continuation protocol with nothing to drive it — and the AWS API Reference
+    documents its Limit default as 10. So the reader would read the first ten
+    delivery streams in each region, stop, and report on them as though they were
+    all of them; every stream past the tenth is absent, and absent renders as Not
+    Applicable, which is a claim. Unblocking it needs a literal argument on the
+    PARENT list call (Limit: 10000) — not even the `args:` gap that is already
+    documented, since that one applies to the child call.
+  CKV_AWS_241: >-
+    Same firehose.ListDeliveryStreams truncation as CKV_AWS_240 — ten streams per
+    region, silently. The field itself is confirmed
+    (delivery_stream_encryption_configuration.key_type, enum
+    [AWS_OWNED_CMK, CUSTOMER_MANAGED_CMK]).
+
+  # -- the spec would have to REPLACE a live one -----------------------------
+  CKV_AWS_357: >-
+    aws_transfer_server. The two-step is confirmed correct: Aws::Transfer::Client
+    ListServers takes no required arguments and paginates, its ListedServer
+    carries only [arn, domain, identity_provider_type, endpoint_type,
+    logging_role, server_id, state, user_count], and DescribeServer(ServerId)
+    returns a DescribedServer that additionally carries `protocols` and
+    `security_policy_name`. But render_controls derives the api spec key from the
+    Terraform type, so this spec must be keyed aws_transfer_server — and
+    tools/api_specs.yml ALREADY has a live one-step aws_transfer_server spec
+    (list_servers / collection servers / id server_id / arn arn / fields
+    endpoint_type + identity_provider_type). merge_proposals.py refuses "api spec
+    already live", correctly: a staging file must not silently replace an
+    exec-validated entry. The replacement is safe on its face — both live fields
+    are members of DescribedServer too, so CKV_AWS_164 keeps working — but it is a
+    change to a live file and belongs in its own reviewed commit, not in a slice.
+    Re-open CKV_AWS_357 and CKV_AWS_380 the moment that lands.
+  CKV_AWS_380: >-
+    Same live-spec collision as CKV_AWS_357. The assertion would be
+    security_policy_name != TransferSecurityPolicy-2018-11 on the DescribeServer
+    row; DescribeServer always returns SecurityPolicyName, so a presence check
+    would be unfailable and the named-policy comparison is the only meaningful
+    form.

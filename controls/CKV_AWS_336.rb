@@ -2,30 +2,96 @@
 #
 # Rule:        CKV_AWS_336 (checkov 3.3.16)
 # Applies to:  aws_ecs_task_definition
-# Status:      PLANNED — no deployed-asset reader exists for aws_ecs_task_definition yet.
+# Read with:   aws_api_assets (two-step parent -> child spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_336'] || []
+
+# Conditions applied to each ELEMENT of the collection this check judges.
+# An element matches when EVERY condition holds; a condition holds when SOME
+# value reachable at ANY of its paths satisfies the test. `when_absent` is the
+# verdict when a path reaches nothing at all, which is how a member the API
+# omits is given its documented meaning. Generated from resource_map.yml by
+# tools/render_controls.py; the walk is libraries/_checkov_collection.rb.
+element_conditions = [
+  # readonly_root_filesystem == True
+  { paths: ['readonly_root_filesystem'],
+    test: ->(v) { v == true } },
+].freeze
 
 control 'CKV_AWS_336' do
-  impact 0.0
   title 'Ensure ECS containers are limited to read-only access to root filesystems'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_ecs_task_definition in this profile, so there is nothing to assert against.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_ecs_task_definition resources that actually exist, enumerated
+    through the two-step (parent -> child) declarative API spec.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov reads whatever revisions the Terraform declares. This reads the
+    latest ACTIVE revision of every task-definition family registered in the
+    account, which is the definition a new task will actually run, and it
+    sees families registered by a pipeline or by hand that no HCL in the
+    repository describes.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A writable root filesystem lets anything that achieves execution inside
+    the container drop a payload, modify a binary or install persistence,
+    and the change survives for the life of the task while being invisible
+    to image scanning, which only ever looked at the image. Read-only roots
+    remove that step entirely; writable state belongs in a declared volume,
+    which is auditable in a way an arbitrary write is not.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure ECS containers are limited to read-only access to root filesystems
+    Checkov looks for: aws_ecs_task_definition: a container definition in
+    the latest ACTIVE revision of a task-definition family whose
+    readonlyRootFilesystem is not true — including the common case where the
+    member is absent because it was never set.
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition
+    Terraform — aws_ecs_task_definition:
+
+      resource "aws_ecs_task_definition" "example" {
+        family = "example"
+
+        container_definitions = jsonencode([
+          {
+            name                   = "app"
+            image                  = var.image
+            essential              = true
+            readonlyRootFilesystem = true
+
+            # Everything the process needs to write goes in a declared mount,
+            # so the writes are visible in the task definition instead of
+            # landing anywhere in the container's filesystem.
+            mountPoints = [
+              { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+            ]
+          },
+        ])
+
+        volume {
+          name = "tmp"
+        }
+      }
+
+    Out of band — aws_ecs_task_definition:
+
+      aws ecs register-task-definition --cli-input-json file://task-definition.json
+
+    Note (aws_ecs_task_definition): A task definition revision is immutable, so
+    there is no in-place fix — the change is a new revision plus an update of
+    every service that references the family, and running tasks keep the old
+    revision until they are replaced. Expect the first attempt to crash:
+    application servers, language runtimes and agents write to paths nobody
+    documents, and the way to find them is to run the read-only revision in a
+    non-production environment and add a declared volume for each path that
+    fails, rather than reverting the flag.
   FIX
 
   tag checkov_id:            'CKV_AWS_336'
@@ -34,9 +100,99 @@ control 'CKV_AWS_336' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_ecs_task_definition]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition'
-  tag implementation_status: 'planned'
+  tag nist:                  ['CM-7']
+  tag nist_r4:               ['CM-7']
+  tag cci:                   ['CCI-000381']
+  tag ksi:                   ['KSI-CMT-CFG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_336 — no deployed-asset reader for aws_ecs_task_definition" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_ecs_task_definition', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_ecs_task_definition enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A child list call that failed took a whole SUBTREE with it. That is not
+  # "this parent had nothing", and it must never render as one: it is reported
+  # per parent here, and it keeps the control APPLICABLE below so that only_if
+  # cannot turn a broken enumeration into "does not apply here".
+  parent_failures = assets.parent_failures
+  unless parent_failures.empty?
+    describe "aws_ecs_task_definition enumeration" do
+      it 'read the children of every parent it enumerated' do
+        expect(parent_failures.map { |f| "#{f[:region]}/#{f[:parent_id]}: #{f[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_ecs_task_definition enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_ecs_task_definition in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
+  # A collection roll-up is not nil-filtered: an asset that does not
+  # express the field is part of the population the guard below counts,
+  # and for any_of it is precisely the failing case.
+  in_scope = enumerated
+
+  # all_of is vacuously TRUE over an empty collection, so an asset that did
+  # not carry this field passes without being examined. For one asset with no
+  # elements that is the right answer; when it is EVERY asset the control can no
+  # longer fail, and a control that cannot fail reads as compliant rather than as
+  # a mapping naming a field this API does not return. The condition paths one
+  # level down are checked statically instead — tools/lint_api_paths.rb.
+  exposing = in_scope.count { |a| !a[:container_definitions].nil? }
+
+  describe 'aws_ecs_task_definition container_definitions' do
+    it 'was returned for at least one asset in scope' do
+      expect(exposing).to be_positive,
+        'no asset in scope exposed container_definitions, so the roll-up below cannot fail: '\
+        'either tools/api_specs.yml names a field this API does not return, or '\
+        'nothing in this boundary expresses it'
+    end
+  end
+
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive? || !parent_failures.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if("no aws_ecs_task_definition in scope expressing this setting "\
+          "(#{assets.parents_seen} parent(s) enumerated by list_task_definition_families)") { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_ecs_task_definition #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:container_definitions] }
+      it { should satisfy("have only elements where readonly_root_filesystem == True") { |v| ::CheckovCollection.all_of?(v, element_conditions) } }
+    end
   end
 end

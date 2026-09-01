@@ -153,6 +153,25 @@ aws_cloudtrail:
   id: name
   list: describe_trails
   scope: regional
+aws_cloudtrail_event_data_store:
+  arg: event_data_store
+  arn: event_data_store_arn
+  client: Aws::CloudTrail::Client
+  collection: _response
+  fields:
+    kms_key_id: kms_key_id
+    multi_region_enabled: multi_region_enabled
+    retention_period: retention_period
+    status: status
+    termination_protection_enabled: termination_protection_enabled
+  gem: aws-sdk-cloudtrail
+  id: name
+  list: get_event_data_store
+  parent:
+    collection: event_data_stores
+    id: event_data_store_arn
+    list: list_event_data_stores
+  scope: regional
 aws_cloudwatch_log_group:
   arn: arn
   client: Aws::CloudWatchLogs::Client
@@ -244,6 +263,21 @@ aws_ecr_repository:
   gem: aws-sdk-ecr
   id: repository_name
   list: describe_repositories
+aws_ecs_task_definition:
+  arg: task_definition
+  arn: task_definition_arn
+  client: Aws::ECS::Client
+  collection: task_definition
+  fields:
+    container_definitions: container_definitions
+  gem: aws-sdk-ecs
+  id: task_definition_arn
+  list: describe_task_definition
+  parent:
+    collection: families
+    id: _self
+    list: list_task_definition_families
+  scope: regional
 aws_efs_access_point:
   arn: access_point_arn
   client: Aws::EFS::Client
@@ -314,6 +348,15 @@ aws_glue_crawler:
   gem: aws-sdk-glue
   id: name
   list: get_crawlers
+aws_glue_security_configuration:
+  client: Aws::Glue::Client
+  collection: security_configurations
+  fields:
+    encryption_configuration: encryption_configuration
+  gem: aws-sdk-glue
+  id: name
+  list: get_security_configurations
+  scope: regional
 aws_guardduty_detector:
   arg: detector_id
   client: Aws::GuardDuty::Client
@@ -331,6 +374,22 @@ aws_guardduty_detector:
     id: _self
     list: list_detectors
   scope: regional
+aws_iam_role_policy_attachment:
+  arg: role_name
+  arn: policy_arn
+  client: Aws::IAM::Client
+  collection: attached_policies
+  fields:
+    policy_arn: policy_arn
+    policy_name: policy_name
+  gem: aws-sdk-iam
+  id: _parent
+  list: list_attached_role_policies
+  parent:
+    collection: roles
+    id: role_name
+    list: list_roles
+  scope: global
 aws_kinesis_stream:
   arn: stream_arn
   client: Aws::Kinesis::Client
@@ -351,6 +410,44 @@ aws_lambda_function:
   gem: aws-sdk-lambda
   id: function_name
   list: list_functions
+aws_lambda_function_url:
+  arg: function_name
+  arn: function_arn
+  client: Aws::Lambda::Client
+  collection: function_url_configs
+  fields:
+    auth_type: auth_type
+    cors_allow_credentials: cors.allow_credentials
+    cors_allow_methods: cors.allow_methods
+    cors_allow_origins: cors.allow_origins
+    invoke_mode: invoke_mode
+  gem: aws-sdk-lambda
+  id: function_url
+  list: list_function_url_configs
+  parent:
+    collection: functions
+    id: function_name
+    list: list_functions
+  scope: regional
+aws_lb_listener:
+  arg: load_balancer_arn
+  arn: listener_arn
+  client: Aws::ElasticLoadBalancingV2::Client
+  collection: listeners
+  fields:
+    alpn_policy: alpn_policy
+    mutual_authentication_mode: mutual_authentication.mode
+    port: port
+    protocol: protocol
+    ssl_policy: ssl_policy
+  gem: aws-sdk-elasticloadbalancingv2
+  id: listener_arn
+  list: describe_listeners
+  parent:
+    collection: load_balancers
+    id: load_balancer_arn
+    list: describe_load_balancers
+  scope: regional
 aws_memorydb_cluster:
   arn: arn
   client: Aws::MemoryDB::Client
@@ -390,6 +487,17 @@ aws_msk_cluster:
   id: cluster_name
   list: list_clusters
   scope: regional
+aws_network_acl:
+  client: Aws::EC2::Client
+  collection: network_acls
+  fields:
+    entries: entries
+    is_default: is_default
+    vpc_id: vpc_id
+  gem: aws-sdk-ec2
+  id: network_acl_id
+  list: describe_network_acls
+  scope: regional
 aws_networkfirewall_firewall:
   arn: firewall_arn
   client: Aws::NetworkFirewall::Client
@@ -421,6 +529,20 @@ aws_rds_global_cluster:
   id: global_cluster_identifier
   list: describe_global_clusters
   scope: regional
+aws_redshift_parameter_group:
+  arg: parameter_group_name
+  client: Aws::Redshift::Client
+  collection: _response
+  fields:
+    parameters: parameters
+  gem: aws-sdk-redshift
+  id: _parent
+  list: describe_cluster_parameters
+  parent:
+    collection: parameter_groups
+    id: parameter_group_name
+    list: describe_cluster_parameter_groups
+  scope: regional
 aws_route53domains_registered_domain:
   client: Aws::Route53Domains::Client
   collection: domains
@@ -438,6 +560,16 @@ aws_secretsmanager_secret:
   fields:
     kms_key_id: kms_key_id
     rotation_enabled: rotation_enabled
+  gem: aws-sdk-secretsmanager
+  id: name
+  list: list_secrets
+aws_secretsmanager_secret_rotation:
+  arn: arn
+  client: Aws::SecretsManager::Client
+  collection: secret_list
+  fields:
+    rotation_enabled: rotation_enabled
+    rotation_interval_days: rotation_rules.automatically_after_days
   gem: aws-sdk-secretsmanager
   id: name
   list: list_secrets

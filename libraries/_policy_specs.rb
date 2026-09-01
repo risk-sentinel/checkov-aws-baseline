@@ -6,37 +6,29 @@
 # key means.
 POLICY_SPECS = {
   'aws_ecr_repository_policy' => {
-    'gem' => 'aws-sdk-ecr',
-    'client' => 'Aws::ECR::Client',
-    'scope' => 'regional',
-    'list' => 'describe_repositories',
-    'collection' => 'repositories',
-    'id' => 'repository_name',
     'arn' => 'repository_arn',
+    'client' => 'Aws::ECR::Client',
+    'collection' => 'repositories',
     'fetch' => {
-      'call' => 'get_repository_policy',
+      'absent_when' => ['RepositoryPolicyNotFoundException'],
       'args' => {
         'repository_name' => {
           'from' => 'id'
         }
       },
-      'document' => 'policy_text',
-      'absent_when' => ['RepositoryPolicyNotFoundException']
-    }
+      'call' => 'get_repository_policy',
+      'document' => 'policy_text'
+    },
+    'gem' => 'aws-sdk-ecr',
+    'id' => 'repository_name',
+    'list' => 'describe_repositories',
+    'scope' => 'regional'
   },
   'aws_iam_policy' => {
-    'gem' => 'aws-sdk-iam',
-    'client' => 'Aws::IAM::Client',
-    'scope' => 'global',
-    'list' => 'list_policies',
-    'list_args' => {
-      'scope' => 'Local'
-    },
-    'collection' => 'policies',
-    'id' => 'policy_name',
     'arn' => 'arn',
+    'client' => 'Aws::IAM::Client',
+    'collection' => 'policies',
     'fetch' => {
-      'call' => 'get_policy_version',
       'args' => {
         'policy_arn' => {
           'from' => 'arn'
@@ -45,17 +37,62 @@ POLICY_SPECS = {
           'from_item' => 'default_version_id'
         }
       },
+      'call' => 'get_policy_version',
       'document' => 'policy_version.document'
-    }
+    },
+    'gem' => 'aws-sdk-iam',
+    'id' => 'policy_name',
+    'list' => 'list_policies',
+    'list_args' => {
+      'scope' => 'Local'
+    },
+    'scope' => 'global'
   },
   'aws_iam_role' => {
-    'gem' => 'aws-sdk-iam',
-    'client' => 'Aws::IAM::Client',
-    'scope' => 'global',
-    'list' => 'list_roles',
-    'collection' => 'roles',
-    'id' => 'role_name',
     'arn' => 'arn',
-    'document' => 'assume_role_policy_document'
+    'client' => 'Aws::IAM::Client',
+    'collection' => 'roles',
+    'document' => 'assume_role_policy_document',
+    'gem' => 'aws-sdk-iam',
+    'id' => 'role_name',
+    'list' => 'list_roles',
+    'scope' => 'global'
+  },
+  'aws_kms_key' => {
+    'arn' => 'key_arn',
+    'client' => 'Aws::KMS::Client',
+    'collection' => 'keys',
+    'fetch' => {
+      'args' => {
+        'key_id' => {
+          'from' => 'id'
+        },
+        'policy_name' => 'default'
+      },
+      'call' => 'get_key_policy',
+      'document' => 'policy'
+    },
+    'gem' => 'aws-sdk-kms',
+    'id' => 'key_id',
+    'list' => 'list_keys',
+    'scope' => 'regional'
+  },
+  'aws_sns_topic_policy' => {
+    'arn' => 'topic_arn',
+    'client' => 'Aws::SNS::Client',
+    'collection' => 'topics',
+    'fetch' => {
+      'args' => {
+        'topic_arn' => {
+          'from' => 'arn'
+        }
+      },
+      'call' => 'get_topic_attributes',
+      'document' => 'attributes.Policy'
+    },
+    'gem' => 'aws-sdk-sns',
+    'id' => 'topic_arn',
+    'list' => 'list_topics',
+    'scope' => 'regional'
   },
 }.freeze

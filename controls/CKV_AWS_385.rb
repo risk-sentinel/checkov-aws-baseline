@@ -2,30 +2,97 @@
 #
 # Rule:        CKV_AWS_385 (checkov 3.3.16)
 # Applies to:  aws_sns_topic_policy
-# Status:      PLANNED — no deployed-asset reader exists for aws_sns_topic_policy yet.
+# Read with:   aws_policy_documents — aws_sns_topic_policy → no_cross_account_principal_without_condition
+#              predicate: libraries/_policy_document.rb
+#              fetch:     tools/policy_specs.yml
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_385'] || []
 
 control 'CKV_AWS_385' do
-  impact 0.0
   title 'Ensure AWS SNS topic policies do not allow cross-account access'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_sns_topic_policy in this profile, so there is nothing to assert against.
+    Checkov asserts this against the policy document in the Terraform. This
+    profile fetches the policy AWS actually has on each aws_sns_topic_policy
+    and evaluates the same question over its statements: no Allow statement
+    grants another account with no Condition.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Different from Checkov rather than uniformly stronger, and the
+    difference runs both ways. Stronger: the HCL scan sees an account number
+    as an opaque string, while this compares it against
+    sts:GetCallerIdentity and reports only genuinely external accounts, in
+    any partition; and it sees the cross-account statements a subscription
+    flow appended that the Terraform never described. Narrower: Checkov's
+    SNSCrossAccountAccess fails on any concrete arn:aws:iam:: principal with
+    no Condition INCLUDING one in the scanning account, and this does not
+    report those. That narrowing is deliberate — the rule's subject is
+    cross-account access — but it is a narrowing, so an assessor comparing
+    the two results will find same-account unconditioned grants here that
+    Checkov flagged.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A cross-account grant is an interconnection with a system this
+    authorization boundary does not contain, and an unconditioned one has no
+    documented limit on what the far side may do or for how long. It is the
+    kind of access that outlives the project that needed it — the far
+    account keeps the grant after the integration is retired, and nothing in
+    this account's own configuration records that the relationship ever
+    ended.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS SNS topic policies do not allow cross-account access
+    Checkov looks for: aws_sns_topic_policy: no Allow statement names a
+    concrete principal in an account other than the one being scanned
+    without any Condition on the statement. Checkov's SNSCrossAccountAccess
+    is broader in one direction and narrower in another: it fails on ANY
+    concrete arn:aws:iam:: principal with no Condition, including one in the
+    scanning account, and it matches only the commercial partition's ARN
+    prefix. This compares the principal's account against
+    sts:GetCallerIdentity and reports only genuinely external ones, in any
+    partition — so a same-account unconditioned role grant passes here and
+    fails in Checkov
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_policy
+    Terraform — aws_sns_topic_policy:
+
+      resource "aws_sns_topic_policy" "app" {
+        arn = aws_sns_topic.app.arn
+
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [
+            {
+              Sid       = "PartnerSubscribe"
+              Effect    = "Allow"
+              Principal = { AWS = "arn:aws:iam::${var.partner_account_id}:role/consumer" }
+              Action    = ["SNS:Subscribe", "SNS:Receive"]
+              Resource  = aws_sns_topic.app.arn
+              Condition = {
+                StringEquals = { "aws:PrincipalOrgID" = var.organization_id }
+              }
+            },
+          ]
+        })
+      }
+
+    Out of band — aws_sns_topic_policy:
+
+      aws sns set-topic-attributes --topic-arn <topic-arn> --attribute-name Policy --attribute-value file://topic-policy.json
+
+    Note (aws_sns_topic_policy): Either remove the cross-account statement or
+    constrain it. aws:PrincipalOrgID is the usual constraint inside an
+    organization and keeps working as accounts are added and removed;
+    aws:SourceArn, aws:SourceAccount and aws:PrincipalArn are the alternatives
+    when the far side is not an org member. Any Condition takes the statement
+    out of this control's scope, which mirrors what Checkov allows — so write
+    the condition that actually expresses the agreement rather than the shortest
+    one that clears the check, because nothing downstream will re-examine it.
   FIX
 
   tag checkov_id:            'CKV_AWS_385'
@@ -34,9 +101,72 @@ control 'CKV_AWS_385' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_sns_topic_policy]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_policy'
-  tag implementation_status: 'planned'
+  tag policy_source:         'aws_sns_topic_policy'
+  tag policy_predicate:      'no_cross_account_principal_without_condition'
+  tag nist:                  ['AC-3', 'AC-6', 'CA-3']
+  tag nist_r4:               ['AC-3', 'AC-6', 'CA-3']
+  tag cci:                   ['CCI-000213', 'CCI-000225']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_385 — no deployed-asset reader for aws_sns_topic_policy" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_policy_documents(type: 'aws_sns_topic_policy', source: 'aws_sns_topic_policy',
+                                predicate: 'no_cross_account_principal_without_condition', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A denied call or an unreachable endpoint ends up
+  # here, and without this assertion it renders as "no assets" and the control
+  # reports Not Applicable: the worst case reported as "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe 'aws_sns_topic_policy enumeration' do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # An asset whose policy could not be read or parsed has NO VERDICT. It is not
+  # in `assets` below, because a nil offender list compared against [] would
+  # pass — a denied GetPolicy silently reporting the least-visible estate as the
+  # cleanest one. It fails here instead, naming the asset and the reason.
+  #
+  # An asset with no policy at all is NOT here: that is a real answer and a
+  # passing one, recorded on the row as policy_present: false.
+  undecidable = assets.undecidable
+  unless undecidable.empty?
+    describe 'aws_sns_topic_policy policy documents' do
+      it 'could all be read and parsed' do
+        expect(undecidable).to be_empty
+      end
+    end
+  end
+
+  in_scope = assets.assets(exempt: exempt)
+
+  # Both failure lists keep the control APPLICABLE. only_if suppresses the whole
+  # control, including the two assertions above, so a guard that skips when the
+  # enumeration broke is no guard at all: it would suppress exactly the case it
+  # exists to catch.
+  applicable = !in_scope.empty? || !undecidable.empty? || !unreadable.empty?
+
+  # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
+  # on the argument node, and a ternary is an IfNode with none — it aborts
+  # `check` for the whole profile before a single control runs.
+  impact 0.5
+  impact 0.0 unless applicable
+
+  only_if('no aws_sns_topic_policy in scope') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_sns_topic_policy #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      it 'no Allow statement grants another account with no Condition' do
+        expect(asset[:offenders]).to eq([]),
+          "#{asset[:offenders].length} offending statement(s) — " \
+          "#{asset[:offenders].join(' | ')}"
+      end
+    end
   end
 end

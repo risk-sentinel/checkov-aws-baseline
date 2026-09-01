@@ -58,6 +58,14 @@ CKV2_AWS_22:
     terraform: "# The fix is the ABSENCE of a login profile. Remove any\n# aws_iam_user_login_profile\
       \ for this user and let humans reach the\n# console through federation instead.\nresource \"aws_iam_user\"\
       \ \"svc\" {\n  name = \"svc-deploy\"\n  tags = { console_access = \"none\" }\n}\n"
+CKV2_AWS_3:
+  aws_guardduty_detector:
+    cli: "aws guardduty create-detector --enable --finding-publishing-frequency FIFTEEN_MINUTES\n"
+    note: GuardDuty is per-region; enable it in every region in use, not only the primary.
+    terraform: "resource \"aws_guardduty_detector\" \"example\" {\n  enable                       = true\n\
+      \  finding_publishing_frequency = \"FIFTEEN_MINUTES\"\n\n  datasources {\n    s3_logs { enable =\
+      \ true }\n    kubernetes { audit_logs { enable = true } }\n    malware_protection {\n      scan_ec2_instance_with_findings\
+      \ { ebs_volumes { enable = true } }\n    }\n  }\n}\n"
 CKV2_AWS_32:
   aws_cloudfront_distribution:
     note: 'There is no single CLI call for this. The distribution config is read-modify-written whole:
@@ -131,6 +139,18 @@ CKV2_AWS_50:
       \ \"example\"\n  description          = \"example\"\n  node_type            = \"cache.t4g.medium\"\
       \n\n  automatic_failover_enabled = true\n  multi_az_enabled           = true\n  num_cache_clusters\
       \         = 2\n}\n"
+CKV2_AWS_51:
+  aws_api_gateway_stage:
+    cli: "aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/clientCertificateId,value=<client-cert-id>\n"
+    terraform: "resource \"aws_api_gateway_client_certificate\" \"example\" {\n  description = \"backend\
+      \ mTLS\"\n}\n\nresource \"aws_api_gateway_stage\" \"example\" {\n  rest_api_id           = aws_api_gateway_rest_api.example.id\n\
+      \  deployment_id         = aws_api_gateway_deployment.example.id\n  stage_name            = \"prod\"\
+      \n  client_certificate_id = aws_api_gateway_client_certificate.example.id\n}\n"
+  aws_apigatewayv2_stage:
+    cli: "aws apigatewayv2 update-stage --api-id <api-id> --stage-name prod --client-certificate-id <client-cert-id>\n"
+    terraform: "resource \"aws_apigatewayv2_stage\" \"example\" {\n  api_id                = aws_apigatewayv2_api.example.id\n\
+      \  name                  = \"prod\"\n  client_certificate_id = aws_api_gateway_client_certificate.example.id\n\
+      }\n"
 CKV2_AWS_52:
   aws_elasticsearch_domain:
     terraform: "resource \"aws_elasticsearch_domain\" \"example\" {\n  domain_name = \"example\"\n\n \
@@ -271,6 +291,28 @@ CKV2_AWS_73:
       \ encryption\"\n  enable_key_rotation     = true\n  deletion_window_in_days = 30\n}\n\nresource\
       \ \"aws_sqs_queue\" \"example\" {\n  name                              = \"example\"\n  kms_master_key_id\
       \                 = aws_kms_key.sqs.arn\n  kms_data_key_reuse_period_seconds = 300\n}\n"
+CKV2_AWS_74:
+  aws_alb_listener:
+    cli: "aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-2021-06\n"
+    terraform: "resource \"aws_alb_listener\" \"https\" {\n  load_balancer_arn = aws_alb.example.arn\n\
+      \  port              = 443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-Res-2021-06\"\
+      \n  certificate_arn   = aws_acm_certificate.example.arn\n\n  default_action {\n    type        \
+      \     = \"forward\"\n    target_group_arn = aws_alb_target_group.example.arn\n  }\n}\n"
+  aws_lb_listener:
+    cli: "aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-2021-06\n"
+    note: ELBSecurityPolicy-2016-08 is the ELBv2 default, so a listener that never set ssl_policy explicitly
+      is on a weak policy.
+    terraform: "resource \"aws_lb_listener\" \"https\" {\n  load_balancer_arn = aws_lb.example.arn\n \
+      \ port              = 443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-Res-2021-06\"\
+      \n  certificate_arn   = aws_acm_certificate.example.arn\n\n  default_action {\n    type        \
+      \     = \"forward\"\n    target_group_arn = aws_lb_target_group.example.arn\n  }\n}\n"
+CKV2_AWS_75:
+  aws_lambda_function_url:
+    cli: "aws lambda update-function-url-config --function-name app --cors AllowOrigins=https://app.example.com,AllowMethods=GET,AllowMethods=POST\n"
+    terraform: "resource \"aws_lambda_function_url\" \"example\" {\n  function_name      = aws_lambda_function.app.function_name\n\
+      \  authorization_type = \"AWS_IAM\"\n\n  cors {\n    allow_origins = [\"https://app.example.com\"\
+      ]\n    allow_methods = [\"GET\", \"POST\"]\n    allow_headers = [\"content-type\", \"authorization\"\
+      ]\n    max_age       = 300\n  }\n}\n"
 CKV2_AWS_8:
   aws_rds_cluster:
     cli: "aws backup start-backup-job --backup-vault-name <vault> --resource-arn <cluster-arn> --iam-role-arn\
@@ -310,6 +352,33 @@ CKV_AWS_102:
     terraform: "resource \"aws_neptune_cluster_instance\" \"graph\" {\n  identifier          = \"graph-1\"\
       \n  cluster_identifier  = aws_neptune_cluster.graph.id\n  instance_class      = \"db.r5.large\"\n\
       \  publicly_accessible = false\n}\n"
+CKV_AWS_103:
+  aws_alb_listener:
+    cli: "aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06\n"
+    terraform: "resource \"aws_alb_listener\" \"https\" {\n  load_balancer_arn = aws_alb.example.arn\n\
+      \  port              = 443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"\
+      \n  certificate_arn   = aws_acm_certificate.example.arn\n\n  default_action {\n    type        \
+      \     = \"forward\"\n    target_group_arn = aws_alb_target_group.example.arn\n  }\n}\n"
+  aws_lb_listener:
+    cli: "aws elbv2 modify-listener --listener-arn <listener-arn> --ssl-policy ELBSecurityPolicy-TLS13-1-2-2021-06\n"
+    terraform: "resource \"aws_lb_listener\" \"https\" {\n  load_balancer_arn = aws_lb.example.arn\n \
+      \ port              = 443\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"\
+      \n  certificate_arn   = aws_acm_certificate.example.arn\n\n  default_action {\n    type        \
+      \     = \"forward\"\n    target_group_arn = aws_lb_target_group.example.arn\n  }\n}\n"
+CKV_AWS_105:
+  aws_redshift_parameter_group:
+    cli: "aws redshift modify-cluster-parameter-group --parameter-group-name <group> --parameters ParameterName=require_ssl,ParameterValue=true\n\
+      aws redshift reboot-cluster --cluster-identifier <cluster>\n"
+    note: 'require_ssl has apply-type static, so the parameter change is pending until the cluster is
+      rebooted — the group reports the new value and the cluster keeps accepting cleartext until then.
+      This control reads the group, so it will report compliant during that window. And default.redshift-1.0
+      cannot be modified at all: a cluster sitting on the default group needs a new custom group plus
+      `aws redshift modify-cluster --cluster-parameter-group-name <group>` and a reboot, not a parameter
+      edit.'
+    terraform: "resource \"aws_redshift_parameter_group\" \"tls\" {\n  name   = \"redshift-require-ssl\"\
+      \n  family = \"redshift-1.0\"\n\n  parameter {\n    name  = \"require_ssl\"\n    value = \"true\"\
+      \n  }\n}\n\nresource \"aws_redshift_cluster\" \"example\" {\n  # ...\n  cluster_parameter_group_name\
+      \ = aws_redshift_parameter_group.tls.name\n}\n"
 CKV_AWS_11:
   aws_iam_account_password_policy:
     cli: "aws iam update-account-password-policy \\\n  --minimum-password-length 14 --require-symbols\
@@ -603,6 +672,26 @@ CKV_AWS_166:
     cli: "Set at creation; the vault key cannot be changed afterwards.\n"
     terraform: "resource \"aws_backup_vault\" \"example\" {\n  kms_key_arn = aws_kms_key.backup.arn\n\
       }\n"
+CKV_AWS_169:
+  aws_sns_topic_policy:
+    cli: "aws sns set-topic-attributes --topic-arn <topic-arn> --attribute-name Policy --attribute-value\
+      \ file://topic-policy.json\n"
+    note: 'set-topic-attributes REPLACES the Policy attribute, so start from the current one (`aws sns
+      get-topic-attributes --topic-arn <arn> --query ''Attributes.Policy'' --output text`). Do not delete
+      the AWS-written default statement while narrowing the others — it is the one that lets the account
+      manage its own topic, and it is already conditioned on AWS:SourceOwner so this control does not
+      report it. Where a wildcard principal is genuinely needed (an S3 bucket or an SES rule publishing
+      to the topic), the fix is the Condition, not the Principal: aws:SourceArn plus aws:SourceAccount
+      both scopes the grant and takes the statement out of scope here.'
+    terraform: "resource \"aws_sns_topic_policy\" \"app\" {\n  arn = aws_sns_topic.app.arn\n\n  policy\
+      \ = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Sid       =\
+      \ \"AllowOwnerPublish\"\n        Effect    = \"Allow\"\n        Principal = { AWS = aws_iam_role.publisher.arn\
+      \ }\n        Action    = \"SNS:Publish\"\n        Resource  = aws_sns_topic.app.arn\n      },\n\
+      \      {\n        Sid       = \"AllowServicePublish\"\n        Effect    = \"Allow\"\n        Principal\
+      \ = { Service = \"s3.amazonaws.com\" }\n        Action    = \"SNS:Publish\"\n        Resource  =\
+      \ aws_sns_topic.app.arn\n        Condition = {\n          ArnLike      = { \"aws:SourceArn\" = aws_s3_bucket.app.arn\
+      \ }\n          StringEquals = { \"aws:SourceAccount\" = data.aws_caller_identity.current.account_id\
+      \ }\n        }\n      },\n    ]\n  })\n}\n"
 CKV_AWS_17:
   aws_db_instance:
     cli: "aws rds modify-db-instance --db-instance-identifier <id> --no-publicly-accessible --apply-immediately\n"
@@ -709,6 +798,23 @@ CKV_AWS_228:
     terraform: "resource \"aws_opensearch_domain\" \"search\" {\n  domain_name    = \"search\"\n  engine_version\
       \ = \"OpenSearch_2.11\"\n\n  domain_endpoint_options {\n    enforce_https       = true\n    tls_security_policy\
       \ = \"Policy-Min-TLS-1-2-PFS-2023-10\"\n  }\n}\n"
+CKV_AWS_229:
+  aws_network_acl:
+    cli: "aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp\
+      \ --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=443,To=443\naws ec2 delete-network-acl-entry\
+      \ --network-acl-id <acl-id> --rule-number <n> --ingress\n"
+    note: 'This control reads the ALLOW entries, so adding a deny rule at a lower number does not clear
+      the finding — the offending entry has to be narrowed or deleted. Network ACLs are STATELESS: an
+      ingress rule you tighten needs a matching egress rule for the ephemeral range (1024-65535) left
+      in place or return traffic for every other connection breaks, which is why the egress block above
+      is shown. And the entry this control most often reports is rule 100 on the VPC''s DEFAULT network
+      ACL, which allows everything from 0.0.0.0/0 out of the box; Terraform manages that one as aws_default_network_acl,
+      not aws_network_acl.'
+    terraform: "resource \"aws_network_acl\" \"app\" {\n  vpc_id = aws_vpc.main.id\n\n  ingress {\n  \
+      \  rule_no    = 100\n    protocol   = \"tcp\"\n    action     = \"allow\"\n    cidr_block = \"10.0.0.0/16\"\
+      \n    from_port  = 443\n    to_port    = 443\n  }\n\n  egress {\n    rule_no    = 100\n    protocol\
+      \   = \"tcp\"\n    action     = \"allow\"\n    cidr_block = \"0.0.0.0/0\"\n    from_port  = 1024\n\
+      \    to_port    = 65535\n  }\n}\n"
 CKV_AWS_23:
   aws_security_group_rule:
     cli: "aws ec2 modify-security-group-rules --group-id <sg-id> --security-group-rules 'SecurityGroupRuleId=<sgr-id>,SecurityGroupRule={Description=\"\
@@ -732,6 +838,29 @@ CKV_AWS_23:
       \ ALB only\"\n  ip_protocol                  = \"tcp\"\n  from_port                    = 443\n \
       \ to_port                      = 443\n  referenced_security_group_id = aws_security_group.alb.id\n\
       }\n"
+CKV_AWS_230:
+  aws_network_acl:
+    cli: "aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp\
+      \ --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=443,To=443\n"
+    note: 'Same shape as the port 21 fix, and the same two traps: a deny rule at a lower number does not
+      clear this finding because the control reads allow entries, and network ACLs are stateless so the
+      ephemeral egress range must survive the edit. Closing 20 without closing 21 leaves FTP authentication
+      exposed, so treat the pair together.'
+    terraform: "resource \"aws_network_acl\" \"app\" {\n  vpc_id = aws_vpc.main.id\n\n  ingress {\n  \
+      \  rule_no    = 100\n    protocol   = \"tcp\"\n    action     = \"allow\"\n    cidr_block = \"10.0.0.0/16\"\
+      \n    from_port  = 443\n    to_port    = 443\n  }\n}\n"
+CKV_AWS_231:
+  aws_network_acl:
+    cli: "aws ec2 replace-network-acl-entry --network-acl-id <acl-id> --rule-number <n> --protocol tcp\
+      \ --rule-action allow --ingress --cidr-block 10.0.0.0/16 --port-range From=3389,To=3389\n"
+    note: Narrowing the CIDR to the management network is the minimum. The better answer is to remove
+      the entry entirely and reach Windows hosts through Systems Manager Session Manager, which needs
+      no inbound rule at any layer and produces a session log; that also removes the bastion whose own
+      ingress rule would otherwise inherit this finding. Network ACLs are stateless, so keep the ephemeral
+      egress range when editing.
+    terraform: "resource \"aws_network_acl\" \"app\" {\n  vpc_id = aws_vpc.main.id\n\n  ingress {\n  \
+      \  rule_no    = 100\n    protocol   = \"tcp\"\n    action     = \"allow\"\n    cidr_block = \"10.0.0.0/16\"\
+      \n    from_port  = 3389\n    to_port    = 3389\n  }\n}\n"
 CKV_AWS_238:
   aws_guardduty_detector:
     cli: "aws guardduty update-detector --detector-id <id> --enable\n"
@@ -847,6 +976,13 @@ CKV_AWS_252:
       \ aws_s3_bucket.trail.id\n  sns_topic_name                = aws_sns_topic.cloudtrail.name\n  include_global_service_events\
       \ = true\n  is_multi_region_trail         = true\n  enable_log_file_validation    = true\n  kms_key_id\
       \                    = aws_kms_key.cloudtrail.arn\n}\n"
+CKV_AWS_258:
+  aws_lambda_function_url:
+    cli: "aws lambda update-function-url-config --function-name app --auth-type AWS_IAM\n"
+    note: AWS_IAM auth means callers must SigV4-sign the request; a browser front end needs a signing
+      proxy or an API Gateway in front instead.
+    terraform: "resource \"aws_lambda_function_url\" \"example\" {\n  function_name      = aws_lambda_function.app.function_name\n\
+      \  authorization_type = \"AWS_IAM\"\n}\n"
 CKV_AWS_26:
   aws_sns_topic:
     cli: "aws sns set-topic-attributes --topic-arn <arn> --attribute-name KmsMasterKeyId --attribute-value\
@@ -857,6 +993,22 @@ CKV_AWS_26:
     terraform: "resource \"aws_kms_key\" \"sns\" {\n  description         = \"SNS topic encryption\"\n\
       \  enable_key_rotation = true\n}\n\nresource \"aws_sns_topic\" \"alerts\" {\n  name            \
       \  = \"alerts\"\n  kms_master_key_id = aws_kms_key.sns.id\n}\n"
+CKV_AWS_260:
+  aws_security_group:
+    cli: "aws ec2 revoke-security-group-ingress --group-id <sg-id> --protocol tcp --port 80 --cidr 0.0.0.0/0\n\
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=80,ToPort=80,Ipv6Ranges=[{CidrIpv6=::/0}]\n"
+    note: The revoke closes the exposure now and the next terraform apply reopens it if the HCL still
+      carries the rule, so the CLI is containment and the Terraform change is the fix. A permission whose
+      range merely SPANS 80 — 0-65535, or an IpProtocol of "-1", which AWS stores with no ports at all
+      — must be revoked with the range it was created with, not with --port 80. If the world genuinely
+      must reach 80, put an ALB in front and move the rule to the ALB's security group rather than widening
+      this one.
+    terraform: "resource \"aws_security_group\" \"web\" {\n  name   = \"web\"\n  vpc_id = aws_vpc.example.id\n\
+      \n  # HTTP arrives from the load balancer's security group, never from a\n  # CIDR. There is no\
+      \ ingress block carrying cidr_blocks = [\"0.0.0.0/0\"];\n  # the public edge is the ALB, and it\
+      \ is the only thing that should be\n  # able to reach 80 here.\n  ingress {\n    description   \
+      \  = \"HTTP from the public ALB\"\n    from_port       = 80\n    to_port         = 80\n    protocol\
+      \        = \"tcp\"\n    security_groups = [aws_security_group.alb.id]\n  }\n}\n"
 CKV_AWS_266:
   aws_db_snapshot_copy:
     cli: "aws rds copy-db-snapshot --source-db-snapshot-identifier app-db-2026-08-30 --target-db-snapshot-identifier\
@@ -872,6 +1024,52 @@ CKV_AWS_272:
       \ <arn>\n"
     terraform: "resource \"aws_lambda_function\" \"example\" {\n  code_signing_config_arn = aws_lambda_code_signing_config.example.arn\n\
       }\n"
+CKV_AWS_274:
+  aws_iam_policy_attachment:
+    cli: "# Who holds it right now — roles, users and groups, in one call.\naws iam list-entities-for-policy\
+      \ --policy-arn arn:aws:iam::aws:policy/AdministratorAccess\naws iam detach-role-policy --role-name\
+      \ <role> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess\naws iam detach-user-policy --user-name\
+      \ <user> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess\naws iam detach-group-policy --group-name\
+      \ <group> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess\n"
+    note: 'Create and attach the replacement BEFORE detaching, and verify the principal can still do its
+      job — a detach here can lock out the only identity able to repair the account. Check IAM Identity
+      Center too: an attachment made through a permission set is re-provisioned onto the AWSReservedSSO_*
+      role after any manual detach, so it must be removed at the permission set (aws_ssoadmin_managed_policy_attachment)
+      or it returns on the next sync. This control counts attachments and cannot be exempted per principal,
+      so a break-glass role that must keep the policy is an accepted risk to record, not a finding to
+      suppress.'
+    terraform: "# Replace the AWS-managed AdministratorAccess attachment with a\n# customer-managed policy\
+      \ scoped to what the principal actually does.\n# There is no in-place \"narrow AdministratorAccess\"\
+      \ — the managed policy\n# is owned by AWS and cannot be edited — so the fix is always a swap.\n\
+      resource \"aws_iam_policy\" \"platform_operate\" {\n  name        = \"platform-operate\"\n  description\
+      \ = \"Day-two operations for the platform team\"\n\n  policy = jsonencode({\n    Version = \"2012-10-17\"\
+      \n    Statement = [{\n      Effect   = \"Allow\"\n      Action   = [\"ecs:*\", \"logs:*\", \"cloudwatch:*\"\
+      , \"ssm:GetParameter*\"]\n      Resource = \"*\"\n      Condition = {\n        StringEquals = {\n\
+      \          \"aws:RequestedRegion\" = [\"us-east-1\"]\n        }\n      }\n    }]\n  })\n}\n\nresource\
+      \ \"aws_iam_role_policy_attachment\" \"platform_operate\" {\n  role       = aws_iam_role.platform.name\n\
+      \  policy_arn = aws_iam_policy.platform_operate.arn\n}\n\n# If a break-glass administrator is genuinely\
+      \ required, give it its own\n# role with a hard condition rather than leaving the managed policy\
+      \ on a\n# day-to-day principal.\nresource \"aws_iam_role\" \"break_glass\" {\n  name = \"break-glass-admin\"\
+      \n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n    \
+      \  Effect    = \"Allow\"\n      Principal = { AWS = \"arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root\"\
+      \ }\n      Action    = \"sts:AssumeRole\"\n      Condition = {\n        Bool           = { \"aws:MultiFactorAuthPresent\"\
+      \ = \"true\" }\n        NumericLessThan = { \"aws:MultiFactorAuthAge\" = \"900\" }\n      }\n  \
+      \  }]\n  })\n}\n"
+CKV_AWS_277:
+  aws_security_group:
+    cli: "aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]\n\
+      aws ec2 revoke-security-group-ingress --group-id <sg-id> --ip-permissions IpProtocol=-1,Ipv6Ranges=[{CidrIpv6=::/0}]\n"
+    note: An IpProtocol of "-1" is revoked as a protocol, not as a port range — there are no FromPort
+      or ToPort members on the stored permission to name. Revoke it before writing the replacement rules
+      if the exposure is live; otherwise write the narrow rules first so nothing is interrupted, then
+      revoke. Confirm what was actually reaching the instance (VPC flow logs, or the load balancer's target
+      health) before assuming the narrow set is complete.
+    terraform: "resource \"aws_security_group\" \"app\" {\n  name   = \"app\"\n  vpc_id = aws_vpc.example.id\n\
+      \n  # No protocol = \"-1\" ingress block, and no cidr_blocks = [\"0.0.0.0/0\"].\n  # Every port\
+      \ that must be reachable is named, with the source that is\n  # allowed to reach it.\n  ingress\
+      \ {\n    description     = \"app traffic from the ALB\"\n    from_port       = 8443\n    to_port\
+      \         = 8443\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.alb.id]\n\
+      \  }\n}\n"
 CKV_AWS_278:
   aws_memorydb_snapshot:
     cli: "aws memorydb copy-snapshot --source-snapshot-name <name> --target-snapshot-name <name>-cmk --kms-key-id\
@@ -941,6 +1139,15 @@ CKV_AWS_293:
   aws_db_instance:
     cli: "aws rds modify-db-instance --db-instance-identifier <id> --deletion-protection --apply-immediately\n"
     terraform: "resource \"aws_db_instance\" \"example\" {\n  deletion_protection = true\n}\n"
+CKV_AWS_294:
+  aws_cloudtrail_event_data_store:
+    cli: "aws cloudtrail update-event-data-store --event-data-store <eds-arn> --kms-key-id <key-arn>\n"
+    note: The KMS key policy must allow cloudtrail.amazonaws.com to GenerateDataKey and Decrypt, or the
+      store stops ingesting.
+    terraform: "resource \"aws_cloudtrail_event_data_store\" \"example\" {\n  name                   \
+      \        = \"audit\"\n  retention_period               = 2557\n  multi_region_enabled          \
+      \ = true\n  termination_protection_enabled = true\n  kms_key_id                     = aws_kms_key.cloudtrail.arn\n\
+      }\n"
 CKV_AWS_298:
   aws_dms_s3_endpoint:
     cli: "aws dms modify-endpoint --endpoint-arn <endpoint-arn> --s3-settings BucketName=<bucket>,ServiceAccessRoleArn=<role-arn>,EncryptionMode=SSE_KMS,ServerSideEncryptionKmsKeyId=<key-arn>\n"
@@ -959,6 +1166,19 @@ CKV_AWS_30:
       \ --transit-encryption-mode preferred --apply-immediately\n"
     terraform: "resource \"aws_elasticache_replication_group\" \"example\" {\n  transit_encryption_enabled\
       \ = true\n}\n"
+CKV_AWS_304:
+  aws_secretsmanager_secret_rotation:
+    cli: "aws secretsmanager describe-secret --secret-id <name> --query 'RotationRules'\naws secretsmanager\
+      \ rotate-secret --secret-id <name> --rotation-rules AutomaticallyAfterDays=30\n"
+    note: Shortening the interval takes effect from the NEXT rotation, so a secret that last rotated 300
+      days ago is not brought current by this change alone — run `rotate-secret` once to force a rotation
+      now. Secrets owned by another service (OwningService set, e.g. an RDS-managed master password) rotate
+      under that service's schedule and should be exempted rather than given a second rotator.
+    terraform: "resource \"aws_secretsmanager_secret\" \"db\" {\n  name = \"platform/db/master\"\n}\n\n\
+      resource \"aws_secretsmanager_secret_rotation\" \"db\" {\n  secret_id           = aws_secretsmanager_secret.db.id\n\
+      \  rotation_lambda_arn = aws_lambda_function.rotator.arn\n\n  rotation_rules {\n    # 90 is the\
+      \ ceiling, not the target. Pick the shortest interval the\n    # consuming application can tolerate\
+      \ a credential change at.\n    automatically_after_days = 30\n  }\n}\n"
 CKV_AWS_313:
   aws_rds_cluster:
     cli: "aws rds modify-db-cluster --db-cluster-identifier <id> --copy-tags-to-snapshot --apply-immediately\n"
@@ -1038,6 +1258,25 @@ CKV_AWS_329:
       \n  root_directory {\n    path = \"/app-data\"\n\n    creation_info {\n      owner_uid   = 1000\n\
       \      owner_gid   = 1000\n      permissions = \"0750\"\n    }\n  }\n\n  posix_user {\n    uid =\
       \ 1000\n    gid = 1000\n  }\n}\n"
+CKV_AWS_33:
+  aws_kms_key:
+    cli: "aws kms put-key-policy --key-id <key-id> --policy-name default --policy file://key-policy.json\n"
+    note: 'put-key-policy REPLACES the whole document, so read the current one with `aws kms get-key-policy
+      --key-id <key-id> --policy-name default --query Policy --output text` and edit that rather than
+      writing a new file from scratch. Do not remove the account-root administration statement while narrowing
+      the others: a key whose policy delegates to nobody cannot be managed by IAM at all, and recovering
+      one takes an AWS support case. If the wildcard principal is genuinely required — a key a partner
+      account must use — constrain it instead of removing it: a Condition on kms:CallerAccount, aws:PrincipalOrgID
+      or kms:ViaService takes the statement out of this control''s scope, which is the same allowance
+      Checkov makes.'
+    terraform: "resource \"aws_kms_key\" \"app\" {\n  description = \"Application data key\"\n\n  policy\
+      \ = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Sid       =\
+      \ \"AllowAccountAdministration\"\n        Effect    = \"Allow\"\n        Principal = { AWS = \"\
+      arn:aws:iam::${data.aws_caller_identity.current.account_id}:root\" }\n        Action    = \"kms:*\"\
+      \n        Resource  = \"*\"\n      },\n      {\n        Sid       = \"AllowApplicationUse\"\n  \
+      \      Effect    = \"Allow\"\n        Principal = { AWS = aws_iam_role.app.arn }\n        Action\
+      \    = [\"kms:Encrypt\", \"kms:Decrypt\", \"kms:GenerateDataKey*\", \"kms:DescribeKey\"]\n     \
+      \   Resource  = \"*\"\n      },\n    ]\n  })\n}\n"
 CKV_AWS_330:
   aws_efs_access_point:
     cli: "aws efs create-access-point --file-system-id <fs-id> --posix-user Uid=1000,Gid=1000 --root-directory\
@@ -1058,6 +1297,22 @@ CKV_AWS_331:
       main\"\n  auto_accept_shared_attachments  = \"disable\"\n  default_route_table_association = \"\
       disable\"\n  default_route_table_propagation = \"disable\"\n  dns_support                     =\
       \ \"enable\"\n}\n"
+CKV_AWS_336:
+  aws_ecs_task_definition:
+    cli: "aws ecs register-task-definition --cli-input-json file://task-definition.json\n"
+    note: 'A task definition revision is immutable, so there is no in-place fix — the change is a new
+      revision plus an update of every service that references the family, and running tasks keep the
+      old revision until they are replaced. Expect the first attempt to crash: application servers, language
+      runtimes and agents write to paths nobody documents, and the way to find them is to run the read-only
+      revision in a non-production environment and add a declared volume for each path that fails, rather
+      than reverting the flag.'
+    terraform: "resource \"aws_ecs_task_definition\" \"example\" {\n  family = \"example\"\n\n  container_definitions\
+      \ = jsonencode([\n    {\n      name                   = \"app\"\n      image                  =\
+      \ var.image\n      essential              = true\n      readonlyRootFilesystem = true\n\n      #\
+      \ Everything the process needs to write goes in a declared mount,\n      # so the writes are visible\
+      \ in the task definition instead of\n      # landing anywhere in the container's filesystem.\n \
+      \     mountPoints = [\n        { sourceVolume = \"tmp\", containerPath = \"/tmp\", readOnly = false\
+      \ },\n      ]\n    },\n  ])\n\n  volume {\n    name = \"tmp\"\n  }\n}\n"
 CKV_AWS_338:
   aws_cloudwatch_log_group:
     cli: "aws logs put-retention-policy --log-group-name /aws/app/api --retention-in-days 365\n"
@@ -1240,6 +1495,22 @@ CKV_AWS_37:
       \  version  = \"1.31\"\n\n  enabled_cluster_log_types = [\n    \"api\",\n    \"audit\",\n    \"\
       authenticator\",\n    \"controllerManager\",\n    \"scheduler\",\n  ]\n\n  vpc_config {\n    subnet_ids\
       \ = var.private_subnet_ids\n  }\n}\n"
+CKV_AWS_376:
+  aws_elb:
+    cli: "aws elb create-load-balancer-listeners --load-balancer-name <name> --listeners Protocol=HTTPS,LoadBalancerPort=443,InstanceProtocol=HTTPS,InstancePort=8443,SSLCertificateId=<acm-arn>\n\
+      aws elb delete-load-balancer-listeners --load-balancer-name <name> --load-balancer-ports 80\n"
+    note: 'Create the HTTPS listener before deleting the cleartext one, and move clients over before the
+      delete — deleting a listener drops every connection on that port immediately and there is no redirect
+      to catch them. Classic Load Balancers cannot redirect at all, so a workload that needs an HTTP-to-HTTPS
+      redirect is a migration to an Application Load Balancer, not a listener edit. Check the instance_protocol
+      leg too: it is a separate setting, not covered by this control, and an HTTPS front end talking cleartext
+      to the instances leaves the inside of the VPC unencrypted.'
+    terraform: "resource \"aws_elb\" \"example\" {\n  name    = \"example\"\n  subnets = var.public_subnet_ids\n\
+      \n  listener {\n    lb_port            = 443\n    lb_protocol        = \"https\"\n    instance_port\
+      \      = 8443\n    instance_protocol  = \"https\"\n    ssl_certificate_id = aws_acm_certificate.example.arn\n\
+      \  }\n\n  # There is no lb_protocol = \"http\" listener. A redirect from 80 is not\n  # expressible\
+      \ on a Classic Load Balancer, so if one is needed the\n  # right move is an Application Load Balancer\
+      \ with a redirect action,\n  # not an HTTP listener here.\n}\n"
 CKV_AWS_377:
   aws_route53domains_registered_domain:
     cli: "aws route53domains enable-domain-transfer-lock --domain-name example.com --region us-east-1\n"
@@ -1269,6 +1540,23 @@ CKV_AWS_379:
       ]\n\n    principals {\n      type        = \"*\"\n      identifiers = [\"*\"]\n    }\n\n    condition\
       \ {\n      test     = \"Bool\"\n      variable = \"aws:SecureTransport\"\n      values   = [\"false\"\
       ]\n    }\n  }\n}\n"
+CKV_AWS_382:
+  aws_security_group:
+    cli: "aws ec2 authorize-security-group-egress --group-id <sg-id> --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=<pl-id>}]\n\
+      aws ec2 revoke-security-group-egress --group-id <sg-id> --ip-permissions IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]\n"
+    note: Order matters here in a way it does not for ingress. Authorize the replacement egress FIRST
+      and revoke the open default second — revoking first severs every outbound connection the workload
+      has, including the ones to AWS APIs it needs to keep running. Egress narrowing is the change most
+      likely to break a working system, so establish what the workload actually talks to from VPC flow
+      logs before doing it, and expect to need endpoints or prefix lists for AWS services.
+    terraform: "resource \"aws_security_group\" \"app\" {\n  name   = \"app\"\n  vpc_id = aws_vpc.example.id\n\
+      \n  # An egress block MUST be present. A security group whose Terraform\n  # declares none is given\
+      \ the open \"-1 to 0.0.0.0/0\" default by EC2, and\n  # the HCL looks clean while the deployed group\
+      \ is wide open.\n  egress {\n    description     = \"to the database\"\n    from_port       = 5432\n\
+      \    to_port         = 5432\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.db.id]\n\
+      \  }\n\n  egress {\n    description     = \"to AWS APIs via the VPC endpoints\"\n    from_port \
+      \      = 443\n    to_port         = 443\n    protocol        = \"tcp\"\n    prefix_list_ids = [aws_vpc_endpoint.s3.prefix_list_id]\n\
+      \  }\n}\n"
 CKV_AWS_383:
   aws_bedrockagent_agent:
     cli: "aws bedrock-agent update-agent --agent-id <id> --guardrail-configuration guardrailIdentifier=<guardrail-id>,guardrailVersion=<version>\n"
@@ -1280,6 +1568,22 @@ CKV_AWS_383:
       \n  instruction             = var.agent_instruction\n\n  guardrail_configuration {\n    guardrail_identifier\
       \ = aws_bedrock_guardrail.assistant.guardrail_id\n    guardrail_version    = aws_bedrock_guardrail.assistant.version\n\
       \  }\n}\n"
+CKV_AWS_385:
+  aws_sns_topic_policy:
+    cli: "aws sns set-topic-attributes --topic-arn <topic-arn> --attribute-name Policy --attribute-value\
+      \ file://topic-policy.json\n"
+    note: Either remove the cross-account statement or constrain it. aws:PrincipalOrgID is the usual constraint
+      inside an organization and keeps working as accounts are added and removed; aws:SourceArn, aws:SourceAccount
+      and aws:PrincipalArn are the alternatives when the far side is not an org member. Any Condition
+      takes the statement out of this control's scope, which mirrors what Checkov allows — so write the
+      condition that actually expresses the agreement rather than the shortest one that clears the check,
+      because nothing downstream will re-examine it.
+    terraform: "resource \"aws_sns_topic_policy\" \"app\" {\n  arn = aws_sns_topic.app.arn\n\n  policy\
+      \ = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Sid       =\
+      \ \"PartnerSubscribe\"\n        Effect    = \"Allow\"\n        Principal = { AWS = \"arn:aws:iam::${var.partner_account_id}:role/consumer\"\
+      \ }\n        Action    = [\"SNS:Subscribe\", \"SNS:Receive\"]\n        Resource  = aws_sns_topic.app.arn\n\
+      \        Condition = {\n          StringEquals = { \"aws:PrincipalOrgID\" = var.organization_id\
+      \ }\n        }\n      },\n    ]\n  })\n}\n"
 CKV_AWS_39:
   aws_eks_cluster:
     cli: "aws eks update-cluster-config --name <cluster> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true\n"
@@ -1291,6 +1595,25 @@ CKV_AWS_39:
     terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
       \  version  = \"1.31\"\n\n  vpc_config {\n    subnet_ids              = var.private_subnet_ids\n\
       \    endpoint_public_access  = false\n    endpoint_private_access = true\n  }\n}\n"
+CKV_AWS_393:
+  aws_iam_role:
+    cli: "aws iam update-assume-role-policy --role-name <role-name> --policy-document file://trust-policy.json\n"
+    note: 'The org and repository segments of the sub claim must carry no wildcard; everything after them
+      may, so repo:acme/widgets:* still pins the repository and passes, while repo:acme/* does not — note
+      that Checkov 3.3.16 accepts repo:acme/*, so this control is stricter than the rule it is derived
+      from and a Terraform scan will not warn you about the org-wide form. Constrain the aud claim to
+      sts.amazonaws.com as well — it is not what this control reads, but an unconstrained aud is the other
+      half of the same misconfiguration. Do NOT use a Null condition on sub: it asserts only that the
+      claim exists, which is true of every GitHub token ever minted, and this control rejects it for that
+      reason. Where several repositories legitimately need the role, list each sub value explicitly rather
+      than widening to the org.'
+    terraform: "resource \"aws_iam_role\" \"gha_deploy\" {\n  name = \"gha-deploy\"\n\n  assume_role_policy\
+      \ = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Effect    =\
+      \ \"Allow\"\n        Principal = { Federated = aws_iam_openid_connect_provider.github.arn }\n  \
+      \      Action    = \"sts:AssumeRoleWithWebIdentity\"\n        Condition = {\n          StringEquals\
+      \ = {\n            \"token.actions.githubusercontent.com:aud\" = \"sts.amazonaws.com\"\n       \
+      \   }\n          StringLike = {\n            \"token.actions.githubusercontent.com:sub\" = \"repo:acme/widgets:ref:refs/heads/main\"\
+      \n          }\n        }\n      },\n    ]\n  })\n}\n"
 CKV_AWS_44:
   aws_neptune_cluster:
     cli: "There is no in-place fix. Neptune storage encryption is set at creation\nonly. Take a snapshot,\
@@ -1389,6 +1712,21 @@ CKV_AWS_60:
       \        Service = \"ecs-tasks.amazonaws.com\"\n      }\n      Action = \"sts:AssumeRole\"\n   \
       \   Condition = {\n        StringEquals = { \"aws:SourceAccount\" = data.aws_caller_identity.current.account_id\
       \ }\n      }\n    }]\n  })\n}\n"
+CKV_AWS_61:
+  aws_iam_role:
+    cli: "aws iam update-assume-role-policy --role-name <role-name> --policy-document file://trust-policy.json\n"
+    note: Name the role or user that actually assumes this role rather than the account it lives in. Where
+      the far side genuinely cannot commit to a single principal ARN, keep the account-level trust but
+      add sts:ExternalId (or aws:PrincipalOrgID for an organization member) — that is the documented AWS
+      pattern for third-party access and it is what turns "anyone in that account" into "the integration
+      we agreed to". This control reports an own-account root trust too, because the deployed document
+      cannot say which account was intended; an own-account root trust is still the whole account and
+      is still worth narrowing.
+    terraform: "resource \"aws_iam_role\" \"app\" {\n  name = \"app\"\n\n  assume_role_policy = jsonencode({\n\
+      \    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Effect    = \"Allow\"\n     \
+      \   Principal = { AWS = \"arn:aws:iam::${var.partner_account_id}:role/partner-integration\" }\n\
+      \        Action    = \"sts:AssumeRole\"\n        Condition = {\n          StringEquals = { \"sts:ExternalId\"\
+      \ = var.external_id }\n        }\n      },\n    ]\n  })\n}\n"
 CKV_AWS_62:
   aws_iam_policy:
     cli: "aws iam create-policy-version --policy-arn <arn> --policy-document file://policy.json --set-as-default\n"
@@ -1401,6 +1739,20 @@ CKV_AWS_62:
       \ = \"2012-10-17\"\n    Statement = [{\n      Effect = \"Allow\"\n      Action = [\n        \"s3:GetObject\"\
       ,\n        \"s3:PutObject\",\n      ]\n      Resource = [\"${aws_s3_bucket.example.arn}/*\"]\n \
       \   }]\n  })\n}\n"
+CKV_AWS_63:
+  aws_iam_policy:
+    cli: "aws iam create-policy-version --policy-arn <policy-arn> --policy-document file://policy.json\
+      \ --set-as-default\n"
+    note: 'A managed policy is versioned: create-policy-version with --set-as-default is the edit, and
+      the old version stays until you delete it (five versions is the limit, so prune with delete-policy-version).
+      Enumerate the actions the workload actually calls rather than guessing — IAM Access Analyzer''s
+      policy generation reads CloudTrail and writes the least-privilege document for you (`aws accessanalyzer
+      start-policy-generation`). A prefixed wildcard such as s3:Get* does NOT trip this control; only
+      the bare ''*'' and ''*:*'' do.'
+    terraform: "resource \"aws_iam_policy\" \"app_s3\" {\n  name = \"app-s3\"\n\n  policy = jsonencode({\n\
+      \    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Effect   = \"Allow\"\n      \
+      \  Action   = [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\"]\n        Resource = \"${aws_s3_bucket.app.arn}/*\"\
+      \n      },\n    ]\n  })\n}\n"
 CKV_AWS_64:
   aws_redshift_cluster:
     cli: "aws redshift modify-cluster --cluster-identifier <id> --encrypted --kms-key-id <key-arn>\n"
@@ -1437,6 +1789,22 @@ CKV_AWS_74:
       \         = var.master_password\n  storage_encrypted       = true\n  kms_key_id              = aws_kms_key.docdb.arn\n\
       \  backup_retention_period = 7\n  skip_final_snapshot     = false\n  final_snapshot_identifier =\
       \ \"docs-final\"\n}\n"
+CKV_AWS_76:
+  aws_api_gateway_stage:
+    cli: "aws apigateway update-stage --rest-api-id <api-id> --stage-name prod --patch-operations op=replace,path=/accessLogSettings/destinationArn,value=<log-group-arn>\
+      \ op=replace,path=/accessLogSettings/format,value='$context.requestId'\n"
+    terraform: "resource \"aws_cloudwatch_log_group\" \"apigw\" {\n  name              = \"/aws/apigateway/example\"\
+      \n  retention_in_days = 365\n}\n\nresource \"aws_api_gateway_stage\" \"example\" {\n  rest_api_id\
+      \   = aws_api_gateway_rest_api.example.id\n  deployment_id = aws_api_gateway_deployment.example.id\n\
+      \  stage_name    = \"prod\"\n\n  access_log_settings {\n    destination_arn = aws_cloudwatch_log_group.apigw.arn\n\
+      \    format          = jsonencode({ requestId = \"$context.requestId\", ip = \"$context.identity.sourceIp\"\
+      , status = \"$context.status\" })\n  }\n}\n"
+  aws_apigatewayv2_stage:
+    cli: "aws apigatewayv2 update-stage --api-id <api-id> --stage-name prod --access-log-settings DestinationArn=<log-group-arn>,Format='$context.requestId'\n"
+    terraform: "resource \"aws_apigatewayv2_stage\" \"example\" {\n  api_id      = aws_apigatewayv2_api.example.id\n\
+      \  name        = \"prod\"\n  auto_deploy = true\n\n  access_log_settings {\n    destination_arn\
+      \ = aws_cloudwatch_log_group.apigw.arn\n    format          = jsonencode({ requestId = \"$context.requestId\"\
+      , status = \"$context.status\" })\n  }\n}\n"
 CKV_AWS_79:
   aws_instance:
     cli: "aws ec2 modify-instance-metadata-options \\\n  --instance-id <id> --http-tokens required --http-endpoint\
@@ -1557,3 +1925,21 @@ CKV_AWS_96:
     cli: "Cannot be enabled in place: snapshot, copy with --kms-key-id, restore.\n"
     terraform: "resource \"aws_rds_cluster\" \"example\" {\n  storage_encrypted = true\n  kms_key_id \
       \       = aws_kms_key.rds.arn\n}\n"
+CKV_AWS_99:
+  aws_glue_security_configuration:
+    cli: "aws glue create-security-configuration --name glue-encrypted --encryption-configuration file://enc.json\n\
+      aws glue update-job --job-name <job> --job-update SecurityConfiguration=glue-encrypted\naws glue\
+      \ delete-security-configuration --name <old-configuration>\n"
+    note: 'There is no in-place fix. Glue security configurations are IMMUTABLE — the API has create and
+      delete and no update — so remediation is create a new one, repoint every job that referenced the
+      old one, then delete it. Terraform does the same thing under the covers and will destroy and recreate,
+      which detaches jobs mid-flight if the update ordering is not forced. Two further traps: the KMS
+      key policy must allow the Glue service principal and the job''s role, or jobs fail at start with
+      an opaque access-denied; and CSE-KMS is the only accepted mode for job bookmarks, so copying SSE-KMS
+      across all three blocks is rejected.'
+    terraform: "resource \"aws_glue_security_configuration\" \"encrypted\" {\n  name = \"glue-encrypted\"\
+      \n\n  encryption_configuration {\n    cloudwatch_encryption {\n      cloudwatch_encryption_mode\
+      \ = \"SSE-KMS\"\n      kms_key_arn                = aws_kms_key.glue.arn\n    }\n\n    job_bookmarks_encryption\
+      \ {\n      job_bookmarks_encryption_mode = \"CSE-KMS\"\n      kms_key_arn                   = aws_kms_key.glue.arn\n\
+      \    }\n\n    s3_encryption {\n      s3_encryption_mode = \"SSE-KMS\"\n      kms_key_arn       \
+      \ = aws_kms_key.glue.arn\n    }\n  }\n}\n"

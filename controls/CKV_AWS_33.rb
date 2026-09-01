@@ -2,30 +2,91 @@
 #
 # Rule:        CKV_AWS_33 (checkov 3.3.16)
 # Applies to:  aws_kms_key
-# Status:      PLANNED — no deployed-asset reader exists for aws_kms_key yet.
+# Read with:   aws_policy_documents — aws_kms_key → no_wildcard_principal
+#              predicate: libraries/_policy_document.rb
+#              fetch:     tools/policy_specs.yml
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_33'] || []
 
 control 'CKV_AWS_33' do
-  impact 0.0
   title 'Ensure KMS key policy does not contain wildcard (*) principal'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_kms_key in this profile, so there is nothing to assert against.
+    Checkov asserts this against the policy document in the Terraform. This
+    profile fetches the policy AWS actually has on each aws_kms_key and
+    evaluates the same question over its statements: no Allow statement
+    grants a wildcard principal with no Condition.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Stronger than Checkov: the key policy is the only thing standing between
+    a key and every principal in every account, and it is routinely widened
+    in the console or by a service that "helped" — a grant added after the
+    apply is invisible to the HCL scan and visible here. It also covers keys
+    the Terraform never declared.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A key policy is the only authority on a KMS key — an IAM policy cannot
+    grant use of a key the key policy does not already delegate. So a
+    wildcard principal with no condition is not one layer of a defence in
+    depth, it is the whole boundary, and every ciphertext the key protects
+    becomes decryptable by any caller who can reach the API. Encryption at
+    rest is then a control the system claims and does not have.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure KMS key policy does not contain wildcard (*) principal
+    Checkov looks for: aws_kms_key: the key policy has no Allow statement
+    whose Principal is '*', or whose Principal.AWS contains '*', without ANY
+    Condition on the statement (Checkov's KMSKeyWildcardPrincipal matches
+    the bare '*' exactly and skips only Deny statements; this matches any
+    principal containing '*' — stricter — and requires an explicit Effect
+    Allow, which is narrower on a document IAM would refuse to store)
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key
+    Terraform — aws_kms_key:
+
+      resource "aws_kms_key" "app" {
+        description = "Application data key"
+
+        policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [
+            {
+              Sid       = "AllowAccountAdministration"
+              Effect    = "Allow"
+              Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+              Action    = "kms:*"
+              Resource  = "*"
+            },
+            {
+              Sid       = "AllowApplicationUse"
+              Effect    = "Allow"
+              Principal = { AWS = aws_iam_role.app.arn }
+              Action    = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
+              Resource  = "*"
+            },
+          ]
+        })
+      }
+
+    Out of band — aws_kms_key:
+
+      aws kms put-key-policy --key-id <key-id> --policy-name default --policy file://key-policy.json
+
+    Note (aws_kms_key): put-key-policy REPLACES the whole document, so read the
+    current one with `aws kms get-key-policy --key-id <key-id> --policy-name
+    default --query Policy --output text` and edit that rather than writing a
+    new file from scratch. Do not remove the account-root administration
+    statement while narrowing the others: a key whose policy delegates to nobody
+    cannot be managed by IAM at all, and recovering one takes an AWS support
+    case. If the wildcard principal is genuinely required — a key a partner
+    account must use — constrain it instead of removing it: a Condition on
+    kms:CallerAccount, aws:PrincipalOrgID or kms:ViaService takes the statement
+    out of this control's scope, which is the same allowance Checkov makes.
   FIX
 
   tag checkov_id:            'CKV_AWS_33'
@@ -34,9 +95,72 @@ control 'CKV_AWS_33' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_kms_key]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key'
-  tag implementation_status: 'planned'
+  tag policy_source:         'aws_kms_key'
+  tag policy_predicate:      'no_wildcard_principal'
+  tag nist:                  ['AC-3', 'AC-6', 'SC-12']
+  tag nist_r4:               ['AC-3', 'AC-6', 'SC-12']
+  tag cci:                   ['CCI-000213', 'CCI-000225']
+  tag ksi:                   ['KSI-SVC-KMG', 'KSI-IAM-CTL']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_33 — no deployed-asset reader for aws_kms_key" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_policy_documents(type: 'aws_kms_key', source: 'aws_kms_key',
+                                predicate: 'no_wildcard_principal', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A denied call or an unreachable endpoint ends up
+  # here, and without this assertion it renders as "no assets" and the control
+  # reports Not Applicable: the worst case reported as "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe 'aws_kms_key enumeration' do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # An asset whose policy could not be read or parsed has NO VERDICT. It is not
+  # in `assets` below, because a nil offender list compared against [] would
+  # pass — a denied GetPolicy silently reporting the least-visible estate as the
+  # cleanest one. It fails here instead, naming the asset and the reason.
+  #
+  # An asset with no policy at all is NOT here: that is a real answer and a
+  # passing one, recorded on the row as policy_present: false.
+  undecidable = assets.undecidable
+  unless undecidable.empty?
+    describe 'aws_kms_key policy documents' do
+      it 'could all be read and parsed' do
+        expect(undecidable).to be_empty
+      end
+    end
+  end
+
+  in_scope = assets.assets(exempt: exempt)
+
+  # Both failure lists keep the control APPLICABLE. only_if suppresses the whole
+  # control, including the two assertions above, so a guard that skips when the
+  # enumeration broke is no guard at all: it would suppress exactly the case it
+  # exists to catch.
+  applicable = !in_scope.empty? || !undecidable.empty? || !unreadable.empty?
+
+  # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
+  # on the argument node, and a ternary is an IfNode with none — it aborts
+  # `check` for the whole profile before a single control runs.
+  impact 0.7
+  impact 0.0 unless applicable
+
+  only_if('no aws_kms_key in scope') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_kms_key #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      it 'no Allow statement grants a wildcard principal with no Condition' do
+        expect(asset[:offenders]).to eq([]),
+          "#{asset[:offenders].length} offending statement(s) — " \
+          "#{asset[:offenders].join(' | ')}"
+      end
+    end
   end
 end

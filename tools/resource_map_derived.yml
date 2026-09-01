@@ -194,6 +194,28 @@ checks:
         which is the bare user NAME even for a user under a path, and GetUser takes the bare name.'
       reader: stock
       scope: global
+  CKV2_AWS_3:
+    aws_guardduty_detector:
+      field: status
+      note: 'Reuses the LIVE two-step aws_guardduty_detector spec (ListDetectors -> GetDetector, collection:
+        _response, id: _parent); the field is already declared there. GetDetector''s output shape is flat
+        and carries Status, whose enum is [ENABLED, DISABLED]. NARROWER THAN CHECKOV in one way and BROADER
+        in another. Narrower: the graph check also covers aws_guardduty_organization_configuration, and
+        org-level auto-enable is a management-account fact invisible from a member account''s GetDetector.
+        Broader: the reader walks every enabled region, so a region whose detector was created and then
+        disabled is assessed. OVERLAPS CKV_AWS_238, which asserts the same GetDetector.Status through
+        the stock reader''s enabled? predicate -- kept separate because each catalogue check stands on
+        its own and the two express different Checkov rules. LIMITATION, stated because it is the shape
+        this repo cares about: the control assesses DETECTORS, and an account with no detector in any
+        region enumerates no parents, leaves parents_seen at 0 and in_scope empty, and renders Not Applicable
+        -- so ''GuardDuty was never turned on anywhere'', the strongest form of the finding, reads as
+        ''this rule does not apply here''. That is not new and not fixable in a mapping: the live CKV_AWS_238
+        has the identical limitation and says so, and whether GuardDuty is on at all is an account-level
+        question no per-resource enumeration can answer. It is recorded here so the two controls are not
+        read as covering it.'
+      reader: api
+      satisfies: equals
+      value: ENABLED
   CKV2_AWS_32:
     aws_cloudfront_distribution:
       field: response_headers_policy_id
@@ -309,6 +331,18 @@ checks:
         \ a Multi-AZ-failover assertion. Enumeration column is `ids` (field :id), NOT replication_group_ids\
         \ — the singular name is misleading here and the vendored FilterTable is the authority."
       reader: stock
+  CKV2_AWS_51:
+    aws_api_gateway_stage:
+      field: client_certificate_id
+      note: Reuses the LIVE aws_api_gateway_stage spec. Stage.ClientCertificateId is absent when no client
+        certificate is attached, and not_empty does not nil-filter, so that stage fails -- which is the
+        finding. DELIBERATELY v1 ONLY. The catalogue also names aws_apigatewayv2_stage and aws_apigatewayv2_api.
+        ClientCertificateId exists on the v2 Stage shape but API Gateway supports client certificates
+        for WebSocket APIs only, so every HTTP API stage would fail a control it cannot satisfy. Scoping
+        that out needs a second field (the parent API's ProtocolType), which is the conditional_scope
+        gap; and render_api enumerates only the first terraform type anyway.
+      reader: api
+      satisfies: not_empty
   CKV2_AWS_52:
     aws_opensearch_domain:
       assert:
@@ -508,6 +542,39 @@ checks:
         \ in a region the population is capped silently. Under-enumeration, not a false pass, and an upstream\
         \ fix."
       reader: stock
+  CKV2_AWS_74:
+    aws_lb_listener:
+      field: ssl_policy
+      note: 'Same two-step aws_lb_listener spec and the same nil scoping as CKV_AWS_103: a non-TLS listener
+        has no SslPolicy and not_in_list is nil-filtered. The nine forbidden policies are Checkov''s list
+        from LBWeakCiphers.json, verbatim. ELBSecurityPolicy-2016-08 is the ELBv2 default, so this DOES
+        fail real listeners -- it is not a check that cannot fire. Complementary to CKV_AWS_103 rather
+        than redundant: that one names the allowed prefixes, this one names the forbidden policies, and
+        a policy can be outside both sets.'
+      reader: api
+      satisfies: not_in_list
+      value:
+      - ELBSecurityPolicy-2016-08
+      - ELBSecurityPolicy-2015-05
+      - ELBSecurityPolicy-TLS-1-0-2015-04
+      - ELBSecurityPolicy-TLS-1-1-2017-01
+      - ELBSecurityPolicy-2015-03
+      - ELBSecurityPolicy-2015-02
+      - ELBSecurityPolicy-2014-10
+      - ELBSecurityPolicy-Default
+      - ELBSecurityPolicy-2014-01
+  CKV2_AWS_75:
+    aws_lambda_function_url:
+      field: cors_allow_origins
+      note: 'Same two-step aws_lambda_function_url spec. Cors.AllowOrigins is a list of strings and Lambda
+        expresses an open origin as the literal element "*", so excluding the exact element is right and
+        a substring match would be wrong. A URL config with no cors block returns nil and `excludes` IS
+        nil-filtered, which is correct: no CORS block means no cross-origin exposure to assess. The catalogue
+        also names aws_lambda_function; there is no CORS setting on a function itself, so that type has
+        nothing to read.'
+      reader: api
+      satisfies: excludes
+      value: '*'
   CKV2_AWS_8:
     aws_rds_cluster:
       assert: every_left_covered
@@ -573,6 +640,45 @@ checks:
           resource_type:
           - EBS
       uncovered_message: AWS Backup holds no recovery point for this EBS volume
+  CKV_AWS_103:
+    aws_lb_listener:
+      field: ssl_policy
+      note: 'TWO-STEP READER. A listener cannot be enumerated account-wide: elbv2.DescribeListeners marks
+        neither LoadBalancerArn nor ListenerArns required in the model, but the API rejects a call carrying
+        neither, so the reader lists load balancers first and calls DescribeListeners once per balancer.
+        Both legs have a real paginator (Aws::Pager), confirmed on the gem in the image. The three accepted
+        prefixes are Checkov''s own, from AppLoadBalancerTLS12.json. SCOPING FALLS OUT OF THE DATA: HTTP,
+        TCP, UDP and TCP_UDP listeners carry no SslPolicy, so they are nil and `matches` IS nil-filtered
+        -- which is exactly the graph check''s ''protocol not in (HTTPS, TLS) passes'' branch, reached
+        by a different route. ELBSecurityPolicy-FS-1-1-* and -2016-08 both correctly fail. aws_alb_listener
+        is the same API and the same resource; it is not declared as a second terraform type because render_api
+        enumerates only next(iter(mapping)). aws_lb (the balancer itself) has no TLS setting to assess.'
+      reader: api
+      satisfies: matches
+      value: ^ELBSecurityPolicy-(FS-1-2|TLS-1-2|TLS13)
+  CKV_AWS_105:
+    aws_redshift_parameter_group:
+      conditions:
+      - path: parameter_name
+        satisfies: equals
+        value: require_ssl
+      - path: parameter_value
+        satisfies: equals
+        value: 'true'
+      field: parameters
+      note: "The two conditions are ANDed over each element, so this is \"some parameter is named require_ssl\
+        \ AND holds 'true'\" — which is the check. Splitting it into two mappings would assert \"some\
+        \ parameter is named require_ssl\" and \"some parameter holds true\", which any group satisfies.\n\
+        `parameter_value` is a STRING in the Redshift API, so the value is 'true', not the boolean. Rendered\
+        \ as a boolean it would compare a String to true, never match, and fail every parameter group\
+        \ in the account.\nMaterially stronger than the IaC check: DescribeClusterParameters returns the\
+        \ EFFECTIVE parameter set including engine defaults, so it also judges groups Terraform never\
+        \ declared a `parameter` block on. It also means `default.redshift-1.0` is assessed and FAILS\
+        \ — correctly. That group cannot be modified and ships require_ssl false, so a cluster sitting\
+        \ on it genuinely does not require TLS. This control reports parameter GROUPS, not clusters, so\
+        \ an unattached group is also assessed; that is the same population Checkov scans."
+      reader: api
+      satisfies: any_of
   CKV_AWS_116:
     aws_lambda_function:
       assert:
@@ -863,6 +969,20 @@ checks:
       value:
       - VPC
       - VPC_ENDPOINT
+  CKV_AWS_169:
+    aws_sns_topic_policy:
+      note: Enumerated by sns:ListTopics, whose Topic struct carries topic_arn and nothing else, then
+        sns:GetTopicAttributes(TopicArn) — the Policy attribute of the returned String-keyed attribute
+        map. Both confirmed against the SNS model in the auditor image. The default policy AWS writes
+        at CreateTopic names Principal.AWS "*" but constrains it with StringEquals on AWS:SourceOwner,
+        and this predicate takes any conditioned statement out of scope, so an untouched topic passes
+        and the finding is reserved for a genuinely unconditioned grant.
+      predicate: no_wildcard_principal
+      reader: policy
+      stronger: 'Stronger than Checkov: a topic policy is one of the few documents AWS itself rewrites
+        — subscribing a queue, or letting a bucket publish events, appends a statement that never appears
+        in the Terraform. Reading the deployed document is the only way to see what those appended statements
+        actually allow.'
   CKV_AWS_174:
     aws_cloudfront_distribution:
       assert:
@@ -1068,6 +1188,62 @@ checks:
         its values in both code paths and is safe either way.'
       reader: stock
     aws_opensearch_domain: *id002
+  CKV_AWS_229:
+    aws_network_acl:
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value:
+        - '6'
+        - '-1'
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+      - path: port_range.from
+        satisfies: at_most
+        value: 21
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 21
+        when_absent: true
+      field: entries
+      note: "`when_absent: true` on both port conditions is what makes this correct rather than backwards.\
+        \ An entry with Protocol \"-1\" carries no PortRange at all and AWS means \"every port\" by that,\
+        \ so an entry opening EVERY port to the world would otherwise be the one entry this control passed.\n\
+        `protocol` is an ALLOW-LIST of '6' (TCP) and '-1' (all protocols), not a deny-list of ICMP. The\
+        \ deny-list this was drafted as — not_in_list ['1','58'] — reported a UDP allow-all entry (protocol\
+        \ '17', which also carries no PortRange, so both when_absent conditions hold) as a TCP port-21\
+        \ finding, and would have done the same for SCTP, GRE and every other numbered protocol. Proved\
+        \ against stubbed DescribeNetworkAcls rows in the auditor image: with the deny-list a protocol-'17'\
+        \ allow-all row matched; with the allow-list it does not, and every true finding — the '-1' default-ACL\
+        \ rule, an explicit TCP 21, a TCP 0-65535 range, a v6 ::/0 — still matches. This is also what\
+        \ Checkov does: its NACL port checks consider tcp and -1, not every protocol.\nTWO DIVERGENCES\
+        \ A READER OF THE RESULTS MUST KNOW ABOUT.\n(1) No rule-number precedence. NACLs are evaluated\
+        \ lowest-number-first, so an allow entry can be dead because a lower-numbered deny already covered\
+        \ the port. Ordered evaluation is not expressible as a conjunction over independent elements and\
+        \ is not faked here. The error is entirely in the over-reporting direction — a shadowed allow\
+        \ entry is reported as a finding — which is the visible, investigable direction, and Checkov does\
+        \ not model precedence either.\n(2) The DEFAULT network ACL is in the population and will FAIL.\
+        \ Every VPC has one, DescribeNetworkAcls returns it, and it ships rule 100 allow-all from 0.0.0.0/0.\
+        \ Terraform calls that resource aws_default_network_acl, so Checkov never evaluates it; this control\
+        \ does. The finding is true — that ACL does permit the port from anywhere — but it is one finding\
+        \ per VPC per region and it is not the resource the check was written about. Scoping the population\
+        \ to `is_default == false` is a `where` on the LEFT side of an api mapping, which is graph.yml\
+        \ gap_3 and does not exist; `is_default` is declared as a field here so that scope is one line\
+        \ away when it does."
+      reader: api
+      satisfies: none_of
   CKV_AWS_23:
     aws_security_group_rule:
       field: description
@@ -1084,6 +1260,79 @@ checks:
         carry no description.'
       reader: api
       satisfies: not_empty
+  CKV_AWS_230:
+    aws_network_acl:
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value:
+        - '6'
+        - '-1'
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+      - path: port_range.from
+        satisfies: at_most
+        value: 20
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 20
+        when_absent: true
+      field: entries
+      note: 'Identical in shape to CKV_AWS_229 at port 20 (FTP data). Read that mapping''s note: the same
+        two divergences apply — no rule-number precedence, and the VPC default network ACL is in the population
+        and fails. `when_absent: true` on the port conditions gives a Protocol "-1" entry AWS''s own meaning
+        of "every port"; `protocol` is an allow-list of ''6'' (TCP) and ''-1'' (all), so an ICMP or UDP
+        allow-all entry — which also carries no PortRange — is not reported as a TCP finding.'
+      reader: api
+      satisfies: none_of
+  CKV_AWS_231:
+    aws_network_acl:
+      conditions:
+      - path: egress
+        satisfies: equals
+        value: false
+      - path: rule_action
+        satisfies: equals
+        value: allow
+      - path: protocol
+        satisfies: in_list
+        value:
+        - '6'
+        - '-1'
+      - path:
+        - cidr_block
+        - ipv_6_cidr_block
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+      - path: port_range.from
+        satisfies: at_most
+        value: 3389
+        when_absent: true
+      - path: port_range.to
+        satisfies: at_least
+        value: 3389
+        when_absent: true
+      field: entries
+      note: 'Identical in shape to CKV_AWS_229 at port 3389 (RDP), which is the one of the three that
+        is a remote administration path rather than a legacy file transfer, and is scored higher for it.
+        Read CKV_AWS_229''s note: the same two divergences apply — no rule-number precedence, and the
+        VPC default network ACL is in the population and fails.'
+      reader: api
+      satisfies: none_of
   CKV_AWS_238:
     aws_guardduty_detector:
       assert:
@@ -1216,6 +1465,20 @@ checks:
         the vendored plural aws_cloudtrail_trails registers only two columns, trail_arns and names.'
       reader: api
       satisfies: not_empty
+  CKV_AWS_258:
+    aws_lambda_function_url:
+      field: auth_type
+      note: 'TWO-STEP READER. lambda.ListFunctionUrlConfigs requires a FunctionName, so the reader lists
+        functions first; both legs have a real paginator. Distinct spec key from the live aws_lambda_function
+        spec, which is untouched -- aws_lambda_function_url is its own terraform type and render_api keys
+        the spec off the type. NAME DIVERGENCE: Terraform''s argument is authorization_type; the API member
+        is FunctionUrlConfig.AuthType. Only a function that actually has a URL produces a row, so a function
+        without one is absent rather than passing vacuously. COST: one child call per function per region,
+        and most functions have no URL. ListFunctions cannot tell you in advance; bounding scan_regions
+        is the only lever.'
+      reader: api
+      satisfies: not_equals
+      value: NONE
   CKV_AWS_26:
     aws_sns_topic:
       assert:
@@ -1233,6 +1496,35 @@ checks:
         entry for aws_sns_topic (list_topics, no fields); the stock resource is used here because it is
         the only one of the two that can read topic attributes.
       reader: stock
+  CKV_AWS_260:
+    aws_security_group:
+      conditions:
+      - path: from_port
+        satisfies: at_most
+        value: 80
+        when_absent: true
+      - path: to_port
+        satisfies: at_least
+        value: 80
+        when_absent: true
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      field: ip_permissions
+      note: 'Structurally identical to the exec-validated CKV_AWS_24 mapping, with 22 replaced by 80;
+        the field and every condition path are the ones that mapping already proved against ec2:DescribeSecurityGroups
+        (IpPermissions[].IpRanges[].CidrIp and Ipv6Ranges[].CidrIpv6 — SDK ip_ranges.cidr_ip and ipv_6_ranges.cidr_ipv_6).
+        when_absent: true on both port conditions is the deployed reading of Checkov''s protocol "-1"
+        case: AWS stores an all-traffic rule with NO FromPort or ToPort member at all, and "the member
+        is absent" is exactly "every port", so without it a rule opening everything to the world would
+        pass a check about port 80.'
+      reader: api
+      satisfies: none_of
   CKV_AWS_266:
     aws_db_snapshot_copy:
       assert:
@@ -1251,6 +1543,87 @@ checks:
         AWS-managed one, so the "CMK" half of the check title is not assessed. That limitation is shared
         with the already-shipped CKV_AWS_327 / CKV_AWS_354 mappings.'
       reader: stock
+  CKV_AWS_274:
+    aws_iam_policy_attachment:
+      note: "WHY NOT THE PROPOSED SHAPE. tools/proposals/custom.yml files this under `list_args`: iam:ListEntitiesForPolicy(PolicyArn=...AdministratorAccess)\
+        \ plus a \"collection_empty\" assertion. Neither landed, and neither is needed. ListEntitiesForPolicy\
+        \ takes a PolicyArn, but that arn is a CONSTANT — the AWS-managed policy — not a discovered parent\
+        \ id, so there is nothing for `args` or for `parent:` to supply. One call, one number.\nFIELD\
+        \ CONFIRMED, not transliterated. vendor/.../libraries/aws_iam_policy.rb takes require_any_of(policy_arn,\
+        \ policy_name), calls iam_client.get_policy for an arn, and exposes `attachment_count` as an attr_reader\
+        \ assigned from @resp.attachment_count. The member is iam.Policy.AttachmentCount — confirmed as\
+        \ a member of the Policy shape in the image's aws-sdk-iam, alongside permissions_boundary_usage_count\
+        \ — and AWS populates it on every GetPolicy response. That last clause is the one part taken from\
+        \ AWS's behaviour rather than from a model, so here is its bound: the singleton shape does not\
+        \ nil-filter, so a nil AttachmentCount would meet `should eq 0` and FAIL loudly rather than pass.\
+        \ Every way this assumption can be wrong is red, not green — unlike the api reader, where an absent\
+        \ member silently removes the row. AttachmentCount is the number of IAM users, groups and roles\
+        \ the policy is attached to, which is precisely the relationship Checkov forbids, so 0 is the\
+        \ compliant value and anything else is the finding.\nCAN IT FAIL. Yes, and it usually will: most\
+        \ accounts attach AdministratorAccess to at least a break-glass role. That is a true positive,\
+        \ not noise — Checkov flags the same attachment in HCL — but note that the singleton shape enumerates\
+        \ nothing and therefore has no exemption hook, so a deliberately-retained break-glass attachment\
+        \ cannot be exempted per-ARN the way an enumerated asset can. It has to be argued in the POA&M\
+        \ or the attachment moved to a scoped customer-managed policy.\nWHY THIS TF TYPE. The catalogue\
+        \ lists six types for this check (aws_iam_role, four *_policy_attachment types and aws_ssoadmin_managed_policy_attachment).\
+        \ render_singleton keys on one, and aws_iam_policy_attachment is the one CKV2_AWS_56 already uses\
+        \ for the same assertion, so the two controls read alike. All six are still named in the rendered\
+        \ control's `terraform_types` tag.\nSSO IS COVERED, which the HCL check only partly is: an AWS-managed\
+        \ policy attached to an IAM Identity Center permission set materialises as an attachment on the\
+        \ provisioned AWSReservedSSO_* role, so it is counted here even when no aws_ssoadmin_managed_policy_attachment\
+        \ exists in any HCL this account's pipeline scans.\nDELIBERATE EXCLUSION. iam.Policy carries AttachmentCount\
+        \ and PermissionsBoundaryUsageCount as SEPARATE members and only the first is read. A policy named\
+        \ as a permissions BOUNDARY constrains a principal rather than granting to it, so a boundary that\
+        \ names AdministratorAccess will not appear in this control. That is a decision, not an oversight.\n\
+        KNOWN TEMPLATE WART, inherited from CKV2_AWS_56 and flagged rather than hidden: SINGLETON_TEMPLATE\
+        \ opens with a fixed \"is configured for this account\" assertion whose failure message reads\
+        \ \"no account-level policy is set\". That prose was written for the IAM password policy; here\
+        \ `exists?` is false only when GetPolicy could not be read at all. The posture is still right\
+        \ (nothing assessed => loud failure) but the sentence describes the wrong condition.\nREAD-FAILURE\
+        \ POSTURE, traced through the vendored code rather than assumed, because a singleton has no unreadable_regions\
+        \ guard to fall back on. aws_iam_policy makes THREE calls per instantiation: GetPolicy, then ListEntitiesForPolicy\
+        \ and GetPolicyVersion, both unconditional. Every way they can fail is red. A 403 on any of them:\
+        \ aws_backend#catch_aws_errors raises Inspec::Exceptions::ResourceFailed, which InSpec rescues\
+        \ around the constructor, and the \"is configured for this account\" expectation fails. A non-403\
+        \ ServiceError on GetPolicy (a wrong partition input yielding NoSuchEntity, a throttle): warned\
+        \ and swallowed, @resp stays nil, the early `return if @resp.nil?` leaves @arn nil, `exists?`\
+        \ is false, same loud failure. A non-403 on ListEntitiesForPolicy: the swallowed nil then meets\
+        \ `resp.policy_groups` and raises NoMethodError out of the constructor, which reports as a control\
+        \ error. Ugly, but never a pass and never a Not Applicable — the scanner role needs iam:GetPolicy,\
+        \ iam:ListEntitiesForPolicy and iam:GetPolicyVersion for this control, and will say so if it does\
+        \ not have them."
+      property: attachment_count
+      reader: singleton
+      resource: 'aws_iam_policy(policy_arn: "arn:#{input(''aws_partition'')}:iam::aws:policy/AdministratorAccess")'
+      satisfies: equals
+      value: 0
+  CKV_AWS_277:
+    aws_security_group:
+      conditions:
+      - path: ip_protocol
+        satisfies: equals
+        value: '-1'
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      field: ip_permissions
+      note: '"Port -1" is not a port. In Terraform it is the from_port = -1 / to_port = -1 / protocol
+        = "-1" spelling of an all-traffic rule, and Checkov''s port arithmetic fires on exactly that literal.
+        AWS does not store it that way: DescribeSecurityGroups returns such a permission as IpProtocol
+        "-1" carrying no FromPort or ToPort member at all. So the deployed equivalent of Checkov''s literal
+        is the protocol, not a port range, and that is what is asserted here — ip_protocol is a member
+        EC2 always populates on an IpPermission, so the condition is decidable on every element rather
+        than resting on a when_absent verdict. Deliberately narrower than CKV_AWS_24: every rule this
+        fails, CKV_AWS_24 also fails, and the two are separate checks upstream for the same reason they
+        are separate here — "every protocol and every port is open to the internet" is a different finding
+        from "SSH is".'
+      reader: api
+      satisfies: none_of
   CKV_AWS_278:
     aws_memorydb_snapshot:
       field: kms_key_arn
@@ -1307,6 +1680,18 @@ checks:
       reader: api
       satisfies: equals
       value: DISABLED
+  CKV_AWS_294:
+    aws_cloudtrail_event_data_store:
+      field: kms_key_id
+      note: 'TWO-STEP READER, and the second call is what makes the check reachable at all: the EventDataStore
+        summary returned by ListEventDataStores does NOT carry KmsKeyId -- confirmed against the shape
+        in the aws-sdk-cloudtrail the image ships -- while GetEventDataStore does. GetEventDataStore''s
+        output has no wrapper member, so collection: _response. A store encrypted with the CloudTrail-owned
+        key omits KmsKeyId; not_empty does not nil-filter, so it fails, which is the finding. An account
+        with no CloudTrail Lake store enumerates zero parents and parents_seen is 0, which is a truthful
+        Not Applicable.'
+      reader: api
+      satisfies: not_empty
   CKV_AWS_298:
     aws_dms_s3_endpoint:
       field: s3_encryption_mode
@@ -1352,6 +1737,68 @@ checks:
         ids: volume_ids
         resource: aws_ebs_volumes
       reader: stock
+  CKV_AWS_304:
+    aws_secretsmanager_secret_rotation:
+      field: rotation_interval_days
+      note: "DIVERGES FROM THE PROPOSAL, which asked for the stock pair aws_secretsmanager_secrets ->\
+        \ aws_secretsmanager_secret and named `where: {rotation_enabled: true}` as the missing piece.\
+        \ `where` did not land — but the stock shape is the wrong shape here regardless, and the proposal\
+        \ says why in its own words: render_stock applies NO nil filter, a secret with no rotation answers\
+        \ NullResponse, NullResponse#method_missing returns self, and `should be <= 90` therefore gets\
+        \ a truthy object back and PASSES. Every unrotated secret would have reported compliant. That\
+        \ is the worst outcome this repo recognises, and it is not fixed by adding a filter — it is fixed\
+        \ by using a reader whose rows are plain hashes.\nWHY THE NIL DIRECTION IS NOW SAFE, AND WHY THE\
+        \ SCOPE IS CHECKOV'S SCOPE. Under the api reader, nil_filter_for('at_most') emits `.reject { |a|\
+        \ a[:rotation_interval_days].nil? }`, so a secret that declares no day-based rotation schedule\
+        \ is OUT OF SCOPE rather than passing. That is not a gap being papered over: CKV_AWS_304 is written\
+        \ against the aws_secretsmanager_secret_rotation RESOURCE, so its population is exactly \"secrets\
+        \ that have a rotation schedule\", and \"is rotation configured at all\" is a DIFFERENT check\
+        \ — CKV2_AWS_57, which is already live and asserts rotation_enabled == true through the stock\
+        \ pair. The two together cover what one of them cannot.\nFIELDS CONFIRMED AGAINST THE SDK MODEL\
+        \ IN THE IMAGE, not transliterated from the Terraform argument (`rotation_rules { automatically_after_days\
+        \ }` happens to line up here, but it was checked rather than assumed): Aws::SecretsManager::Client.api.operation(:list_secrets)\
+        \ has no required input members; its output member is `secret_list`; SecretListEntry carries [arn,\
+        \ name, description, kms_key_id, rotation_enabled, rotation_lambda_arn, rotation_rules, last_rotated_date,\
+        \ ...]; and RotationRules carries exactly one member in this SDK build, `automatically_after_days`,\
+        \ an IntegerShape. list_secrets is pageable (Aws::Pager, next_token), and each_page follows it.\n\
+        WHAT I COULD NOT CONFIRM, stated rather than assumed. The SDK build in this image predates ScheduleExpression/Duration\
+        \ on RotationRules, so a secret rotating on a cron expression has no member here to read. AWS\
+        \ documents AutomaticallyAfterDays as being \"calculated from the rotation schedule\" in DescribeSecret\
+        \ and ListSecrets, which would make a cron-rotated secret report a real interval — but that is\
+        \ documentation, not something I could resolve against a model or observe without an account.\
+        \ If AWS instead omits it, such a secret is nil and drops out of scope: an UNDER-report, visible\
+        \ as a smaller population, never a pass. The other unconfirmed direction is a secret whose rotation\
+        \ was cancelled but whose RotationRules were retained; it would be assessed here and could pass\
+        \ on a stale interval. It still fails CKV2_AWS_57, which is where \"is rotation on\" is asked.\n\
+        THE ONE FALSE-PASS DIRECTION, NAMED. Everything mechanical here is confirmed — the call, its lack\
+        \ of required arguments, the collection member, the nested path, pagination, and the fact that\
+        \ Aws::Structure#to_h is a DEEP conversion so dig_path (which breaks on any non-Hash node) does\
+        \ reach automatically_after_days; that last one was reproduced against a stubbed client in the\
+        \ image rather than assumed. What is NOT confirmed is the COMPOSITION of the in-scope population.\
+        \ If AWS ever reports `RotationRules: {AutomaticallyAfterDays: 0}` for a secret that is not rotating\
+        \ — rather than omitting the structure — then 0 <= 90 and every such secret renders GREEN, with\
+        \ a result line claiming it rotates within 90 days. That is the failure mode this repo cares most\
+        \ about, and the schema cannot express the fix: `at_most` is one comparison and there is no range\
+        \ verb, so \"1..90\" is not writable, and `where: {rotation_enabled: true}` — which is the correct\
+        \ scope and what tools/proposals/custom.yml asked for — did not land. WHAT MAKES IT TOLERABLE,\
+        \ and it is evidence rather than an argument: the vendored pack's own live integration test for\
+        \ a non-rotating secret, vendor/.../test/integration/verify/controls/aws_secretsmanager_secret.rb,\
+        \ asserts `its(\"rotation_rules.automatically_after_days\") { should be_empty }`, and the unit\
+        \ fixtures set `rotation_rules = {}`. So inspec-aws's maintainers, running against a real account,\
+        \ observed ABSENT rather than zero. Second, the whole of that population is failed loudly and\
+        \ separately by the live CKV2_AWS_57, so no account can be green on rotation overall on the strength\
+        \ of this control alone. It is still the weakest link in this slice: if a live exec shows a secret\
+        \ with rotation_enabled false inside this control's population, downgrade this mapping rather\
+        \ than reasoning about it again.\nWHY A SECOND SPEC ON THE SAME LIST CALL. A live aws_secretsmanager_secret\
+        \ spec already exists, and merge_proposals refuses any staging api spec whose name is already\
+        \ live — deliberately, so a draft cannot silently redefine an exec-validated one. So this declares\
+        \ aws_secretsmanager_secret_rotation, which is also the Terraform type the catalogue names for\
+        \ this check and is therefore the type render_api needs a spec for. Cost: one extra ListSecrets\
+        \ walk per region. Folding the field into the live spec instead is a one-line edit to tools/api_specs.yml,\
+        \ in its own commit, and would let this spec go."
+      reader: api
+      satisfies: at_most
+      value: 90
   CKV_AWS_305:
     aws_cloudfront_distribution:
       assert:
@@ -1395,6 +1842,18 @@ checks:
       reader: api
       satisfies: equals
       value: true
+  CKV_AWS_32:
+    aws_ecr_repository_policy:
+      note: Checkov parses the repository_policy `policy` argument and runs cloudsplaining's internet_accessible_actions
+        over it, which is no_wildcard_principal with a curated condition allow-list. Deployed, the document
+        is fetched with ecr:GetRepositoryPolicy per repository enumerated by ecr:DescribeRepositories
+        (both confirmed against the botocore ECR model). A repository with no policy raises RepositoryPolicyNotFoundException,
+        which policy_specs declares as absent_when — no policy is not public, so it passes.
+      predicate: no_wildcard_principal
+      reader: policy
+      stronger: 'Stronger than Checkov: it reads the policy AWS actually has, so a statement added in
+        the console or by another tool after the apply is seen. It also sees repositories the Terraform
+        never declared at all.'
   CKV_AWS_322:
     aws_elasticache_cluster:
       assert:
@@ -1451,6 +1910,25 @@ checks:
       reader: api
       satisfies: not_equals
       value: /
+  CKV_AWS_33:
+    aws_kms_key:
+      note: 'Checkov parses the `policy` argument on aws_kms_key. Deployed, the document comes from kms:GetKeyPolicy(KeyId,
+        PolicyName="default") per key enumerated by kms:ListKeys — both confirmed against the KMS model
+        in the auditor image, where ListKeys returns KeyListEntry{KeyId, KeyArn} and GetKeyPolicy returns
+        a plain String `Policy`. A KMS key always has a policy, so the spec declares no absent_when: NotFoundException,
+        KMSInvalidStateException or a denial (KMS models NotFoundException, InvalidArnException, DependencyTimeoutException,
+        KMSInternalException and KMSInvalidStateException on this call — AuthorizationError is SNS''s
+        spelling, not KMS''s) means the read failed, not that the key grants nothing, and an unreadable
+        key is undecidable. AWS-managed keys are in scope because ListKeys cannot exclude them; their
+        default policies are EXPECTED to condition every wildcard principal on kms:CallerAccount / kms:ViaService,
+        which takes them out of this predicate''s scope, but that is the one claim in this file resting
+        on documentation rather than on a verified response.'
+      predicate: no_wildcard_principal
+      reader: policy
+      stronger: 'Stronger than Checkov: the key policy is the only thing standing between a key and every
+        principal in every account, and it is routinely widened in the console or by a service that "helped"
+        — a grant added after the apply is invisible to the HCL scan and visible here. It also covers
+        keys the Terraform never declared.'
   CKV_AWS_330:
     aws_efs_access_point:
       field: posix_user_gid
@@ -1475,6 +1953,28 @@ checks:
       satisfies: in_list
       value:
       - disable
+  CKV_AWS_336:
+    aws_ecs_task_definition:
+      conditions:
+      - path: readonly_root_filesystem
+        satisfies: equals
+        value: true
+        when_absent: false
+      field: container_definitions
+      note: 'Aws::ECS::Types::ContainerDefinition carries readonly_root_filesystem — confirmed against
+        the SDK model, and it is the member name, not the Terraform argument spelling. ECS refuses a task
+        definition with no container definitions, so container_definitions is never empty on a real asset
+        and all_of cannot pass vacuously. AWS omits readonly_root_filesystem entirely when it was never
+        set, which is the exact violation this rule exists to catch, so when_absent is false and the omission
+        FAILS. The enumeration deliberately does NOT use ecs:ListTaskDefinitions. That call returns every
+        REVISION ever registered, which tools/proposals/parentchild.yml records as the one population
+        in this catalogue that costs more than the rest of the profile combined. ecs:ListTaskDefinitionFamilies
+        takes no required argument, defaults to ACTIVE families, and is bounded by the FAMILY count; ecs:DescribeTaskDefinition(taskDefinition:
+        <family>) then resolves the latest ACTIVE revision, which is the definition a new task would actually
+        run. That is a divergence from Checkov, which sees every revision in the HCL, and it is the right
+        one: a deregistered revision is not a deployed asset.'
+      reader: api
+      satisfies: all_of
   CKV_AWS_337:
     aws_ssm_parameter:
       assert:
@@ -1739,6 +2239,31 @@ checks:
         fails it. The five names are the EKS LogType enum, confirmed from the aws-sdk-eks documentation
         for cluster.logging.cluster_logging[].types.'
       reader: stock
+  CKV_AWS_376:
+    aws_elb:
+      conditions:
+      - path: listener.protocol
+        satisfies: not_in_list
+        value:
+        - HTTPS
+        - SSL
+        when_absent: true
+      field: listener_descriptions
+      note: 'The aws_elb api spec is already live and already declares listener_descriptions. Aws::ElasticLoadBalancing::Types::ListenerDescription
+        carries `listener`, and Aws::ElasticLoadBalancing::Types::Listener carries `protocol` — confirmed
+        against the SDK model, and NOT the same thing as `instance_protocol`, which is the back-end leg
+        and is a different question. Written as not_in_list [HTTPS, SSL] rather than in_list [HTTP, TCP]
+        on purpose. The two are equivalent over ELB classic''s closed set of four protocols, but they
+        fail in opposite directions if the API ever answers in a casing this does not expect: the in_list
+        form would match nothing and none_of would pass VACUOUSLY, while this form treats an unrecognised
+        protocol as unencrypted and fails visibly. when_absent: true for the same reason — a listener
+        whose protocol could not be read has not been shown to use TLS. Deliberately ONE condition, not
+        two. The proposal also wanted "every HTTPS/SSL listener carries an ssl_certificate_id", and that
+        clause is dropped rather than folded in because ELB classic refuses to create an HTTPS or SSL
+        listener without SSLCertificateId — it is a condition that cannot fail on a deployed listener,
+        and a condition that cannot fail adds nothing but the appearance of rigour.'
+      reader: api
+      satisfies: none_of
   CKV_AWS_377:
     aws_route53domains_registered_domain:
       field: transfer_lock
@@ -1766,6 +2291,49 @@ checks:
         \ to the target is the finding either way; use exempt_assets where a boundary has accepted that\
         \ risk."
       reader: stock
+  CKV_AWS_382:
+    aws_security_group:
+      conditions:
+      - path: ip_protocol
+        satisfies: equals
+        value: '-1'
+      - path:
+        - ip_ranges.cidr_ip
+        - ipv_6_ranges.cidr_ipv_6
+        satisfies: in_list
+        value:
+        - 0.0.0.0/0
+        - "::/0"
+        - 0000:0000:0000:0000:0000:0000:0000:0000/0
+      field: ip_permissions_egress
+      note: 'CKV_AWS_277 over the egress side. ip_permissions_egress is already declared on the live aws_security_group
+        api spec, and Aws::EC2::Types::IpPermission is the same structure on both sides, so every condition
+        path is the confirmed one. Expect this to fail widely and read the failures before treating them
+        as noise: EC2 gives EVERY security group a default egress permission of IpProtocol "-1" to 0.0.0.0/0
+        unless one is written over it, so an account that has never narrowed egress fails on nearly every
+        group. That is the true state of the estate and it is what Checkov flags; it is a finding, not
+        a false positive. It can pass — a group whose egress is written as explicit protocol/port/destination
+        rules has no "-1" permission at all — so this is not a control that cannot pass.'
+      reader: api
+      satisfies: none_of
+  CKV_AWS_385:
+    aws_sns_topic_policy:
+      note: The same enumeration and the same fetched document as CKV_AWS_169, with the predicate that
+        looks for a CONCRETE principal in another account rather than a wildcard one. "Another account"
+        is decided against sts:GetCallerIdentity, which the reader resolves once per run — the Terraform
+        scan has no equivalent, so this is a question Checkov cannot answer at all. The AWS-written default
+        statement is conditioned and is therefore out of scope, as is any statement a person deliberately
+        constrained.
+      predicate: no_cross_account_principal_without_condition
+      reader: policy
+      stronger: 'Different from Checkov rather than uniformly stronger, and the difference runs both ways.
+        Stronger: the HCL scan sees an account number as an opaque string, while this compares it against
+        sts:GetCallerIdentity and reports only genuinely external accounts, in any partition; and it sees
+        the cross-account statements a subscription flow appended that the Terraform never described.
+        Narrower: Checkov''s SNSCrossAccountAccess fails on any concrete arn:aws:iam:: principal with
+        no Condition INCLUDING one in the scanning account, and this does not report those. That narrowing
+        is deliberate — the rule''s subject is cross-account access — but it is a narrowing, so an assessor
+        comparing the two results will find same-account unconditioned grants here that Checkov flagged.'
   CKV_AWS_389:
     aws_launch_configuration:
       assert:
@@ -1809,6 +2377,26 @@ checks:
         drop a real finding rather than a transient one. That is why exclude: is declared per mapping
         and not per plural.'
       reader: stock
+  CKV_AWS_393:
+    aws_iam_role:
+      note: 'The live aws_iam_role trust-policy source again. The predicate is inert on statements with
+        no token.actions.githubusercontent.com federated principal — they return no offence, which is
+        a PASS for that statement and leaves the role''s other statements judged — so in an account with
+        no GitHub OIDC roles this control passes without a finding, exactly as Checkov does on Terraform
+        declaring none. Where such a role does exist, the trust must carry a StringEquals/StringLike (including
+        the ForAllValues:/ForAnyValue: forms) Condition pinning ...:sub to a concrete repo:<org>/<repo>.
+        A Null condition is explicitly NOT accepted: it only requires the claim to be present, which every
+        GitHub token satisfies.'
+      predicate: gh_oidc_sub_safe
+      reader: policy
+      stronger: 'Stronger than Checkov twice over, and the second one is a deliberate divergence rather
+        than a consequence of reading live data. First: the failure mode this rule exists for is a trust
+        policy widened after the apply — an org-wide repo:acme/* pasted in to unblock a second repository;
+        the HCL still says repo:acme/widgets and the deployed document is what STS enforces. Second: Checkov
+        3.3.16 PASSES repo:acme/* — its gh_repo_regex accepts any org/<anything> value — and gh_oidc_sub_safe
+        fails it, because an org-wide sub is assumable from every repository in the organisation and the
+        organisation is not the trust boundary the role was written for. A run of both tools will therefore
+        disagree on exactly that case, and this control is the stricter of the two.'
   CKV_AWS_42:
     aws_efs_file_system:
       assert:
@@ -1894,6 +2482,55 @@ checks:
         Checkov and fails here. That divergence is stated in the rationale so it renders into the control.'
       reader: stock
     aws_opensearch_domain: *id005
+  CKV_AWS_60:
+    aws_iam_role:
+      note: The trust policy, not a permissions policy. iam:ListRoles returns AssumeRolePolicyDocument
+        inline — the botocore IAM model documents ListRoles as omitting only PermissionsBoundary, RoleLastUsed
+        and Tags — so no second call is needed. It arrives URL-encoded (RFC 3986); the parser tries JSON
+        first and percent-decodes only on failure, so the encoding is not declared per source.
+      predicate: no_wildcard_principal
+      reader: policy
+      stronger: 'Stronger than Checkov: a wildcard trust policy is usually not written in HCL at all —
+        it is added in the console, or left behind by a tool. Reading the deployed trust document is the
+        only way to see that.'
+  CKV_AWS_61:
+    aws_iam_role:
+      note: 'The trust policy, not a permissions policy, and the same live aws_iam_role source CKV_AWS_60
+        already uses — iam:ListRoles returns AssumeRolePolicyDocument inline, URL-encoded, and the parser
+        percent-decodes on JSON failure without being told. The predicate matches a bare 12-digit account
+        or an arn:aws*:iam::<acct>:root principal on any non-Deny statement, partition-agnostic so a GovCloud
+        trust is judged the same way. Note that it flags an OWN-account root trust as well as a foreign
+        one: the deployed document cannot say which was intended, and Checkov''s rule is about the breadth
+        of the grant rather than about whose account it is.'
+      predicate: no_account_root_principal
+      reader: policy
+      stronger: 'Stronger than Checkov: an account-root trust is the classic thing added by hand to "just
+        make it work" during an incident and never narrowed afterwards, so it is disproportionately likely
+        to exist only in the deployed document.'
+  CKV_AWS_62:
+    aws_iam_policy:
+      note: 'Customer-managed policies only: iam:ListPolicies defaults to Scope=All, which returns ~1,200
+        AWS-managed policies including AdministratorAccess — assessing those would bury every actionable
+        finding under policies this account cannot change, so policy_specs pins Scope=Local. The default
+        version''s document comes from iam:GetPolicyVersion(PolicyArn, VersionId), taking VersionId from
+        the list item''s DefaultVersionId (all three members confirmed against the botocore IAM model).'
+      predicate: no_admin_star_star
+      reader: policy
+  CKV_AWS_63:
+    aws_iam_policy:
+      note: 'The same live aws_iam_policy source CKV_AWS_62 uses, with the broader predicate: CKV_AWS_62
+        needs ''*'' in BOTH Action and Resource, this one needs it in Action alone. Customer-managed policies
+        only — policy_specs pins iam:ListPolicies to Scope=Local, because the ~1,200 AWS-managed policies
+        include several that legitimately carry ''*'' on ''*'' and that this account cannot change. The
+        default version''s document comes from iam:GetPolicyVersion(PolicyArn, VersionId) with VersionId
+        taken from the list item''s DefaultVersionId. A prefix wildcard such as s3:Get* is deliberately
+        NOT flagged: the predicate matches only the bare ''*'' and ''*:*'', which is Checkov''s rule and
+        is the only version of it that does not fire on nearly every policy in existence.'
+      predicate: no_wildcard_action
+      reader: policy
+      stronger: 'Stronger than Checkov: it reads the version IAM is actually serving. A policy whose default
+        version was rolled forward in the console after the apply has an HCL document that says one thing
+        and a live document that says another, and only the live one is enforced.'
   CKV_AWS_67:
     aws_cloudtrail:
       assert:
@@ -1965,6 +2602,21 @@ checks:
       reader: api
       satisfies: equals
       value: true
+  CKV_AWS_76:
+    aws_api_gateway_stage:
+      field: access_log_destination_arn
+      note: 'Reuses the LIVE two-step aws_api_gateway_stage spec (GetRestApis -> GetStages); no new spec.
+        Terraform writes access_log_settings { destination_arn }; the API member is Stage.AccessLogSettings.DestinationArn,
+        resolved against the aws-sdk-apigateway the image ships. A stage with no access logging omits
+        AccessLogSettings entirely, so the chain is nil -- and not_empty is one of the two verbs render_controls
+        deliberately does NOT nil-filter, so that stage FAILS rather than disappearing into Not Applicable.
+        NOT mapped for aws_apigatewayv2_stage even though the catalogue names it and the member exists
+        (GetStages items[].AccessLogSettings.DestinationArn, confirmed on Aws::ApiGatewayV2::Client):
+        render_api takes next(iter(mapping)), so a second terraform type in the same mapping is never
+        enumerated -- it would read as covered while asserting nothing. HTTP/WebSocket API stages are
+        an uncovered gap, not a silent one.'
+      reader: api
+      satisfies: not_empty
   CKV_AWS_81:
     aws_msk_cluster:
       field: encryption_in_transit_client_broker
@@ -2034,51 +2686,30 @@ checks:
       note: access_log_enabled? reads DescribeLoadBalancerAttributes (.access_log.enabled), which is the
         deployed form of the `access_logs` block Checkov looks for.
       reader: stock
-
-  # ---------------------------------------------------------------------------
-  # Policy-document mappings (reader: policy).
-  #
-  # These name a PREDICATE rather than a `satisfies` verb, because the unit of
-  # judgement is a statement and no field comparison expresses it. The predicate
-  # is implemented once in libraries/_policy_document.rb; where the document
-  # lives is declared once per source in tools/policy_specs.yml. `source`
-  # defaults to the Terraform type and is spelled out here only when it differs.
-  #
-  # Grouped rather than interleaved so a reviewer can see the whole shape at
-  # once; YAML does not care about key order.
-  # ---------------------------------------------------------------------------
-  CKV_AWS_32:
-    aws_ecr_repository_policy:
-      reader: policy
-      predicate: no_wildcard_principal
-      note: 'Checkov parses the repository_policy `policy` argument and runs cloudsplaining''s
-        internet_accessible_actions over it, which is no_wildcard_principal with a curated
-        condition allow-list. Deployed, the document is fetched with ecr:GetRepositoryPolicy
-        per repository enumerated by ecr:DescribeRepositories (both confirmed against the
-        botocore ECR model). A repository with no policy raises RepositoryPolicyNotFoundException,
-        which policy_specs declares as absent_when — no policy is not public, so it passes.'
-      stronger: 'Stronger than Checkov: it reads the policy AWS actually has, so a statement
-        added in the console or by another tool after the apply is seen. It also sees repositories
-        the Terraform never declared at all.'
-  CKV_AWS_60:
-    aws_iam_role:
-      reader: policy
-      predicate: no_wildcard_principal
-      note: 'The trust policy, not a permissions policy. iam:ListRoles returns
-        AssumeRolePolicyDocument inline — the botocore IAM model documents ListRoles as
-        omitting only PermissionsBoundary, RoleLastUsed and Tags — so no second call is
-        needed. It arrives URL-encoded (RFC 3986); the parser tries JSON first and
-        percent-decodes only on failure, so the encoding is not declared per source.'
-      stronger: 'Stronger than Checkov: a wildcard trust policy is usually not written in
-        HCL at all — it is added in the console, or left behind by a tool. Reading the
-        deployed trust document is the only way to see that.'
-  CKV_AWS_62:
-    aws_iam_policy:
-      reader: policy
-      predicate: no_admin_star_star
-      note: 'Customer-managed policies only: iam:ListPolicies defaults to Scope=All, which
-        returns ~1,200 AWS-managed policies including AdministratorAccess — assessing those
-        would bury every actionable finding under policies this account cannot change, so
-        policy_specs pins Scope=Local. The default version''s document comes from
-        iam:GetPolicyVersion(PolicyArn, VersionId), taking VersionId from the list item''s
-        DefaultVersionId (all three members confirmed against the botocore IAM model).'
+  CKV_AWS_99:
+    aws_glue_security_configuration:
+      conditions:
+      - path: cloud_watch_encryption.cloud_watch_encryption_mode
+        satisfies: equals
+        value: SSE-KMS
+      - path: job_bookmarks_encryption.job_bookmarks_encryption_mode
+        satisfies: equals
+        value: CSE-KMS
+      - path: s3_encryption.s3_encryption_mode
+        satisfies: not_equals
+        value: DISABLED
+      field: encryption_configuration
+      note: "`encryption_configuration` is a STRUCTURE, not a list, and the walker treats a Hash as ONE\
+        \ element — so this is the three-way conjunction the check needs, expressed as three paths into\
+        \ that one element. `any_of` rather than `all_of` is load-bearing: over a field the API omitted,\
+        \ all_of is vacuously TRUE and would pass a security configuration with no encryption block at\
+        \ all, which is the single worst case this check exists to catch. any_of over an absent field\
+        \ is false, which fails it.\nOne honest divergence. `s3_encryption` is a LIST in the API and a\
+        \ condition is EXISTENTIAL over the values a path reaches, so the third condition reads \"SOME\
+        \ S3 encryption mode is not DISABLED\" where Checkov wants every one of them. Terraform's aws_glue_security_configuration\
+        \ allows exactly one `s3_encryption` block, so for anything under IaC the two readings are identical;\
+        \ a configuration built through the API with several S3 modes, one of them DISABLED, would pass\
+        \ here. Closing that needs a universal quantifier over a sub-path, which the walker states it\
+        \ does not have."
+      reader: api
+      satisfies: any_of

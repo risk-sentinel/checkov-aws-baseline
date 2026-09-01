@@ -94,15 +94,37 @@ VERBLESS_READERS = ("policy",)
 
 
 def known_verbs():
-    """The verbs matcher_for implements, read from the renderer rather than copied.
+    """The verbs the renderer implements, read from it rather than copied.
 
     A copy drifts: the renderer grew eight verbs in one commit and any list kept
     here by hand would have rejected all eight as unknown.
+
+    TWO sources, because the renderer has two dispatchers. `matcher_for` renders
+    a verb as an RSpec matcher against the asset's own field, and scraping its
+    `satisfies == "x"` arms finds the thirteen scalar verbs. The ROLL-UP verbs
+    are rendered by `collection_matcher_for` instead and deliberately never
+    appear in matcher_for's body -- matcher_for RAISES on them, pointing at the
+    other function. So scraping matcher_for alone reported every roll-up mapping
+    as "not implemented", which refused a verb the renderer, the walker in
+    libraries/_checkov_collection.rb and tools/lint_api_paths.rb all support.
+    COLLECTION_VERBS is read out of the renderer for the same reason the scalar
+    ones are: so this cannot drift from what actually renders.
     """
+    import re
     src = (HERE / "render_controls.py").read_text()
     body = src.split("def matcher_for(", 1)[1].split("\ndef ", 1)[0]
+    scalar = set(re.findall(r'satisfies == "([a-z_]+)"', body))
+    match = re.search(r"^COLLECTION_VERBS\s*=\s*\((.*?)\)", src, re.M | re.S)
+    rollup = set(re.findall(r'"([a-z_]+)"', match.group(1))) if match else set()
+    return sorted(scalar | rollup)
+
+
+def rollup_verbs():
+    """Just the roll-up verbs, for the `conditions:` rule below."""
     import re
-    return sorted(set(re.findall(r'satisfies == "([a-z_]+)"', body)))
+    src = (HERE / "render_controls.py").read_text()
+    match = re.search(r"^COLLECTION_VERBS\s*=\s*\((.*?)\)", src, re.M | re.S)
+    return set(re.findall(r'"([a-z_]+)"', match.group(1))) if match else set()
 
 
 def known_predicates():
@@ -215,6 +237,21 @@ def validate(merged, owner, verbs):
             elif verb not in verbs:
                 errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is not "
                               f"implemented. matcher_for knows: {', '.join(verbs)}")
+            elif verb in rollup_verbs():
+                # A roll-up takes `conditions:`, not `value:`. render_controls
+                # raises SystemExit on an empty list -- mid-render, after it has
+                # already written part of controls/ -- so it is refused here.
+                if not body.get("conditions"):
+                    errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' rolls up over "
+                                  f"the elements of a collection and needs a non-empty "
+                                  f"`conditions:` list; with none it matches every element or "
+                                  f"none of them, and either way asserts nothing")
+                if reader != "api":
+                    errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is supported "
+                                  f"on the `api` reader only, not '{reader}' — and "
+                                  f"tools/lint_api_paths.rb can only resolve condition paths "
+                                  f"for that reader, so an unchecked path is a control that "
+                                  f"cannot fail")
             elif verb in ("equals", "not_equals", "greater_than", "at_least", "at_most",
                           "less_than", "includes", "excludes", "matches", "in_list",
                           "not_in_list") and holder.get("value") is None:

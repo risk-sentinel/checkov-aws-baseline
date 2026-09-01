@@ -2,30 +2,106 @@
 #
 # Rule:        CKV_AWS_393 (checkov 3.3.16)
 # Applies to:  aws_iam_role
-# Status:      PLANNED — no deployed-asset reader exists for aws_iam_role yet.
+# Read with:   aws_policy_documents — aws_iam_role → gh_oidc_sub_safe
+#              predicate: libraries/_policy_document.rb
+#              fetch:     tools/policy_specs.yml
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_393'] || []
 
 control 'CKV_AWS_393' do
-  impact 0.0
   title 'Ensure AWS GitHub Actions OIDC authorization policies only allow safe claims and claim order on IAM role'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_iam_role in this profile, so there is nothing to assert against.
+    Checkov asserts this against the policy document in the Terraform. This
+    profile fetches the policy AWS actually has on each aws_iam_role and
+    evaluates the same question over its statements: every GitHub Actions
+    OIDC trust pins a concrete repository.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Stronger than Checkov twice over, and the second one is a deliberate
+    divergence rather than a consequence of reading live data. First: the
+    failure mode this rule exists for is a trust policy widened after the
+    apply — an org-wide repo:acme/* pasted in to unblock a second
+    repository; the HCL still says repo:acme/widgets and the deployed
+    document is what STS enforces. Second: Checkov 3.3.16 PASSES repo:acme/*
+    — its gh_repo_regex accepts any org/<anything> value — and
+    gh_oidc_sub_safe fails it, because an org-wide sub is assumable from
+    every repository in the organisation and the organisation is not the
+    trust boundary the role was written for. A run of both tools will
+    therefore disagree on exactly that case, and this control is the
+    stricter of the two.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A GitHub Actions OIDC trust that does not pin the repository can be
+    assumed from any workflow GitHub will mint a token for, which in the
+    unpinned case is every repository on github.com. An attacker needs no
+    credential and no access to this account — a public repository and a
+    workflow file are enough. A Null condition on the sub claim looks like a
+    constraint and is not one: it only asserts the claim is present, which
+    every GitHub token satisfies.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure AWS GitHub Actions OIDC authorization policies only allow safe claims and claim order on IAM role
+    Checkov looks for: aws_iam_role: every trust statement naming the
+    token.actions.githubusercontent.com federated principal carries a
+    StringEquals or StringLike Condition pinning
+    token.actions.githubusercontent.com:sub to a concrete repo:<org>/<repo>
+    value — not '*', not a bare Null presence test, and not one of the
+    abusable first claims (workflow:, environment:, ref:, context:,
+    head_ref:, base_ref:). Checkov's GithubActionsOIDCTrustPolicyOnRole
+    fails a GH-OIDC trust with no Condition at all, a sub of '*', a sub with
+    no value, a 'claim:*' assertion, an abusable first claim, or a repo:
+    value that is not org/repo-shaped — but its gh_repo_regex ACCEPTS an
+    org-wide repo:<org>/*, which this control rejects. That is a deliberate
+    strengthening, not a reproduction of Checkov's rule
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role
+    Terraform — aws_iam_role:
+
+      resource "aws_iam_role" "gha_deploy" {
+        name = "gha-deploy"
+
+        assume_role_policy = jsonencode({
+          Version = "2012-10-17"
+          Statement = [
+            {
+              Effect    = "Allow"
+              Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+              Action    = "sts:AssumeRoleWithWebIdentity"
+              Condition = {
+                StringEquals = {
+                  "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+                }
+                StringLike = {
+                  "token.actions.githubusercontent.com:sub" = "repo:acme/widgets:ref:refs/heads/main"
+                }
+              }
+            },
+          ]
+        })
+      }
+
+    Out of band — aws_iam_role:
+
+      aws iam update-assume-role-policy --role-name <role-name> --policy-document file://trust-policy.json
+
+    Note (aws_iam_role): The org and repository segments of the sub claim must
+    carry no wildcard; everything after them may, so repo:acme/widgets:* still
+    pins the repository and passes, while repo:acme/* does not — note that
+    Checkov 3.3.16 accepts repo:acme/*, so this control is stricter than the
+    rule it is derived from and a Terraform scan will not warn you about the
+    org-wide form. Constrain the aud claim to sts.amazonaws.com as well — it is
+    not what this control reads, but an unconstrained aud is the other half of
+    the same misconfiguration. Do NOT use a Null condition on sub: it asserts
+    only that the claim exists, which is true of every GitHub token ever minted,
+    and this control rejects it for that reason. Where several repositories
+    legitimately need the role, list each sub value explicitly rather than
+    widening to the org.
   FIX
 
   tag checkov_id:            'CKV_AWS_393'
@@ -34,9 +110,72 @@ control 'CKV_AWS_393' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_iam_role]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role'
-  tag implementation_status: 'planned'
+  tag policy_source:         'aws_iam_role'
+  tag policy_predicate:      'gh_oidc_sub_safe'
+  tag nist:                  ['AC-3', 'AC-6', 'IA-8']
+  tag nist_r4:               ['AC-3', 'AC-6', 'IA-8']
+  tag cci:                   ['CCI-000213', 'CCI-000804']
+  tag ksi:                   ['KSI-IAM-CTL']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_393 — no deployed-asset reader for aws_iam_role" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_policy_documents(type: 'aws_iam_role', source: 'aws_iam_role',
+                                predicate: 'gh_oidc_sub_safe', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A denied call or an unreachable endpoint ends up
+  # here, and without this assertion it renders as "no assets" and the control
+  # reports Not Applicable: the worst case reported as "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe 'aws_iam_role enumeration' do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # An asset whose policy could not be read or parsed has NO VERDICT. It is not
+  # in `assets` below, because a nil offender list compared against [] would
+  # pass — a denied GetPolicy silently reporting the least-visible estate as the
+  # cleanest one. It fails here instead, naming the asset and the reason.
+  #
+  # An asset with no policy at all is NOT here: that is a real answer and a
+  # passing one, recorded on the row as policy_present: false.
+  undecidable = assets.undecidable
+  unless undecidable.empty?
+    describe 'aws_iam_role policy documents' do
+      it 'could all be read and parsed' do
+        expect(undecidable).to be_empty
+      end
+    end
+  end
+
+  in_scope = assets.assets(exempt: exempt)
+
+  # Both failure lists keep the control APPLICABLE. only_if suppresses the whole
+  # control, including the two assertions above, so a guard that skips when the
+  # enumeration broke is no guard at all: it would suppress exactly the case it
+  # exists to catch.
+  applicable = !in_scope.empty? || !undecidable.empty? || !unreadable.empty?
+
+  # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
+  # on the argument node, and a ternary is an IfNode with none — it aborts
+  # `check` for the whole profile before a single control runs.
+  impact 0.7
+  impact 0.0 unless applicable
+
+  only_if('no aws_iam_role in scope') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_iam_role #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      it 'every GitHub Actions OIDC trust pins a concrete repository' do
+        expect(asset[:offenders]).to eq([]),
+          "#{asset[:offenders].length} offending statement(s) — " \
+          "#{asset[:offenders].join(' | ')}"
+      end
+    end
   end
 end

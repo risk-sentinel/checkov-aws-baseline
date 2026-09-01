@@ -2,30 +2,87 @@
 #
 # Rule:        CKV_AWS_105 (checkov 3.3.16)
 # Applies to:  aws_redshift_parameter_group
-# Status:      PLANNED — no deployed-asset reader exists for aws_redshift_parameter_group yet.
+# Read with:   aws_api_assets (two-step parent -> child spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_105'] || []
+
+# Conditions applied to each ELEMENT of the collection this check judges.
+# An element matches when EVERY condition holds; a condition holds when SOME
+# value reachable at ANY of its paths satisfies the test. `when_absent` is the
+# verdict when a path reaches nothing at all, which is how a member the API
+# omits is given its documented meaning. Generated from resource_map.yml by
+# tools/render_controls.py; the walk is libraries/_checkov_collection.rb.
+element_conditions = [
+  # parameter_name == require_ssl
+  { paths: ['parameter_name'],
+    test: ->(v) { v == 'require_ssl' } },
+  # parameter_value == true
+  { paths: ['parameter_value'],
+    test: ->(v) { v == 'true' } },
+].freeze
 
 control 'CKV_AWS_105' do
-  impact 0.0
   title 'Ensure Redshift uses SSL'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_redshift_parameter_group in this profile, so there is nothing to assert against.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_redshift_parameter_group resources that actually exist,
+    enumerated through the two-step (parent -> child) declarative API spec.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    DescribeClusterParameters returns the EFFECTIVE value including the
+    engine default, so this sees a group that never declared the parameter
+    at all — which is the majority case and the one an HCL scan cannot see.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    require_ssl is the only server-side control that makes TLS mandatory for
+    Redshift. Without it the cluster still accepts TLS, so a client-side
+    test passes and nothing looks wrong, while any client that omits sslmode
+    negotiates cleartext over the same port. Credentials and query results
+    then cross the network unprotected with no signal at either end.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure Redshift uses SSL
+    Checkov looks for: a Redshift cluster parameter group whose effective
+    require_ssl parameter is 'true', so the cluster refuses connections that
+    are not TLS
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/redshift_parameter_group
+    Terraform — aws_redshift_parameter_group:
+
+      resource "aws_redshift_parameter_group" "tls" {
+        name   = "redshift-require-ssl"
+        family = "redshift-1.0"
+
+        parameter {
+          name  = "require_ssl"
+          value = "true"
+        }
+      }
+
+      resource "aws_redshift_cluster" "example" {
+        # ...
+        cluster_parameter_group_name = aws_redshift_parameter_group.tls.name
+      }
+
+    Out of band — aws_redshift_parameter_group:
+
+      aws redshift modify-cluster-parameter-group --parameter-group-name <group> --parameters ParameterName=require_ssl,ParameterValue=true
+      aws redshift reboot-cluster --cluster-identifier <cluster>
+
+    Note (aws_redshift_parameter_group): require_ssl has apply-type static, so
+    the parameter change is pending until the cluster is rebooted — the group
+    reports the new value and the cluster keeps accepting cleartext until then.
+    This control reads the group, so it will report compliant during that
+    window. And default.redshift-1.0 cannot be modified at all: a cluster
+    sitting on the default group needs a new custom group plus `aws redshift
+    modify-cluster --cluster-parameter-group-name <group>` and a reboot, not a
+    parameter edit.
   FIX
 
   tag checkov_id:            'CKV_AWS_105'
@@ -34,9 +91,99 @@ control 'CKV_AWS_105' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_redshift_parameter_group]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/redshift_parameter_group'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)', 'SC-13']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)', 'SC-13']
+  tag cci:                   ['CCI-002418', 'CCI-002421']
+  tag ksi:                   ['KSI-SVC-CET']
+  tag severity:              'high'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_105 — no deployed-asset reader for aws_redshift_parameter_group" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_redshift_parameter_group', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_redshift_parameter_group enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A child list call that failed took a whole SUBTREE with it. That is not
+  # "this parent had nothing", and it must never render as one: it is reported
+  # per parent here, and it keeps the control APPLICABLE below so that only_if
+  # cannot turn a broken enumeration into "does not apply here".
+  parent_failures = assets.parent_failures
+  unless parent_failures.empty?
+    describe "aws_redshift_parameter_group enumeration" do
+      it 'read the children of every parent it enumerated' do
+        expect(parent_failures.map { |f| "#{f[:region]}/#{f[:parent_id]}: #{f[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_redshift_parameter_group enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_redshift_parameter_group in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
+  # A collection roll-up is not nil-filtered: an asset that does not
+  # express the field is part of the population the guard below counts,
+  # and for any_of it is precisely the failing case.
+  in_scope = enumerated
+
+  # any_of is vacuously TRUE over an empty collection, so an asset that did
+  # not carry this field passes without being examined. For one asset with no
+  # elements that is the right answer; when it is EVERY asset the control can no
+  # longer fail, and a control that cannot fail reads as compliant rather than as
+  # a mapping naming a field this API does not return. The condition paths one
+  # level down are checked statically instead — tools/lint_api_paths.rb.
+  exposing = in_scope.count { |a| !a[:parameters].nil? }
+
+  describe 'aws_redshift_parameter_group parameters' do
+    it 'was returned for at least one asset in scope' do
+      expect(exposing).to be_positive,
+        'no asset in scope exposed parameters, so the roll-up below cannot fail: '\
+        'either tools/api_specs.yml names a field this API does not return, or '\
+        'nothing in this boundary expresses it'
+    end
+  end
+
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive? || !parent_failures.empty?
+  impact 0.7
+  impact 0.0 unless applicable
+  only_if("no aws_redshift_parameter_group in scope expressing this setting "\
+          "(#{assets.parents_seen} parent(s) enumerated by describe_cluster_parameter_groups)") { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_redshift_parameter_group #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:parameters] }
+      it { should satisfy("have an element where parameter_name == require_ssl and parameter_value == true") { |v| ::CheckovCollection.any_of?(v, element_conditions) } }
+    end
   end
 end

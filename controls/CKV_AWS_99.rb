@@ -2,30 +2,95 @@
 #
 # Rule:        CKV_AWS_99 (checkov 3.3.16)
 # Applies to:  aws_glue_security_configuration
-# Status:      PLANNED — no deployed-asset reader exists for aws_glue_security_configuration yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_99'] || []
+
+# Conditions applied to each ELEMENT of the collection this check judges.
+# An element matches when EVERY condition holds; a condition holds when SOME
+# value reachable at ANY of its paths satisfies the test. `when_absent` is the
+# verdict when a path reaches nothing at all, which is how a member the API
+# omits is given its documented meaning. Generated from resource_map.yml by
+# tools/render_controls.py; the walk is libraries/_checkov_collection.rb.
+element_conditions = [
+  # cloud_watch_encryption.cloud_watch_encryption_mode == SSE-KMS
+  { paths: ['cloud_watch_encryption.cloud_watch_encryption_mode'],
+    test: ->(v) { v == 'SSE-KMS' } },
+  # job_bookmarks_encryption.job_bookmarks_encryption_mode == CSE-KMS
+  { paths: ['job_bookmarks_encryption.job_bookmarks_encryption_mode'],
+    test: ->(v) { v == 'CSE-KMS' } },
+  # s3_encryption.s3_encryption_mode != DISABLED
+  { paths: ['s3_encryption.s3_encryption_mode'],
+    test: ->(v) { v != 'DISABLED' } },
+].freeze
 
 control 'CKV_AWS_99' do
-  impact 0.0
   title 'Ensure Glue Security Configuration Encryption is enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_glue_security_configuration in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_glue_security_configuration resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A Glue security configuration is the only place ETL output, job logs and
+    job bookmarks get encrypted; jobs attached to one that leaves any of the
+    three unencrypted write cleartext to S3 and to CloudWatch Logs.
+    Bookmarks are the one people forget — they hold the primary keys and
+    partition values the job has already processed, which is a description
+    of the source data even when the data itself is encrypted.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure Glue Security Configuration Encryption is enabled
+    Checkov looks for: a Glue security configuration whose encryption
+    configuration encrypts CloudWatch logs with SSE-KMS, job bookmarks with
+    CSE-KMS, and S3 output with something other than DISABLED
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/glue_security_configuration
+    Terraform — aws_glue_security_configuration:
+
+      resource "aws_glue_security_configuration" "encrypted" {
+        name = "glue-encrypted"
+
+        encryption_configuration {
+          cloudwatch_encryption {
+            cloudwatch_encryption_mode = "SSE-KMS"
+            kms_key_arn                = aws_kms_key.glue.arn
+          }
+
+          job_bookmarks_encryption {
+            job_bookmarks_encryption_mode = "CSE-KMS"
+            kms_key_arn                   = aws_kms_key.glue.arn
+          }
+
+          s3_encryption {
+            s3_encryption_mode = "SSE-KMS"
+            kms_key_arn        = aws_kms_key.glue.arn
+          }
+        }
+      }
+
+    Out of band — aws_glue_security_configuration:
+
+      aws glue create-security-configuration --name glue-encrypted --encryption-configuration file://enc.json
+      aws glue update-job --job-name <job> --job-update SecurityConfiguration=glue-encrypted
+      aws glue delete-security-configuration --name <old-configuration>
+
+    Note (aws_glue_security_configuration): There is no in-place fix. Glue
+    security configurations are IMMUTABLE — the API has create and delete and no
+    update — so remediation is create a new one, repoint every job that
+    referenced the old one, then delete it. Terraform does the same thing under
+    the covers and will destroy and recreate, which detaches jobs mid-flight if
+    the update ordering is not forced. Two further traps: the KMS key policy
+    must allow the Glue service principal and the job's role, or jobs fail at
+    start with an opaque access-denied; and CSE-KMS is the only accepted mode
+    for job bookmarks, so copying SSE-KMS across all three blocks is rejected.
   FIX
 
   tag checkov_id:            'CKV_AWS_99'
@@ -34,9 +99,85 @@ control 'CKV_AWS_99' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_glue_security_configuration]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/glue_security_configuration'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-28', 'SC-28 (1)', 'SC-13', 'AU-9']
+  tag nist_r4:               ['SC-28', 'SC-28 (1)', 'SC-13', 'AU-9']
+  tag cci:                   ['CCI-001199', 'CCI-002475']
+  tag ksi:                   ['KSI-SVC-CER']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_99 — no deployed-asset reader for aws_glue_security_configuration" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_glue_security_configuration', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_glue_security_configuration enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_glue_security_configuration enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_glue_security_configuration in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
+  # A collection roll-up is not nil-filtered: an asset that does not
+  # express the field is part of the population the guard below counts,
+  # and for any_of it is precisely the failing case.
+  in_scope = enumerated
+
+  # any_of is vacuously TRUE over an empty collection, so an asset that did
+  # not carry this field passes without being examined. For one asset with no
+  # elements that is the right answer; when it is EVERY asset the control can no
+  # longer fail, and a control that cannot fail reads as compliant rather than as
+  # a mapping naming a field this API does not return. The condition paths one
+  # level down are checked statically instead — tools/lint_api_paths.rb.
+  exposing = in_scope.count { |a| !a[:encryption_configuration].nil? }
+
+  describe 'aws_glue_security_configuration encryption_configuration' do
+    it 'was returned for at least one asset in scope' do
+      expect(exposing).to be_positive,
+        'no asset in scope exposed encryption_configuration, so the roll-up below cannot fail: '\
+        'either tools/api_specs.yml names a field this API does not return, or '\
+        'nothing in this boundary expresses it'
+    end
+  end
+
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_glue_security_configuration in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_glue_security_configuration #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:encryption_configuration] }
+      it { should satisfy("have an element where cloud_watch_encryption.cloud_watch_encryption_mode == SSE-KMS and job_bookmarks_encryption.job_bookmarks_encryption_mode == CSE-KMS and s3_encryption.s3_encryption_mode != DISABLED") { |v| ::CheckovCollection.any_of?(v, element_conditions) } }
+    end
   end
 end

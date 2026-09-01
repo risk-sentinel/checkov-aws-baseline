@@ -2,30 +2,73 @@
 #
 # Rule:        CKV_AWS_304 (checkov 3.3.16)
 # Applies to:  aws_secretsmanager_secret_rotation
-# Status:      PLANNED — no deployed-asset reader exists for aws_secretsmanager_secret_rotation yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_304'] || []
 
 control 'CKV_AWS_304' do
-  impact 0.0
   title 'Ensure Secrets Manager secrets should be rotated within 90 days'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_secretsmanager_secret_rotation in this profile, so there is nothing to assert against.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_secretsmanager_secret_rotation resources that actually exist,
+    enumerated through the declarative API spec.
 
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov reads the interval declared in an
+    aws_secretsmanager_secret_rotation block. This reads the interval
+    Secrets Manager is actually holding, so it also sees a schedule changed
+    in the console, a secret created outside Terraform, and a rotation whose
+    interval was widened by hand after the last apply.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    Rotation that is enabled but scheduled a year out leaves the same
+    unbounded exposure window as no rotation at all: the interval, not the
+    flag, is what caps the time between a leak and its expiry. Ninety days
+    is the ceiling Checkov asserts and the one FedRAMP's
+    authenticator-management expectations are usually written to, so an
+    interval longer than that is a control that exists on paper and does not
+    bind.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure Secrets Manager secrets should be rotated within 90 days
+    Checkov looks for: Ensure Secrets Manager secrets should be rotated
+    within 90 days
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret_rotation
+    Terraform — aws_secretsmanager_secret_rotation:
+
+      resource "aws_secretsmanager_secret" "db" {
+        name = "platform/db/master"
+      }
+
+      resource "aws_secretsmanager_secret_rotation" "db" {
+        secret_id           = aws_secretsmanager_secret.db.id
+        rotation_lambda_arn = aws_lambda_function.rotator.arn
+
+        rotation_rules {
+          # 90 is the ceiling, not the target. Pick the shortest interval the
+          # consuming application can tolerate a credential change at.
+          automatically_after_days = 30
+        }
+      }
+
+    Out of band — aws_secretsmanager_secret_rotation:
+
+      aws secretsmanager describe-secret --secret-id <name> --query 'RotationRules'
+      aws secretsmanager rotate-secret --secret-id <name> --rotation-rules AutomaticallyAfterDays=30
+
+    Note (aws_secretsmanager_secret_rotation): Shortening the interval takes
+    effect from the NEXT rotation, so a secret that last rotated 300 days ago is
+    not brought current by this change alone — run `rotate-secret` once to force
+    a rotation now. Secrets owned by another service (OwningService set, e.g. an
+    RDS-managed master password) rotate under that service's schedule and should
+    be exempted rather than given a second rotator.
   FIX
 
   tag checkov_id:            'CKV_AWS_304'
@@ -34,9 +77,69 @@ control 'CKV_AWS_304' do
   tag checkov_kind:          'custom'
   tag tf_resources:          %w[aws_secretsmanager_secret_rotation]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret_rotation'
-  tag implementation_status: 'planned'
+  tag nist:                  ['IA-5', 'SC-12']
+  tag nist_r4:               ['IA-5', 'SC-12']
+  tag cci:                   ['CCI-000196', 'CCI-002450']
+  tag ksi:                   ['KSI-IAM-CTL', 'KSI-SVC-KMG']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_304 — no deployed-asset reader for aws_secretsmanager_secret_rotation" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_secretsmanager_secret_rotation', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_secretsmanager_secret_rotation enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_secretsmanager_secret_rotation enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_secretsmanager_secret_rotation in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
+  # A field the API did not return is nil, and nil is not a failing value:
+  # the asset does not express this setting, so it is out of scope for this
+  # check rather than in breach of it.
+  in_scope = enumerated
+                        .reject { |a| a[:rotation_interval_days].nil? }
+
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_secretsmanager_secret_rotation in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_secretsmanager_secret_rotation #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:rotation_interval_days] }
+      it { should be <= 90 }
+    end
   end
 end
