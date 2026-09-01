@@ -29,7 +29,30 @@ class AwsComputeAssets < AwsResourceBase
     end
   "
 
-  attr_reader :table, :unreadable_regions
+  attr_reader :table
+
+  # Regions that could not be read -- INCLUDING the case where this resource
+  # never got as far as walking one.
+  #
+  # catch_aws_errors raises Inspec::Exceptions::ResourceFailed on a 403, and
+  # Inspec::Resource#supersuper_initialize rescues it around the whole
+  # constructor, so a denied sts:GetCallerIdentity or ec2:DescribeRegions hands
+  # the control a live object with @table never assigned. Answering [] here would
+  # make `applicable` false and render the control Not Applicable having assessed
+  # nothing, which is the failure this reader exists to prevent.
+  def unreadable_regions
+    failure = %i[resource_failed? failed_resource? resource_skipped?].find do |predicate|
+      respond_to?(predicate) && public_send(predicate)
+    end
+    return Array(@unreadable_regions) unless failure
+
+    Array(@unreadable_regions) + [{
+      region: "(every region)",
+      error: "the compute inventory could not be read at all (#{failure}): "\
+             "#{(respond_to?(:resource_exception_message) && resource_exception_message) || 'the AWS call did not succeed'}. "\
+             "NOTHING was assessed here",
+    }]
+  end
 
   FilterTable.create
              .register_column(:ids,                     field: :id)
@@ -43,6 +66,7 @@ class AwsComputeAssets < AwsResourceBase
              .register_column(:detailed_monitoring,     field: :detailed_monitoring)
              .register_column(:unencrypted_volumes,     field: :unencrypted_volumes)
              .register_column(:user_data_secrets,       field: :user_data_secrets)
+             .register_column(:iam_roles,               field: :iam_roles)
              .install_filter_methods_on_resource(self, :table)
 
   # Patterns that make a user-data blob a finding rather than a config file.
@@ -67,8 +91,11 @@ class AwsComputeAssets < AwsResourceBase
 
   attr_reader :account_id
 
+  # Array(), not @table: a constructor that failed above never assigned it, and a
+  # NoMethodError on nil reports as a control source-code error rather than as
+  # the read failure that unreadable_regions is already carrying.
   def exists?
-    !@table.empty?
+    !Array(@table).empty?
   end
 
   # Rows for the given Terraform resource types, as plain hashes.
@@ -91,7 +118,7 @@ class AwsComputeAssets < AwsResourceBase
   # a control that reaches into it breaks quietly when that changes.
   def assets_of(types, exempt: [])
     wanted = Array(types)
-    @table.select { |row| wanted.include?(row[:type]) && !exempt?(row, exempt) }
+    Array(@table).select { |row| wanted.include?(row[:type]) && !exempt?(row, exempt) }
   end
 
   # Does a declared exemption cover this asset?
@@ -205,6 +232,7 @@ class AwsComputeAssets < AwsResourceBase
             detailed_monitoring:    i.monitoring&.state == "enabled",
             unencrypted_volumes:    unencrypted_volumes(client, i),
             user_data_secrets:      user_data_secrets(client, i.instance_id),
+            iam_roles:              roles_in_profile(i.iam_instance_profile&.arn),
           }
         end
       end
@@ -233,6 +261,8 @@ class AwsComputeAssets < AwsResourceBase
           detailed_monitoring:    nil,
           unencrypted_volumes:    nil,
           user_data_secrets:      secrets_in(decode(data.user_data)),
+          iam_roles:              roles_in_profile(data.iam_instance_profile&.arn ||
+                                                   data.iam_instance_profile&.name),
         }
       end
     end
@@ -259,6 +289,7 @@ class AwsComputeAssets < AwsResourceBase
           detailed_monitoring:    lc.instance_monitoring&.enabled,
           unencrypted_volumes:    lc_unencrypted_volumes(lc),
           user_data_secrets:      secrets_in(decode(lc.user_data)),
+          iam_roles:              roles_in_profile(lc.iam_instance_profile),
         }
       end
     end
@@ -266,6 +297,45 @@ class AwsComputeAssets < AwsResourceBase
   rescue ::Aws::Errors::ServiceError, ::Seahorse::Client::NetworkingError => e
     @unreadable_regions << { region: region, error: e.message }
     rows
+  end
+
+  # The IAM roles reachable through an instance profile, as names.
+  #
+  # Checkov's graph check follows aws_instance.iam_instance_profile to an
+  # aws_iam_instance_profile to an aws_iam_role, so the deployed equivalent is
+  # not "a profile is attached" -- an instance profile can exist with no role in
+  # it, and an instance carrying one has exactly the credential-less posture the
+  # rule is about. Answering with the ROLES makes an empty profile a failure
+  # rather than a pass, which asserting on the profile ARN alone would not.
+  #
+  # A profile is named by ARN on an instance and by ARN *or* name on a launch
+  # template or configuration; GetInstanceProfile takes the name, which is the
+  # last path segment of the ARN either way.
+  #
+  # Answers are memoised: an estate typically shares a handful of profiles across
+  # many instances, and this is one IAM call per distinct profile rather than one
+  # per asset.
+  def roles_in_profile(profile_ref)
+    name = profile_ref.to_s.split("/").last
+    return [] if name.nil? || name.empty?
+
+    @profile_roles ||= {}
+    return @profile_roles[name] if @profile_roles.key?(name)
+
+    @profile_roles[name] = fetch_profile_roles(name)
+  end
+
+  # NoSuchEntity is answered, not raised: an instance pointing at a profile that
+  # no longer exists really does reach nothing, and that is the finding. Every
+  # other service error is left to propagate into walk_region, which records the
+  # region as unreadable -- "we could not tell" must not be filed as "no roles".
+  def fetch_profile_roles(name)
+    @aws.iam_client.get_instance_profile(instance_profile_name: name)
+        .instance_profile.roles.map(&:role_name)
+  rescue ::Aws::Errors::ServiceError => e
+    raise unless e.respond_to?(:code) && e.code.to_s == "NoSuchEntity"
+
+    []
   end
 
   # Checkov accepts either http_tokens == required OR the endpoint disabled

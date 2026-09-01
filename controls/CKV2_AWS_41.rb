@@ -2,41 +2,129 @@
 #
 # Rule:        CKV2_AWS_41 (checkov 3.3.16)
 # Applies to:  aws_instance
-# Status:      PLANNED — no deployed-asset reader exists for aws_instance yet.
+# Answered by: aws_compute_assets#iam_roles
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_41'] || []
+applies_to   = %w[aws_instance]
 
 control 'CKV2_AWS_41' do
-  impact 0.0
   title 'Ensure an IAM role is attached to EC2 instance'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_instance in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the instances that actually exist.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    An instance with no role has no way to obtain credentials except to
+    carry them: an access key in user data, in an AMI, or in a file on disk.
+    Those do not rotate, do not expire, and leave no record tying their use
+    back to the instance. A role delivers short-lived credentials through
+    IMDS instead, and its use is attributable in CloudTrail. Terraform can
+    only show that a profile was declared; this asserts that the profile the
+    running instance actually carries reaches a role at all.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure an IAM role is attached to EC2 instance
+    Checkov looks for: an IAM instance profile, containing a role, is
+    attached to the instance
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/instance
+    Terraform — aws_instance:
+
+      resource "aws_iam_role" "instance" {
+        name               = "app-instance"
+        assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+      }
+
+      resource "aws_iam_instance_profile" "instance" {
+        name = "app-instance"
+        role = aws_iam_role.instance.name
+      }
+
+      resource "aws_instance" "app" {
+        ami                  = data.aws_ami.al2023.id
+        instance_type        = "t3.small"
+        iam_instance_profile = aws_iam_instance_profile.instance.name
+
+        metadata_options {
+          http_tokens   = "required"
+          http_endpoint = "enabled"
+        }
+      }
+
+    Out of band — aws_instance:
+
+      aws ec2 associate-iam-instance-profile --instance-id <id> --iam-instance-profile Name=<profile>
+      This attaches in place, with no restart. Attaching a profile that contains no role satisfies the association call and not this control: the role is the point.
+
+    Note (aws_instance): An instance profile holds at most one role, and AWS
+    allows an empty one. This control asserts the roles reachable through the
+    attached profile, so creating the profile without `role = ...` still fails
+    it.
   FIX
 
-  tag checkov_id:            'CKV2_AWS_41'
-  tag checkov_category:      'IAM'
-  tag checkov_version:       '3.3.16'
-  tag checkov_kind:          'graph'
-  tag tf_resources:          %w[aws_instance]
-  tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/instance'
-  tag implementation_status: 'planned'
+  tag checkov_id:       'CKV2_AWS_41'
+  tag checkov_category: 'IAM'
+  tag checkov_version:  '3.3.16'
+  tag checkov_kind:     'graph'
+  tag tf_resources:     %w[aws_instance]
+  tag tf_argument:      '(custom check logic)'
+  tag tf_docs:          'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/instance'
+  tag nist:             ['IA-2', 'AC-6', 'IA-5 (2)']
+  tag nist_r4:          ['IA-2', 'AC-6', 'IA-5 (2)']
+  tag cci:              ['CCI-000764', 'CCI-000225']
+  tag ksi:              ['KSI-IAM-MFA']
+  tag severity:         'medium'
+  tag severity_source:  'assessed'
+  tag nist_source:      'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_41 — no deployed-asset reader for aws_instance" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_compute_assets(regions: scan_regions)
+
+  # A region that could not be READ is not a region with nothing in it. A denied
+  # DescribeInstances, a throttled call or an unreachable endpoint is recorded in
+  # unreadable_regions and contributes no rows, so without this the assets that
+  # region holds are simply absent from the assessment — a PASS over the regions
+  # that answered, or a Not Applicable if none did.
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_instance enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # Only the asset types this check declares, only what the boundary has, and
+  # only those that express the setting at all — a launch template has no
+  # ebs_optimized, and nil must not read as a passing false.
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = assets.assets_of(applies_to, exempt: exempt)
+
+  # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
+  # the assertion above is reachable: only_if suppresses every describe in the
+  # control, the one reporting the failure included.
+  applicable = !in_scope.empty? || !unreadable.empty?
+
+  # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
+  # on the argument node, and a ternary is an IfNode with none — it aborts
+  # `check` for the whole profile before a single control runs.
+  impact 0.5
+  impact 0.0 unless applicable
+
+  only_if("no #{applies_to.join(', ')} in scope expressing this setting") { applicable }
+
+  in_scope.each do |asset|
+    describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:iam_roles] }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

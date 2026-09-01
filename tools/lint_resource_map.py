@@ -64,6 +64,21 @@ ANY_OF_FORMS = [
     re.compile(r"require_any_of:\s*%w\[([^\]]*)\]"),
 ]
 MUST_PROVIDE = re.compile(r"`\[([^\]`]*)\]`\s*must be provided")
+# Several resources in the pack do not declare their identifier to
+# `validate_parameters` at all -- they hand it a computed list
+# (`required: [query_arguments.keys.first]`), which reads as no requirement here,
+# and then raise their own ArgumentError naming the parameter in prose:
+#
+#   raise ArgumentError, "...: `cache_cluster_id` must be provided." unless ...
+#   raise ArgumentError, "...: `file_system_id` or `creation_token` must be provided."
+#
+# Without this the resource looked like it accepted anything, the `arg:` check
+# below was skipped for it, and four mappings passed a keyword the resource
+# rejects. That is an ArgumentError at exec, which InSpec does NOT rescue: it
+# escapes the control and reports as a failed test, so a mapping that never ran
+# reads as a real finding.
+MUST_PROVIDE_LINE = re.compile(r"^.*must be provided.*$", re.M)
+BACKTICKED = re.compile(r"`([a-z_][a-z0-9_]*)`")
 PARAM_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -81,11 +96,18 @@ def required_params(text):
             found |= {p.strip().lstrip(":") for p in re.split(r"[,\s]+", m.group(1)) if p.strip()}
     for pattern in ANY_OF_FORMS:
         for m in pattern.finditer(text):
-            alts = [p.strip().lstrip(":") for p in re.split(r"[,\s]+", m.group(1)) if p.strip()]
-            if alts:
-                found.add(alts[0])
+            # EVERY alternative, not just the first. This set is consumed as "the
+            # arguments this resource accepts", and require_any_of means any one
+            # of them is accepted -- keeping only the first reported
+            # aws_flow_log as identifying its subject by flow_log_id alone and
+            # rejected a mapping passing vpc_id, which the resource explicitly
+            # allows (require_any_of: %i(flow_log_id subnet_id vpc_id)) and
+            # which had already executed correctly against a live account.
+            found |= {p.strip().lstrip(":") for p in re.split(r"[,\s]+", m.group(1)) if p.strip()}
     for m in MUST_PROVIDE.finditer(text):
         found |= {p.strip().lstrip(":") for p in m.group(1).split(",")}
+    for line in MUST_PROVIDE_LINE.findall(text):
+        found |= set(BACKTICKED.findall(line))
     return sorted(p for p in found if PARAM_NAME.fullmatch(p))
 
 
@@ -107,7 +129,15 @@ def main() -> int:
               "Without it this lint would pass by having nothing to check.")
         return 1
 
+    # Both files, exactly as render_controls.load() merges them. The derived map
+    # carries most of the mappings and used to go unchecked here, which is how
+    # `ids: eks_cluster_identifiers` — a column aws_eks_clusters does not
+    # register — survived long enough to be found by a live exec instead.
     mappings = yaml.safe_load((HERE / "resource_map.yml").read_text())["checks"]
+    derived = HERE / "resource_map_derived.yml"
+    if derived.is_file():
+        for cid, spec in (yaml.safe_load(derived.read_text()) or {}).get("checks", {}).items():
+            mappings.setdefault(cid, spec)
     problems, unverifiable, checked = [], [], 0
 
     for cid, per_type in sorted(mappings.items()):
@@ -135,6 +165,21 @@ def main() -> int:
                     problems.append(
                         f"{cid}/{tf_type}: {plural} has no column '{column}'. It registers: {have}")
 
+            # `exclude:` narrows the enumerated population before the ids are
+            # read, and it does it through FilterTable's `where`. A column that
+            # is not registered raises ArgumentError there, which is at least
+            # loud — but at exec, on one control, in one region. Named here it
+            # is loud before anyone runs it.
+            for col in (enum.get("exclude") or {}):
+                if plural in resources and col not in resources[plural]["columns"]:
+                    if resources[plural]["dynamic"]:
+                        unverifiable.append(
+                            f"{cid}/{tf_type}: exclude on {plural}.{col} — table is populated "
+                            f"from the API response, so the column cannot be confirmed here")
+                    else:
+                        problems.append(
+                            f"{cid}/{tf_type}: {plural} has no column '{col}' to exclude on")
+
             # `resource(id, aws_region: region)` is two arguments and InSpec's
             # *args dispatch accepts one — "wrong number of arguments (given 2,
             # expected 0..1)" at exec, on 13 controls at once. A regional stock
@@ -148,8 +193,10 @@ def main() -> int:
                 problems.append(f"{cid}/{tf_type}: no resource named '{singular}' in the pack")
             elif (req := resources[singular]["required"]) and assertion.get("arg") not in req + ["positional"]:
                 problems.append(
-                    f"{cid}/{tf_type}: {singular} requires {req}, control passes "
-                    f"'{assertion.get('arg')}'")
+                    f"{cid}/{tf_type}: {singular} identifies its subject by {req} "
+                    f"(any one of them where there is more than one); the mapping passes "
+                    f"'{assertion.get('arg')}', which the resource rejects with an "
+                    f"ArgumentError before it makes a single API call")
             elif prop:
                 unverifiable.append(
                     f"{cid}/{tf_type}: {singular}.{prop} — provided by create_resource_methods "

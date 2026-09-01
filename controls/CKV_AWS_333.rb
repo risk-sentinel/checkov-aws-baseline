@@ -2,32 +2,26 @@
 #
 # Rule:        CKV_AWS_333 (checkov 3.3.16)
 # Applies to:  aws_ecs_service
-# Read with:   aws_ecs_services -> aws_ecs_service (stock inspec-aws, no custom reader)
+# Status:      PLANNED — no deployed-asset reader exists for aws_ecs_service yet.
 #
-# The rule id is the identity: file name, control id and `tag checkov_id` all
-# carry it, and tools/lint_catalog_drift.py asserts the three agree.
-
-scan_regions = input('scan_regions')
-exempt       = (input('exempt_assets') || {})['CKV_AWS_333'] || []
+# This control is present so the rule is accounted for. It asserts nothing, and
+# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
+# would be worse than an absent one.
 
 control 'CKV_AWS_333' do
+  impact 0.0
   title 'Ensure ECS services do not have public IP addresses assigned to them automatically'
 
   desc <<~DESC
-    Checkov asserts this against Terraform. This profile asserts it against
-    the aws_ecs_service resources that actually exist, read through the
-    stock inspec-aws aws_ecs_service resource.
+    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
+    enumerates aws_ecs_service in this profile, so there is nothing to assert against.
+
+    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
+    counts it every run.
   DESC
 
-  desc 'rationale', <<~RATIONALE
-    Ensure ECS services do not have public IP addresses assigned to them
-    automatically. Anchors derived from the check's logging category, not
-    reviewed control by control.
-  RATIONALE
-
   desc 'check', <<~CHECK
-    Checkov looks for: aws_ecs_service:
-    network_configuration/[0]/assign_public_ip is not True
+    Checkov looks for: aws_ecs_service: network_configuration/[0]/assign_public_ip is not True
   CHECK
 
   desc 'fix', <<~'FIX'
@@ -40,56 +34,9 @@ control 'CKV_AWS_333' do
   tag checkov_kind:          'negative'
   tag tf_resources:          %w[aws_ecs_service]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_service#network-configuration'
-  tag nist:                  ['AU-2', 'AU-12']
-  tag nist_r4:               ['AU-2', 'AU-12']
-  tag cci:                   ['CCI-000169', 'CCI-000172']
-  tag ksi:                   ['KSI-MLA-LOG']
-  tag severity:              'medium'
-  tag severity_source:       'assessed'
-  tag nist_source:           'category-derived'
-  tag implementation_status: 'implemented'
+  tag implementation_status: 'planned'
 
-  # Enumerated at control scope, then each asset asserted on its own. The
-  # resource is an ARGUMENT to `describe`, which evaluates on the control --
-  # calling it inside the block would defer it into the example.
-  #
-  # Every call carries aws_region: a stock resource otherwise reads only the
-  # region the connection was built with, and every other region's resources
-  # report as absent, which renders Not Applicable rather than unexamined.
-  found = checkov_scan_regions(scan_regions).flat_map do |region|
-    aws_ecs_services(aws_region: region).service_names.to_a.map { |id| [id, region] }
-  end
-
-  # A plural resource whose table is built from the API response returns nil for
-  # a column that does not exist, rather than raising. Passing that on gives
-  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
-  # and asserted on below, so a wrong `ids` column is a visible failure rather
-  # than a crash or a silent Not Applicable.
-  unusable = found.count { |id, _r| "#{id}".strip.empty? }
-  found = found.reject { |id, _r| "#{id}".strip.empty? }
-  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_ecs_service', rules: exempt) }
-
-  if unusable.positive?
-    describe "aws_ecs_service enumeration" do
-      it 'produced usable identifiers' do
-        expect(unusable).to eq(0),
-          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "          'likely names a field this resource does not expose'
-      end
-    end
-  end
-
-  # `unusable.positive?` keeps the control APPLICABLE when every id came back
-  # blank. Without it only_if skips the control, and the wrong-column case this
-  # guard exists to catch is exactly the case it would suppress — a Not
-  # Applicable that means "the enumeration is broken".
-  applicable = !in_scope.empty? || unusable.positive?
-  impact 0.5
-  impact 0.0 unless applicable
-  only_if('no aws_ecs_service in scope') { applicable }
-
-  in_scope.each do |id, region|
-    describe aws_ecs_service(ecs_service_identifier: id, aws_region: region) do
-      its('network_configuration') { should eq false }
-    end
+  describe "CKV_AWS_333 — no deployed-asset reader for aws_ecs_service" do
+    skip 'catalogued from Checkov, not yet implemented in this profile'
   end
 end

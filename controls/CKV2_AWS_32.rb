@@ -2,30 +2,84 @@
 #
 # Rule:        CKV2_AWS_32 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Status:      PLANNED — no deployed-asset reader exists for aws_cloudfront_distribution yet.
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV2_AWS_32'] || []
 
 control 'CKV2_AWS_32' do
-  impact 0.0
   title 'Ensure CloudFront distribution has a response headers policy attached'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_cloudfront_distribution in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_cloudfront_distribution resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
+  desc 'rationale', <<~RATIONALE
+    A response headers policy is where HSTS, X-Content-Type-Options, a
+    Content-Security-Policy and the CORS headers are set for everything the
+    distribution serves. Without one the origin has to set them on every
+    response, and any object served from a bucket or a static path that does
+    not gets none. The policy is the only place the header set can be
+    asserted for the whole distribution at once.
+  RATIONALE
+
   desc 'check', <<~CHECK
-    Checkov looks for: Ensure CloudFront distribution has a response headers policy attached
+    Checkov looks for: a response headers policy is attached to the
+    distribution's cache behaviour
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution
+    Terraform — aws_cloudfront_distribution:
+
+      resource "aws_cloudfront_response_headers_policy" "secure" {
+        name = "secure-defaults"
+
+        security_headers_config {
+          strict_transport_security {
+            access_control_max_age_sec = 63072000
+            include_subdomains         = true
+            preload                    = true
+            override                   = true
+          }
+          content_type_options { override = true }
+          frame_options {
+            frame_option = "DENY"
+            override     = true
+          }
+          referrer_policy {
+            referrer_policy = "same-origin"
+            override        = true
+          }
+        }
+      }
+
+      resource "aws_cloudfront_distribution" "site" {
+        enabled = true
+
+        default_cache_behavior {
+          target_origin_id           = "s3-origin"
+          viewer_protocol_policy     = "redirect-to-https"
+          allowed_methods            = ["GET", "HEAD"]
+          cached_methods             = ["GET", "HEAD"]
+          cache_policy_id            = data.aws_cloudfront_cache_policy.optimized.id
+          response_headers_policy_id = aws_cloudfront_response_headers_policy.secure.id
+        }
+
+        # ... origin, restrictions and viewer_certificate blocks omitted
+      }
+
+    Note (aws_cloudfront_distribution): There is no single CLI call for this.
+    The distribution config is read-modify-written whole: `aws cloudfront
+    get-distribution-config --id <id>` gives the config and an ETag, the
+    ResponseHeadersPolicyId is added to DefaultCacheBehavior, and `aws
+    cloudfront update-distribution --id <id> --if-match <etag>
+    --distribution-config file://…` puts it back. Every field must be resent;
+    anything omitted is cleared.
   FIX
 
   tag checkov_id:            'CKV2_AWS_32'
@@ -34,9 +88,50 @@ control 'CKV2_AWS_32' do
   tag checkov_kind:          'graph'
   tag tf_resources:          %w[aws_cloudfront_distribution]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SC-8', 'SC-8 (1)', 'SC-18']
+  tag nist_r4:               ['SC-8', 'SC-8 (1)', 'SC-18']
+  tag cci:                   ['CCI-002418']
+  tag ksi:                   ['KSI-CNA-BND']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV2_AWS_32 — no deployed-asset reader for aws_cloudfront_distribution" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  assets = aws_api_assets(type: 'aws_cloudfront_distribution', regions: scan_regions)
+
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_cloudfront_distribution enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = assets.assets(exempt: exempt)
+
+  # `|| !unreadable.empty?` is what makes the assertion above reachable. only_if
+  # suppresses every describe in the control, including that one, so with
+  # `applicable = !in_scope.empty?` alone the case it was written for — the read
+  # failed, therefore nothing was enumerated, therefore in_scope is empty —
+  # skipped the very test that reports it, and the control rendered Not
+  # Applicable with nothing assessed.
+  applicable = !in_scope.empty? || !unreadable.empty?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_cloudfront_distribution in scope expressing this setting') { applicable }
+
+  in_scope.each do |asset|
+    describe "aws_cloudfront_distribution #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:response_headers_policy_id] }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+    end
   end
 end

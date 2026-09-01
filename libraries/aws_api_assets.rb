@@ -38,7 +38,32 @@ class AwsApiAssets < AwsResourceBase
     end
   "
 
-  attr_reader :unreadable_regions, :account_id
+  attr_reader :account_id
+
+  # Regions that could not be read -- INCLUDING the case where this resource
+  # never got as far as walking one.
+  #
+  # catch_aws_errors raises Inspec::Exceptions::ResourceFailed on a 403, and
+  # Inspec::Resource#supersuper_initialize rescues it around the whole
+  # constructor. So a denied sts:GetCallerIdentity or ec2:DescribeRegions hands
+  # the control a live object with @rows never assigned. Answering [] here would
+  # make `applicable` false and render the control Not Applicable having assessed
+  # nothing -- the exact failure this reader exists to prevent -- and answering
+  # nil from `assets` below would raise NoMethodError inside the control body,
+  # which reports as a source-code error rather than as "the read failed".
+  def unreadable_regions
+    failure = %i[resource_failed? failed_resource? resource_skipped?].find do |predicate|
+      respond_to?(predicate) && public_send(predicate)
+    end
+    return Array(@unreadable_regions) unless failure
+
+    Array(@unreadable_regions) + [{
+      region: "(every region)",
+      error: "#{@type} could not be read at all (#{failure}): "\
+             "#{(respond_to?(:resource_exception_message) && resource_exception_message) || 'the AWS call did not succeed'}. "\
+             "NOTHING was assessed here",
+    }]
+  end
 
   def initialize(opts = {})
     super(opts)
@@ -54,12 +79,15 @@ class AwsApiAssets < AwsResourceBase
 
   # Rows as plain hashes with symbol keys, exemptions already removed. Controls
   # iterate these; see the note in aws_compute_assets on why not FilterTable.
+  # Array(), not @rows: a constructor that failed above never assigned it, and a
+  # NoMethodError on nil reports as a control source-code error rather than as
+  # the read failure that unreadable_regions is already carrying.
   def assets(exempt: [])
-    @rows.reject { |row| exempt?(row, exempt) }
+    Array(@rows).reject { |row| exempt?(row, exempt) }
   end
 
   def exists?
-    !@rows.empty?
+    !Array(@rows).empty?
   end
 
   def to_s
@@ -129,7 +157,6 @@ class AwsApiAssets < AwsResourceBase
   end
 
   def rows_for(region)
-    args = region ? { region: region } : {}
     api = region ? regional_client(region) : client
     collect(api, region)
   rescue MissingGem
@@ -141,16 +168,47 @@ class AwsApiAssets < AwsResourceBase
     []
   end
 
+  # A `collection` naming a path this response does not have. Not an
+  # ArgumentError, deliberately: the region rescue below catches ArgumentError
+  # and would file a broken spec under unreadable_regions, where it reads as one
+  # region that could not be reached rather than as a spec that can never work.
+  class CollectionPathError < StandardError; end
+
   def collect(api, region)
     rows = []
     response = api.public_send(@spec["list"])
     pages = response.respond_to?(:each) ? response : [response]
     pages.each do |page|
-      Array(page.public_send(@spec["collection"])).each do |item|
+      Array(collection_in(page)).each do |item|
         rows << row_for(item.to_h, region)
       end
     end
     rows
+  end
+
+  # The list of items in a page, addressed by a dotted path.
+  #
+  # A single `page.public_send(collection)` cannot reach a nested one, and
+  # several services only have a nested one: CloudFront's ListDistributions puts
+  # its items under DistributionList.Items, so `collection: distribution_list.items`.
+  #
+  # A step that is nil stops the walk and yields no rows -- an optional structure
+  # the API omitted is a real, empty answer. A step the response has no member
+  # for is not: that is the spec naming something that does not exist, and it
+  # raises rather than enumerating nothing, because enumerating nothing renders
+  # Not Applicable.
+  def collection_in(page)
+    @spec["collection"].to_s.split(".").reduce(page) do |node, key|
+      break nil if node.nil?
+      unless node.respond_to?(key)
+        raise CollectionPathError,
+              "#{@type}: `collection: #{@spec['collection']}` — #{node.class} has no " \
+              "member `#{key}`. Nothing was enumerated, so do not read this control's " \
+              "result as a pass or a Not Applicable; fix the spec in tools/api_specs.yml."
+      end
+
+      node.public_send(key)
+    end
   end
 
   def row_for(item, region)

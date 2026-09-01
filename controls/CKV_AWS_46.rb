@@ -95,6 +95,20 @@ control 'CKV_AWS_46' do
 
   assets = aws_compute_assets(regions: scan_regions)
 
+  # A region that could not be READ is not a region with nothing in it. A denied
+  # DescribeInstances, a throttled call or an unreachable endpoint is recorded in
+  # unreadable_regions and contributes no rows, so without this the assets that
+  # region holds are simply absent from the assessment — a PASS over the regions
+  # that answered, or a Not Applicable if none did.
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "aws_instance enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
+      end
+    end
+  end
+
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
@@ -102,7 +116,10 @@ control 'CKV_AWS_46' do
   # deliberately not filtered out here.
   in_scope = assets.assets_of(applies_to, exempt: exempt)
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
+  # the assertion above is reachable: only_if suppresses every describe in the
+  # control, the one reporting the failure included.
+  applicable = !in_scope.empty? || !unreadable.empty?
 
   # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
   # on the argument node, and a ternary is an IfNode with none — it aborts
@@ -115,7 +132,7 @@ control 'CKV_AWS_46' do
   in_scope.each do |asset|
     describe "#{asset[:type]} #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:user_data_secrets] }
-      it { should be_empty }
+      it { should satisfy('be unset or empty') { |v| v.nil? || (v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end

@@ -58,6 +58,24 @@ CKV2_AWS_22:
     terraform: "# The fix is the ABSENCE of a login profile. Remove any\n# aws_iam_user_login_profile\
       \ for this user and let humans reach the\n# console through federation instead.\nresource \"aws_iam_user\"\
       \ \"svc\" {\n  name = \"svc-deploy\"\n  tags = { console_access = \"none\" }\n}\n"
+CKV2_AWS_32:
+  aws_cloudfront_distribution:
+    note: 'There is no single CLI call for this. The distribution config is read-modify-written whole:
+      `aws cloudfront get-distribution-config --id <id>` gives the config and an ETag, the ResponseHeadersPolicyId
+      is added to DefaultCacheBehavior, and `aws cloudfront update-distribution --id <id> --if-match <etag>
+      --distribution-config file://…` puts it back. Every field must be resent; anything omitted is cleared.'
+    terraform: "resource \"aws_cloudfront_response_headers_policy\" \"secure\" {\n  name = \"secure-defaults\"\
+      \n\n  security_headers_config {\n    strict_transport_security {\n      access_control_max_age_sec\
+      \ = 63072000\n      include_subdomains         = true\n      preload                    = true\n\
+      \      override                   = true\n    }\n    content_type_options { override = true }\n\
+      \    frame_options {\n      frame_option = \"DENY\"\n      override     = true\n    }\n    referrer_policy\
+      \ {\n      referrer_policy = \"same-origin\"\n      override        = true\n    }\n  }\n}\n\nresource\
+      \ \"aws_cloudfront_distribution\" \"site\" {\n  enabled = true\n\n  default_cache_behavior {\n \
+      \   target_origin_id           = \"s3-origin\"\n    viewer_protocol_policy     = \"redirect-to-https\"\
+      \n    allowed_methods            = [\"GET\", \"HEAD\"]\n    cached_methods             = [\"GET\"\
+      , \"HEAD\"]\n    cache_policy_id            = data.aws_cloudfront_cache_policy.optimized.id\n  \
+      \  response_headers_policy_id = aws_cloudfront_response_headers_policy.secure.id\n  }\n\n  # ...\
+      \ origin, restrictions and viewer_certificate blocks omitted\n}\n"
 CKV2_AWS_34:
   aws_ssm_parameter:
     cli: 'aws ssm put-parameter --name <name> --type SecureString --key-id <key-arn> --value <value> --overwrite
@@ -69,6 +87,23 @@ CKV2_AWS_34:
       cannot carry a key policy that limits who may decrypt.'
     terraform: "resource \"aws_ssm_parameter\" \"db_password\" {\n  name   = \"/app/prod/db_password\"\
       \n  type   = \"SecureString\"\n  key_id = aws_kms_key.params.arn\n  value  = var.db_password\n}\n"
+CKV2_AWS_41:
+  aws_instance:
+    cli: 'aws ec2 associate-iam-instance-profile --instance-id <id> --iam-instance-profile Name=<profile>
+
+      This attaches in place, with no restart. Attaching a profile that contains no role satisfies the
+      association call and not this control: the role is the point.
+
+      '
+    note: An instance profile holds at most one role, and AWS allows an empty one. This control asserts
+      the roles reachable through the attached profile, so creating the profile without `role = ...` still
+      fails it.
+    terraform: "resource \"aws_iam_role\" \"instance\" {\n  name               = \"app-instance\"\n  assume_role_policy\
+      \ = data.aws_iam_policy_document.ec2_assume.json\n}\n\nresource \"aws_iam_instance_profile\" \"\
+      instance\" {\n  name = \"app-instance\"\n  role = aws_iam_role.instance.name\n}\n\nresource \"aws_instance\"\
+      \ \"app\" {\n  ami                  = data.aws_ami.al2023.id\n  instance_type        = \"t3.small\"\
+      \n  iam_instance_profile = aws_iam_instance_profile.instance.name\n\n  metadata_options {\n    http_tokens\
+      \   = \"required\"\n    http_endpoint = \"enabled\"\n  }\n}\n"
 CKV2_AWS_42:
   aws_cloudfront_distribution:
     cli: 'aws cloudfront get-distribution-config --id <dist-id> > dist.json
@@ -1090,6 +1125,19 @@ CKV_AWS_338:
     terraform: "resource \"aws_cloudwatch_log_group\" \"app\" {\n  name              = \"/aws/app/api\"\
       \n  retention_in_days = 365        # 0 means never expire, also acceptable\n  kms_key_id       \
       \ = aws_kms_key.logs.arn\n}\n"
+CKV_AWS_339:
+  aws_eks_cluster:
+    cli: 'aws eks update-cluster-version --name <cluster> --kubernetes-version 1.31
+
+      One minor version at a time, and the control plane upgrade must be followed by the node groups and
+      the add-ons.
+
+      '
+    note: The supported range moves with every EKS release, so this control's expected list is pinned
+      to the Checkov version in tools/checkov_catalog.yml, not to what AWS supports today. A cluster on
+      a version AWS has dropped from standard support keeps running and stops receiving patches.
+    terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
+      \  version  = \"1.31\"\n\n  vpc_config {\n    subnet_ids = var.private_subnet_ids\n  }\n}\n"
 CKV_AWS_34:
   aws_cloudfront_distribution:
     cli: 'There is no single-field CloudFront update. Fetch the current config,
@@ -1343,6 +1391,19 @@ CKV_AWS_383:
       \n  instruction             = var.agent_instruction\n\n  guardrail_configuration {\n    guardrail_identifier\
       \ = aws_bedrock_guardrail.assistant.guardrail_id\n    guardrail_version    = aws_bedrock_guardrail.assistant.version\n\
       \  }\n}\n"
+CKV_AWS_39:
+  aws_eks_cluster:
+    cli: 'aws eks update-cluster-config --name <cluster> --resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true
+
+      '
+    note: Turning the public endpoint off without turning the private one on leaves the API server unreachable,
+      so both are set together. Reaching a private-only endpoint needs a path into the VPC — a bastion,
+      a VPN or Direct Connect — and anything that talks to the cluster from outside it, CI included, breaks
+      the moment this lands unless that path exists first. Where the public endpoint has to stay, public_access_cidrs
+      narrows it to known ranges; that is a mitigation and not a pass, and this check still reports it.
+    terraform: "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"main\"\n  role_arn = aws_iam_role.cluster.arn\n\
+      \  version  = \"1.31\"\n\n  vpc_config {\n    subnet_ids              = var.private_subnet_ids\n\
+      \    endpoint_public_access  = false\n    endpoint_private_access = true\n  }\n}\n"
 CKV_AWS_44:
   aws_neptune_cluster:
     cli: 'There is no in-place fix. Neptune storage encryption is set at creation

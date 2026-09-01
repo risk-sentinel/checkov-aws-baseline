@@ -2,30 +2,67 @@
 #
 # Rule:        CKV_AWS_238 (checkov 3.3.16)
 # Applies to:  aws_guardduty_detector
-# Status:      PLANNED — no deployed-asset reader exists for aws_guardduty_detector yet.
+# Read with:   aws_guardduty_detectors -> aws_guardduty_detector (stock inspec-aws, no custom reader)
 #
-# This control is present so the rule is accounted for. It asserts nothing, and
-# it carries no NIST/CCI/KSI tags, because a compliance claim it cannot evaluate
-# would be worse than an absent one.
+# The rule id is the identity: file name, control id and `tag checkov_id` all
+# carry it, and tools/lint_catalog_drift.py asserts the three agree.
+
+scan_regions = input('scan_regions')
+exempt       = (input('exempt_assets') || {})['CKV_AWS_238'] || []
 
 control 'CKV_AWS_238' do
-  impact 0.0
   title 'Ensure that GuardDuty detector is enabled'
 
   desc <<~DESC
-    Catalogued from Checkov 3.3.16, not yet assessed here: no reader
-    enumerates aws_guardduty_detector in this profile, so there is nothing to assert against.
-
-    This is a gap, not a pass, and not a Not Applicable. tools/lint_catalog_drift.py
-    counts it every run.
+    Checkov asserts this against Terraform. This profile asserts it against
+    the aws_guardduty_detector resources that actually exist, read through
+    the stock inspec-aws aws_guardduty_detector resource.
   DESC
+
+  desc 'rationale', <<~RATIONALE
+    A detector that exists but is suspended keeps its configuration and its
+    findings history while analysing nothing, so the account looks monitored
+    in an inventory and is not. This is the deployed state Terraform cannot
+    show.
+  RATIONALE
 
   desc 'check', <<~CHECK
     Checkov looks for: aws_guardduty_detector: enable is True
   CHECK
 
   desc 'fix', <<~'FIX'
-    See https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_detector#enable
+    Terraform — aws_guardduty_detector:
+
+      resource "aws_guardduty_detector" "main" {
+        enable                       = true
+        finding_publishing_frequency = "FIFTEEN_MINUTES"
+
+        datasources {
+          s3_logs {
+            enable = true
+          }
+          kubernetes {
+            audit_logs {
+              enable = true
+            }
+          }
+          malware_protection {
+            scan_ec2_instance_with_findings {
+              ebs_volumes {
+                enable = true
+              }
+            }
+          }
+        }
+      }
+
+    Out of band — aws_guardduty_detector:
+
+      aws guardduty update-detector --detector-id <id> --enable
+
+    Note (aws_guardduty_detector): A detector is per region. An account with a
+    detector in one region and none in another is not covered in the second, and
+    this control only sees the regions in scan_regions.
   FIX
 
   tag checkov_id:            'CKV_AWS_238'
@@ -34,9 +71,81 @@ control 'CKV_AWS_238' do
   tag checkov_kind:          'value'
   tag tf_resources:          %w[aws_guardduty_detector]
   tag tf_docs:               'https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/guardduty_detector#enable'
-  tag implementation_status: 'planned'
+  tag nist:                  ['SI-4', 'RA-5']
+  tag nist_r4:               ['SI-4', 'RA-5']
+  tag cci:                   ['CCI-002664']
+  tag ksi:                   ['KSI-MLA-OSM']
+  tag severity:              'medium'
+  tag severity_source:       'assessed'
+  tag nist_source:           'agent-drafted'
+  tag implementation_status: 'implemented'
 
-  describe "CKV_AWS_238 — no deployed-asset reader for aws_guardduty_detector" do
-    skip 'catalogued from Checkov, not yet implemented in this profile'
+  # Enumerated at control scope, then each asset asserted on its own. The
+  # resource is an ARGUMENT to `describe`, which evaluates on the control --
+  # calling it inside the block would defer it into the example.
+  #
+  # Every call carries aws_region: a stock resource otherwise reads only the
+  # region the connection was built with, and every other region's resources
+  # report as absent, which renders Not Applicable rather than unexamined.
+  #
+  # checkov_enumerate does the reading. It flattens a nested id column, tells an
+  # unregistered column apart from an account that simply has none of this
+  # resource, and hands back anything that stopped it as `problems` rather than
+  # as an empty list -- see libraries/_checkov_enumeration.rb.
+  problems = []
+  found = checkov_scan_regions(scan_regions).flat_map do |region|
+    ids, found_problems = checkov_enumerate(
+      aws_guardduty_detectors(aws_region: region), :detector_ids
+    )
+    problems.concat(found_problems.map { |p| "#{region}: #{p}" })
+    ids.map { |id| [id, region] }
+  end
+
+  # The region LIST is upstream of every enumeration above, and its failure
+  # is the one that hides best: no regions means no rows, no rows means no
+  # problems, and the control renders Not Applicable across the whole account
+  # while a denied ec2:DescribeRegions goes unreported. checkov_scan_regions
+  # falls back to the connection's own region and records that here, so a
+  # partial scan fails loudly instead of passing quietly.
+  problems.concat(checkov_region_problems)
+
+  # Blank ids are separated out and asserted on below rather than filtered away,
+  # so a wrong `ids` column is a visible failure and not a silent Not Applicable.
+  # `id.nil?` before the interpolation on purpose: a NullResponse answers true to
+  # nil? but interpolates to "#<NullResponse:0x...>", which is not blank. The
+  # survivors are interpolated rather than `.to_s`'d, because to_s on a
+  # NullResponse returns nil and the singular then rejects the argument.
+  unusable = found.count { |id, _r| id.nil? || "#{id}".strip.empty? }
+  found = found.reject { |id, _r| id.nil? || "#{id}".strip.empty? }
+               .map { |id, region| ["#{id}", region] }
+  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_guardduty_detector', rules: exempt) }
+
+  if unusable.positive? || problems.any?
+    describe "aws_guardduty_detector enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "\
+          'likely names a field this resource does not expose'
+      end
+
+      it 'read the assets it set out to read' do
+        expect(problems).to be_empty
+      end
+    end
+  end
+
+  # `unusable.positive? || problems.any?` keeps the control APPLICABLE when the
+  # enumeration broke. Without it only_if skips the control, and the broken cases
+  # these guards exist to catch are exactly the ones it would suppress — a Not
+  # Applicable that means "nobody looked".
+  applicable = !in_scope.empty? || unusable.positive? || problems.any?
+  impact 0.5
+  impact 0.0 unless applicable
+  only_if('no aws_guardduty_detector in scope') { applicable }
+
+  in_scope.each do |id, region|
+    describe aws_guardduty_detector(detector_id: id, aws_region: region) do
+      its('enabled?') { should eq true }
+    end
   end
 end

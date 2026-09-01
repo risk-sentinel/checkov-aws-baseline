@@ -111,7 +111,13 @@ control 'CKV_AWS_291' do
   in_scope = assets.assets(exempt: exempt)
                    .reject { |a| a[:public_access_type].nil? }
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` is what makes the assertion above reachable. only_if
+  # suppresses every describe in the control, including that one, so with
+  # `applicable = !in_scope.empty?` alone the case it was written for — the read
+  # failed, therefore nothing was enumerated, therefore in_scope is empty —
+  # skipped the very test that reports it, and the control rendered Not
+  # Applicable with nothing assessed.
+  applicable = !in_scope.empty? || !unreadable.empty?
   impact 0.7
   impact 0.0 unless applicable
   only_if('no aws_msk_cluster in scope expressing this setting') { applicable }

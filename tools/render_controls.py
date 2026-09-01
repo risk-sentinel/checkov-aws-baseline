@@ -152,32 +152,44 @@ control '{cid}' do
   # Every call carries aws_region: a stock resource otherwise reads only the
   # region the connection was built with, and every other region's resources
   # report as absent, which renders Not Applicable rather than unexamined.
+  #
+  # checkov_enumerate does the reading. It flattens a nested id column, tells an
+  # unregistered column apart from an account that simply has none of this
+  # resource, and hands back anything that stopped it as `problems` rather than
+  # as an empty list -- see libraries/_checkov_enumeration.rb.
+  problems = []
 {enumeration}
 
-  # A plural resource whose table is built from the API response returns nil for
-  # a column that does not exist, rather than raising. Passing that on gives
-  # "`[:x]` must be provided" and kills the control. Blank ids are separated out
-  # and asserted on below, so a wrong `ids` column is a visible failure rather
-  # than a crash or a silent Not Applicable.
-  unusable = found.count {{ |id, _r| "#{{id}}".strip.empty? }}
-  found = found.reject {{ |id, _r| "#{{id}}".strip.empty? }}
+  # Blank ids are separated out and asserted on below rather than filtered away,
+  # so a wrong `ids` column is a visible failure and not a silent Not Applicable.
+  # `id.nil?` before the interpolation on purpose: a NullResponse answers true to
+  # nil? but interpolates to "#<NullResponse:0x...>", which is not blank. The
+  # survivors are interpolated rather than `.to_s`'d, because to_s on a
+  # NullResponse returns nil and the singular then rejects the argument.
+  unusable = found.count {{ |id, _r| id.nil? || "#{{id}}".strip.empty? }}
+  found = found.reject {{ |id, _r| id.nil? || "#{{id}}".strip.empty? }}
+               .map {{ |id, region| ["#{{id}}", region] }}
   in_scope = found.reject {{ |id, _r| checkov_exempt?(id: id, type: '{tf_type}', rules: exempt) }}
 
-  if unusable.positive?
+  if unusable.positive? || problems.any?
     describe "{tf_type} enumeration" do
       it 'produced usable identifiers' do
         expect(unusable).to eq(0),
-          "#{{unusable}} row(s) had a blank id — the `ids` column in resource_map.yml "\
+          "#{{unusable}} row(s) had a blank id — the `ids` column in resource_map.yml "\\
           'likely names a field this resource does not expose'
+      end
+
+      it 'read the assets it set out to read' do
+        expect(problems).to be_empty
       end
     end
   end
 
-  # `unusable.positive?` keeps the control APPLICABLE when every id came back
-  # blank. Without it only_if skips the control, and the wrong-column case this
-  # guard exists to catch is exactly the case it would suppress — a Not
-  # Applicable that means "the enumeration is broken".
-  applicable = !in_scope.empty? || unusable.positive?
+  # `unusable.positive? || problems.any?` keeps the control APPLICABLE when the
+  # enumeration broke. Without it only_if skips the control, and the broken cases
+  # these guards exist to catch are exactly the ones it would suppress — a Not
+  # Applicable that means "nobody looked".
+  applicable = !in_scope.empty? || unusable.positive? || problems.any?
   impact {impact}
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope') {{ applicable }}
@@ -256,7 +268,13 @@ control '{cid}' do
 {nil_filter_comment}
   in_scope = assets.assets(exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` is what makes the assertion above reachable. only_if
+  # suppresses every describe in the control, including that one, so with
+  # `applicable = !in_scope.empty?` alone the case it was written for — the read
+  # failed, therefore nothing was enumerated, therefore in_scope is empty —
+  # skipped the very test that reports it, and the control rendered Not
+  # Applicable with nothing assessed.
+  applicable = !in_scope.empty? || !unreadable.empty?
   impact {impact}
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope expressing this setting') {{ applicable }}
@@ -431,10 +449,15 @@ def render(cid, version, entry, mapping, meta, fixes):
         raise SystemExit(f"{cid}: resource_map must use one field per check, got {fields}")
     field = fields.pop()
     satisfies = {mapping[r]["satisfies"] for r in types}.pop()
-    assertion = {"empty": "be_empty", "equals": None}[satisfies]
-    if assertion is None:
-        value = mapping[types[0]].get("value")
-        assertion = f"be {str(value).lower()}"
+    # matcher_for, not a private two-entry table. This function used to carry its
+    # own {"empty": ..., "equals": ...} map, which meant the custom reader could
+    # express exactly two of the twelve comparison verbs the other three shapes
+    # understand and raised KeyError on the rest -- a generator crash, so nothing
+    # rendered at all. It also lowercased the expected value, which for anything
+    # but a boolean is a bare Ruby identifier and a NameError at exec: a broken
+    # control that reports as a finding. Both were fixed once, in matcher_for,
+    # and this duplicate was the copy that did not get the fix.
+    matcher = matcher_for(cid, satisfies, mapping[types[0]].get("value"))
 
     names = [PROSE.get(t, t) for t in types]
     prose = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -498,13 +521,30 @@ control '{cid}' do
 
   assets = aws_compute_assets(regions: scan_regions)
 
+  # A region that could not be READ is not a region with nothing in it. A denied
+  # DescribeInstances, a throttled call or an unreachable endpoint is recorded in
+  # unreadable_regions and contributes no rows, so without this the assets that
+  # region holds are simply absent from the assessment — a PASS over the regions
+  # that answered, or a Not Applicable if none did.
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
+    describe "{types[0]} enumeration" do
+      it 'read every region it attempted' do
+        expect(unreadable.map {{ |r| "#{{r[:region]}}: #{{r[:error]}}" }}).to be_empty
+      end
+    end
+  end
+
   # Only the asset types this check declares, only what the boundary has, and
   # only those that express the setting at all — a launch template has no
   # ebs_optimized, and nil must not read as a passing false.
 {nil_filter_comment}
   in_scope = assets.assets_of(applies_to, exempt: exempt){nil_filter}
 
-  applicable = !in_scope.empty?
+  # `|| !unreadable.empty?` keeps the control applicable when the read failed, so
+  # the assertion above is reachable: only_if suppresses every describe in the
+  # control, the one reporting the failure included.
+  applicable = !in_scope.empty? || !unreadable.empty?
 
   # Two statements, not a ternary: InSpec's AST impact collector calls `.value`
   # on the argument node, and a ternary is an IfNode with none — it aborts
@@ -517,7 +557,7 @@ control '{cid}' do
   in_scope.each do |asset|
     describe "#{{asset[:type]}} #{{asset[:id]}} (#{{asset[:account_id]}}/#{{asset[:region]}})" do
       subject {{ asset[:{field}] }}
-      it {{ should {assertion} }}
+      it {{ {matcher} }}
     end
   end
 end
@@ -584,6 +624,29 @@ def ruby_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def exclude_literal(enum):
+    """The `exclude:` argument to checkov_enumerate, as Ruby source.
+
+    A mapping declares the population it is NOT about:
+
+        enumerate:
+          resource: aws_eks_clusters
+          ids: names
+          exclude:
+            statuses: [CREATING, DELETING]
+
+    Empty when the mapping declares none, and rendered through ruby_literal so a
+    value never lands in the control as a bare identifier.
+    """
+    exclude = enum.get("exclude") or {}
+    if not exclude:
+        return ""
+    pairs = ", ".join(
+        f"{col}: [" + ", ".join(ruby_literal(v) for v in values) + "]"
+        for col, values in exclude.items())
+    return f", exclude: {{ {pairs} }}"
+
+
 def enumeration_for(spec, enum):
     """How a stock control enumerates its assets.
 
@@ -593,14 +656,29 @@ def enumeration_for(spec, enum):
     once, with no `aws_region:` at all: passing a placeholder would hand the SDK
     a region that does not exist.
     """
+    excl = exclude_literal(enum)
     if spec.get("scope") == "global":
         return (f"  # Global service: the same objects come back from any region, so this is\n"
                 f"  # enumerated once rather than once per region.\n"
-                f"  found = {enum['resource']}.{enum['ids']}.to_a.map {{ |id| [id, nil] }}")
+                f"  ids, found_problems = checkov_enumerate({enum['resource']}, "
+                f":{enum['ids']}{excl})\n"
+                f"  problems.concat(found_problems)\n"
+                f"  found = ids.map {{ |id| [id, nil] }}")
     return (f"  found = checkov_scan_regions(scan_regions).flat_map do |region|\n"
-            f"    {enum['resource']}(aws_region: region).{enum['ids']}.to_a"
-            f".map {{ |id| [id, region] }}\n"
-            f"  end")
+            f"    ids, found_problems = checkov_enumerate(\n"
+            f"      {enum['resource']}(aws_region: region), :{enum['ids']}{excl}\n"
+            f"    )\n"
+            f"    problems.concat(found_problems.map {{ |p| \"#{{region}}: #{{p}}\" }})\n"
+            f"    ids.map {{ |id| [id, region] }}\n"
+            f"  end\n"
+            f"\n"
+            f"  # The region LIST is upstream of every enumeration above, and its failure\n"
+            f"  # is the one that hides best: no regions means no rows, no rows means no\n"
+            f"  # problems, and the control renders Not Applicable across the whole account\n"
+            f"  # while a denied ec2:DescribeRegions goes unreported. checkov_scan_regions\n"
+            f"  # falls back to the connection's own region and records that here, so a\n"
+            f"  # partial scan fails loudly instead of passing quietly.\n"
+            f"  problems.concat(checkov_region_problems)")
 
 
 def nil_filter_for(satisfies, field):
@@ -621,8 +699,19 @@ def nil_filter_for(satisfies, field):
             "  # check rather than in breach of it.")
 
 
+LIST_VERBS = ("in_list", "not_in_list", "includes_all")
+
+
 def matcher_for(cid, satisfies, value):
     """The RSpec matcher a `satisfies` maps to, shared by the stock and API shapes."""
+    if satisfies in LIST_VERBS and not isinstance(value, (list, tuple)):
+        # `", ".join(ruby_literal(v) for v in value)` iterates a str CHARACTER BY
+        # CHARACTER, so `value: api` under includes_all renders
+        # `should include 'a', 'p', 'i'` — a control that parses, checks, renders
+        # and asserts something nobody wrote. Caught here rather than at exec,
+        # where it reads as a genuine finding.
+        raise SystemExit(f"{cid}: '{satisfies}' needs a list value, got "
+                         f"{type(value).__name__} {value!r} — write it as a YAML list")
     if satisfies == "equals":
         return f"should eq {ruby_literal(value)}"
     if satisfies == "not_empty":
@@ -652,6 +741,13 @@ def matcher_for(cid, satisfies, value):
         return f"should be < {value}"
     if satisfies == "includes":
         return f"should include {ruby_literal(value)}"
+    if satisfies == "includes_all":
+        # RSpec's include matcher takes several arguments and requires every one,
+        # which is the only way to express Checkov's "contains all of" against a
+        # list-valued property. Asserting the COMPLEMENT is empty instead reads
+        # the same until the property is absent: nil satisfies "empty" and the
+        # control passes for the asset that has no configuration at all.
+        return "should include " + ", ".join(ruby_literal(v) for v in value)
     if satisfies == "excludes":
         return f"should_not include {ruby_literal(value)}"
     if satisfies == "matches":
