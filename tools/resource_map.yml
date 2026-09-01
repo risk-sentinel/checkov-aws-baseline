@@ -58,6 +58,81 @@
 #     returns FunctionConfiguration and does not carry that member. The field was
 #     nil for every function, and because `not_empty` deliberately does not
 #     nil-filter, every Lambda in the account FAILED a check nothing had assessed.
+# reader: membership -- "is every X covered by some Y"
+# ---------------------------------------------------
+# The other readers all answer a question about ONE asset. `stock`'s `enumerate`
+# and `assert` are already independent, so "enumerate X, then look Y up BY X's
+# id" needs no new shape. A MEMBERSHIP mapping is for the case where the right
+# side cannot be fetched by the left side's id at all -- AWS Backup has no
+# per-volume call that says whether a volume is protected -- so both sides are
+# enumerated wholesale and matched by key.
+#   CKV2_AWS_9:
+#     aws_backup_selection:          # the Terraform type from the catalogue
+#       reader: membership
+#       assert: every_left_covered   # the only assertion form implemented
+#       match_region: true           # optional, default true; see below
+#       left:
+#         type: aws_ebs_volume       # a row in tools/api_specs.yml
+#         key: id                    # id | arn | any field that spec declares
+#         key_form: verbatim         # verbatim | terminal_segment
+#         noun: EBS volume           # prose, singular
+#         noun_plural: EBS volumes   # optional; defaults to noun + "s"
+#       right:
+#         type: aws_backup_protected_resource
+#         key: id
+#         key_form: terminal_segment
+#         noun: AWS Backup protected resource
+#         where:                     # optional, EXACTLY one field
+#           resource_type: [EBS]
+#       empty_right_means: >-        # REQUIRED, prose. See below.
+#         ...
+#       divergence: >-               # optional; rendered into the desc
+#         ...
+#       uncovered_message: ...       # optional; the per-asset failure message
+#       note: >-                     # why the fields above are what they are
+#         ...
+# THE THING TO GET RIGHT: the two sides usually speak different identifiers.
+# ec2 DescribeVolumes returns `vol-0abc` and Aws::EC2::Types::Volume has no Arn
+# member at all; AWS Backup returns `arn:aws:ec2:<region>:<acct>:volume/vol-0abc`.
+# Compare those directly and NOTHING matches, so every asset reports uncovered:
+# a 100% finding that reads exactly like a real one, and that neither `check`
+# nor `json` can see because neither evaluates a control body. Invert the
+# mistake and every asset passes, which is worse -- a control that cannot fail.
+#   key_form: verbatim          use the field as it is. Prefer this, with a full
+#                               ARN on BOTH sides: an ARN match is unambiguous.
+#   key_form: terminal_segment  reduce to everything after the last '/' or ':'.
+#                               Only when one side has no ARN to offer. It throws
+#                               away the account and the region, so pair it with
+#                               a `where` on the right so a reduced key cannot
+#                               collide with another service's.
+# match_region: true puts the region in the key on both sides, so an asset is
+# not treated as covered by an entry read in another region. It is the default
+# because the failure it prevents (a false PASS) is invisible and the failure it
+# risks (a false FAIL) is visible and investigable.
+# empty_right_means is REQUIRED and is prose, not a flag. An empty right side --
+# no backup plan has ever protected anything -- is the WORST case for these
+# rules, not an absence of evidence, so it renders as every asset failing and
+# never as Not Applicable. Writing the sentence is how a data author is made to
+# decide that on purpose.
+# The key set is CLOSED, and tools/lint_resource_map.py rejects anything outside
+# it. Not pedantry: an unrecognised key is a fact the author believes is being
+# enforced and that the generator silently drops, which is the same class of
+# defect as a mis-keyed join. The one to watch is `where`, which exists on the
+# RIGHT side only -- a `where` written under `left:` reads exactly like a scope
+# on the population, changes nothing, and leaves the control asserting over
+# assets the rule does not apply to. Scoping the left population is gap_3 in
+# tools/proposals/graph.yml and is its own piece of work. Prose goes in `note`.
+# Three runtime guards are rendered automatically and must not be removed: the
+# left side produced usable keys; a declared `where` selected something out of a
+# non-empty population; and the two key spaces intersect at all.
+# tools/lint_resource_map.py checks statically what it can -- both api specs
+# exist, each key names a column that spec actually produces, a `where` names a
+# field it carries, and the two sides agree about region scope.
+# NOT implemented, and deliberately: `no_left_covered` (the right side must be
+# empty) and "follow the reference, then assert about the matched RIGHT row"
+# (WAF rule names, DB parameter values). See tools/proposals/graph.yml
+# shape_notes gap_1 -- the second of those needs a third assertion form and is
+# its own piece of work.
 checks:
   CKV2_AWS_6:
     aws_s3_bucket:
@@ -407,6 +482,11 @@ checks:
         ids: db_instance_identifiers
         resource: aws_rds_instances
       reader: stock
+  CKV_AWS_272:
+    aws_lambda_function:
+      field: code_signing_config_arn
+      reader: api
+      satisfies: not_empty
   CKV_AWS_29:
     aws_elasticache_replication_group:
       assert:

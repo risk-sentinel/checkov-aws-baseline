@@ -425,12 +425,15 @@ class AwsApiAssets < AwsResourceBase
   # level. A field the API did not return is nil, and a control skips a nil
   # rather than reading it as a passing false.
   #
-  # The symbol/string fallback must test key PRESENCE, not truthiness. Written as
-  # `node[key.to_sym] || node[key]` it returned nil for every field whose value
-  # was legitimately `false` — which is precisely the failing population of every
-  # `satisfies: equals, value: true` mapping. Those rows were then removed by the
-  # control's nil filter and the check rendered Not Applicable: the failures
-  # reported as "this rule does not apply here". Found by tests/reader.
+  # PRESENCE, not truthiness. This was `node[key.to_sym] || node[key]`, which
+  # collapses a field whose value is `false` to nil, because `false || nil` is
+  # nil. Every api-reader control rejects nil rows as "does not express this
+  # setting", so an ECR repository with scan_on_push FALSE -- the exact
+  # violation CKV_AWS_163 exists to catch -- was dropped from the population and
+  # the control reported Not Applicable or passed on the remaining compliant
+  # rows. Ten mappings assert a boolean, so ten controls could not see their own
+  # finding. `key?` distinguishes "returned false" from "did not return it",
+  # which is the whole distinction the nil-filter depends on.
   def dig_path(item, path)
     path.to_s.split(".").reduce(item) do |node, key|
       break nil unless node.is_a?(Hash)
