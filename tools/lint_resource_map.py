@@ -201,8 +201,98 @@ def membership_columns(spec):
     return columns
 
 
+def _membership_shape_problems(where, mapping):
+    """The mapping-level declarations, independent of either side."""
+    out = []
+    if mapping.get("assert") not in MEMBERSHIP_ASSERTIONS:
+        out.append(f"{where}: assert '{mapping.get('assert')}' is not one of "
+                   f"{', '.join(MEMBERSHIP_ASSERTIONS)}")
+    if not str(mapping.get("empty_right_means") or "").strip():
+        out.append(
+            f"{where}: no `empty_right_means`. An empty right side is a FINDING — "
+            f"nothing is covered — and the control has to say so rather than let a "
+            f"reader assume absence of evidence")
+    # An unrecognised key is a claim the generator does not honour.
+    for key in sorted(set(mapping) - MEMBERSHIP_KEYS):
+        out.append(
+            f"{where}: `{key}` is not a key render_membership reads, so it would be "
+            f"silently ignored. Recognised: {', '.join(sorted(MEMBERSHIP_KEYS))}. Put "
+            f"prose in `note`")
+    return out
+
+
+def _membership_side_problems(where, side, decl, spec, unverifiable):
+    """One side of the join: its key, its key_form, and the keys it declares."""
+    out = []
+    if decl.get("key_form") not in MEMBERSHIP_KEY_FORMS:
+        out.append(f"{where}: {side} key_form '{decl.get('key_form')}' is not one "
+                   f"of {', '.join(MEMBERSHIP_KEY_FORMS)}")
+    columns = membership_columns(spec)
+    if decl.get("key") not in columns:
+        out.append(
+            f"{where}: {side} keys on '{decl.get('key')}', which "
+            f"{decl.get('type')} does not produce. It produces: "
+            f"{', '.join(sorted(columns))}. Every key would be nil and NOTHING would "
+            f"match, which renders as every asset uncovered")
+    if not str(decl.get("noun") or "").strip():
+        out.append(f"{where}: {side} has no `noun` for the control's prose")
+    for key in sorted(set(decl) - MEMBERSHIP_SIDE_KEYS[side]):
+        extra = (" Only the right side is filtered: a left-side `where` would read as "
+                 "scoping the population and would in fact do nothing."
+                 if key == "where" and side == "left" else "")
+        out.append(
+            f"{where}: {side} declares `{key}`, which render_membership does not "
+            f"read on that side, so it would be silently ignored. Recognised on "
+            f"{side}: {', '.join(sorted(MEMBERSHIP_SIDE_KEYS[side]))}.{extra}")
+    if decl.get("key_form") == "terminal_segment":
+        unverifiable.append(
+            f"{where}: {side} reduces {decl['type']}.{decl['key']} to its terminal "
+            f"segment — whether the two key spaces then intersect is a fact about "
+            f"real ARNs, provable only at exec, and the control's key-space guard "
+            f"is what covers it")
+    return out
+
+
+def _membership_filter_problems(where, mapping, sides):
+    """`right.where`, which selects the population the join is asked about."""
+    out = []
+    right_decl = mapping.get("right") or {}
+    filters = right_decl.get("where") or {}
+    if len(filters) > 1:
+        out.append(f"{where}: right.where takes exactly one field, got "
+                   f"{sorted(filters)} — with more than one the rendered guard "
+                   f"cannot say which of them selected nothing")
+    if filters and sides.get("right"):
+        field = next(iter(filters))
+        columns = membership_columns(sides["right"])
+        if field not in columns:
+            out.append(
+                f"{where}: right.where filters on '{field}', which "
+                f"{right_decl.get('type')} does not produce. It produces: "
+                f"{', '.join(sorted(columns))}. The filter would select NOTHING and "
+                f"every asset would report uncovered")
+    return out
+
+
+def _membership_region_problems(where, mapping, sides):
+    """Region is half the key, so the two sides must agree about scope."""
+    if not (mapping.get("match_region", True) and all(sides.values())):
+        return []
+    scopes = {side: (spec.get("scope") or "regional") for side, spec in sides.items()}
+    if scopes["left"] == scopes["right"]:
+        return []
+    return [f"{where}: the join pairs on region but the two sides disagree about "
+            f"scope (left {scopes['left']}, right {scopes['right']}). A global row is "
+            f"keyed 'global' and a regional one is not, so nothing would ever match"]
+
+
 def check_membership(problems, unverifiable):
-    """Validate every membership mapping. Returns the number checked."""
+    """Validate every membership mapping. Returns the number checked.
+
+    Split into one helper per concern: the original was 88 lines nested four
+    deep, and the side checks and the join checks were interleaved, so neither
+    could be read without the other.
+    """
     specs = api_specs()
     checked = 0
 
@@ -213,21 +303,7 @@ def check_membership(problems, unverifiable):
             checked += 1
             where = cid + "/" + tf_type
 
-            if mapping.get("assert") not in MEMBERSHIP_ASSERTIONS:
-                problems.append(f"{where}: assert '{mapping.get('assert')}' is not one of "
-                                f"{', '.join(MEMBERSHIP_ASSERTIONS)}")
-            if not str(mapping.get("empty_right_means") or "").strip():
-                problems.append(
-                    f"{where}: no `empty_right_means`. An empty right side is a FINDING — "
-                    f"nothing is covered — and the control has to say so rather than let a "
-                    f"reader assume absence of evidence")
-
-            # An unrecognised key is a claim the generator does not honour.
-            for key in sorted(set(mapping) - MEMBERSHIP_KEYS):
-                problems.append(
-                    f"{where}: `{key}` is not a key render_membership reads, so it would be "
-                    f"silently ignored. Recognised: {', '.join(sorted(MEMBERSHIP_KEYS))}. Put "
-                    f"prose in `note`")
+            problems.extend(_membership_shape_problems(where, mapping))
 
             sides = {}
             for side in ("left", "right"):
@@ -238,56 +314,11 @@ def check_membership(problems, unverifiable):
                     problems.append(f"{where}: {side} names api spec '{decl.get('type')}', which "
                                     f"is not in tools/api_specs.yml")
                     continue
-                if decl.get("key_form") not in MEMBERSHIP_KEY_FORMS:
-                    problems.append(f"{where}: {side} key_form '{decl.get('key_form')}' is not one "
-                                    f"of {', '.join(MEMBERSHIP_KEY_FORMS)}")
-                columns = membership_columns(spec)
-                if decl.get("key") not in columns:
-                    problems.append(
-                        f"{where}: {side} keys on '{decl.get('key')}', which "
-                        f"{decl.get('type')} does not produce. It produces: "
-                        f"{', '.join(sorted(columns))}. Every key would be nil and NOTHING would "
-                        f"match, which renders as every asset uncovered")
-                if not str(decl.get("noun") or "").strip():
-                    problems.append(f"{where}: {side} has no `noun` for the control's prose")
-                for key in sorted(set(decl) - MEMBERSHIP_SIDE_KEYS[side]):
-                    extra = (" Only the right side is filtered: a left-side `where` would read as "
-                             "scoping the population and would in fact do nothing."
-                             if key == "where" and side == "left" else "")
-                    problems.append(
-                        f"{where}: {side} declares `{key}`, which render_membership does not "
-                        f"read on that side, so it would be silently ignored. Recognised on "
-                        f"{side}: {', '.join(sorted(MEMBERSHIP_SIDE_KEYS[side]))}.{extra}")
-                if decl.get("key_form") == "terminal_segment":
-                    unverifiable.append(
-                        f"{where}: {side} reduces {decl['type']}.{decl['key']} to its terminal "
-                        f"segment — whether the two key spaces then intersect is a fact about "
-                        f"real ARNs, provable only at exec, and the control's key-space guard "
-                        f"is what covers it")
+                problems.extend(
+                    _membership_side_problems(where, side, decl, spec, unverifiable))
 
-            right_decl = mapping.get("right") or {}
-            filters = right_decl.get("where") or {}
-            if len(filters) > 1:
-                problems.append(f"{where}: right.where takes exactly one field, got "
-                                f"{sorted(filters)} — with more than one the rendered guard "
-                                f"cannot say which of them selected nothing")
-            if filters and sides.get("right"):
-                field = next(iter(filters))
-                columns = membership_columns(sides["right"])
-                if field not in columns:
-                    problems.append(
-                        f"{where}: right.where filters on '{field}', which "
-                        f"{right_decl.get('type')} does not produce. It produces: "
-                        f"{', '.join(sorted(columns))}. The filter would select NOTHING and "
-                        f"every asset would report uncovered")
-
-            if mapping.get("match_region", True) and all(sides.values()):
-                scopes = {side: (spec.get("scope") or "regional") for side, spec in sides.items()}
-                if scopes["left"] != scopes["right"]:
-                    problems.append(
-                        f"{where}: the join pairs on region but the two sides disagree about "
-                        f"scope (left {scopes['left']}, right {scopes['right']}). A global row is "
-                        f"keyed 'global' and a regional one is not, so nothing would ever match")
+            problems.extend(_membership_filter_problems(where, mapping, sides))
+            problems.extend(_membership_region_problems(where, mapping, sides))
 
     return checked
 

@@ -53,6 +53,7 @@ import sys
 
 import yaml
 
+import paths
 import yaml_dump
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -172,149 +173,211 @@ def collect(files):
     return merged, owner, errors
 
 
-def validate(merged, owner, verbs):
-    errors, warnings = [], []
+class _Live:
+    """Everything already committed, loaded once.
 
-    live_map = load_yaml(LIVE["mappings"]).get("checks", {})
-    authored_map = load_yaml(AUTHORED["mappings"]).get("checks", {})
-    live_meta = load_yaml(LIVE["metadata"])
-    authored_meta = load_yaml(AUTHORED["metadata"])
-    live_specs = load_yaml(LIVE["api_specs"])
-    live_policy_specs = load_yaml(LIVE["policy_specs"])
-    catalog = load_yaml(HERE / "checkov_catalog.yml").get("checks", {})
-    gems = {l.strip() for l in (HERE / "image_gems.txt").read_text().splitlines() if l.strip()}
+    Bundled into one object so each check below takes a single argument instead
+    of seven, which is most of why the original validate() was unreadable.
+    """
 
+    def __init__(self):
+        self.mappings = load_yaml(LIVE["mappings"]).get("checks", {})
+        self.authored_mappings = load_yaml(AUTHORED["mappings"]).get("checks", {})
+        self.metadata = load_yaml(LIVE["metadata"])
+        self.authored_metadata = load_yaml(AUTHORED["metadata"])
+        self.api_specs = load_yaml(LIVE["api_specs"])
+        self.policy_specs = load_yaml(LIVE["policy_specs"])
+        self.catalog = load_yaml(HERE / "checkov_catalog.yml").get("checks", {})
+        self.gems = {l.strip() for l in (HERE / "image_gems.txt").read_text().splitlines()
+                     if l.strip()}
+
+
+VALUE_VERBS = ("equals", "not_equals", "greater_than", "at_least", "at_most", "less_than",
+               "includes", "excludes", "matches", "in_list", "not_in_list")
+
+
+def _shape_key_errors(cid, tf_type, where, reader, body):
+    """The keys a reader shape cannot render without."""
+    out = []
+    for block, keys in SHAPE_REQUIRED[reader].items():
+        target = body if block == "_self" else body.get(block)
+        if target is None:
+            out.append(f"{cid}/{tf_type} ({where}): reader '{reader}' needs a "
+                       f"'{block}' block")
+            continue
+        for key in keys:
+            if not target.get(key):
+                out.append(f"{cid}/{tf_type} ({where}): "
+                           f"{block if block != '_self' else reader}.{key} is required")
+    return out
+
+
+def _policy_reader_errors(cid, tf_type, where, body, live, merged):
+    """A `policy` mapping names a predicate that exists and a source that is declared."""
+    out = []
+    predicate = body.get("predicate")
+    if predicate and predicate not in known_predicates():
+        out.append(f"{cid}/{tf_type} ({where}): predicate '{predicate}' is not "
+                   f"implemented. libraries/_policy_document.rb has: "
+                   f"{', '.join(known_predicates())}")
+    source = body.get("source") or tf_type
+    if source not in live.policy_specs and source not in merged["policy_specs"]:
+        out.append(f"{cid}/{tf_type} ({where}): policy source '{source}' is not "
+                   f"in tools/policy_specs.yml")
+    return out
+
+
+def _verb_errors(cid, tf_type, where, reader, body, verbs):
+    """Whether the assertion this mapping declares can actually be rendered."""
+    # `satisfies` sits on the assert block for stock, on the body otherwise.
+    holder = body.get("assert", body) if reader == "stock" else body
+    verb = holder.get("satisfies", "equals")
+    if reader in VERBLESS_READERS:
+        return []
+    if verb not in verbs:
+        return [f"{cid}/{tf_type} ({where}): satisfies '{verb}' is not "
+                f"implemented. matcher_for knows: {', '.join(verbs)}"]
+    if verb in rollup_verbs():
+        out = []
+        # A roll-up takes `conditions:`, not `value:`. render_controls raises
+        # SystemExit on an empty list -- mid-render, after it has already written
+        # part of controls/ -- so it is refused here.
+        if not body.get("conditions"):
+            out.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' rolls up over "
+                       f"the elements of a collection and needs a non-empty "
+                       f"`conditions:` list; with none it matches every element or "
+                       f"none of them, and either way asserts nothing")
+        if reader != "api":
+            out.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is supported "
+                       f"on the `api` reader only, not '{reader}' — and "
+                       f"tools/lint_api_paths.rb can only resolve condition paths "
+                       f"for that reader, so an unchecked path is a control that "
+                       f"cannot fail")
+        return out
+    if verb in VALUE_VERBS and holder.get("value") is None:
+        return [f"{cid}/{tf_type} ({where}): satisfies '{verb}' needs a value"]
+    return []
+
+
+def _type_errors(cid, tf_type, body, where, spec, live, merged, verbs):
+    """Everything asserted about ONE terraform type inside one check's mapping."""
+    if not isinstance(body, dict):
+        return [f"{cid}/{tf_type} ({where}): not a mapping"]
+    reader = body.get("reader")
+    if reader not in SHAPE_REQUIRED:
+        return [f"{cid}/{tf_type} ({where}): reader '{reader}' is not one "
+                f"of {sorted(SHAPE_REQUIRED)}"]
+
+    out = _shape_key_errors(cid, tf_type, where, reader, body)
+    if reader == "policy":
+        out += _policy_reader_errors(cid, tf_type, where, body, live, merged)
+    out += _verb_errors(cid, tf_type, where, reader, body, verbs)
+    if reader == "api":
+        for t in spec:
+            if t not in live.api_specs and t not in merged["api_specs"]:
+                out.append(f"{cid}/{t} ({where}): reader 'api' but no api spec "
+                           f"for {t}, here or live")
+    return out
+
+
+def _mapping_errors(merged, owner, live, verbs):
+    out = []
     for cid, spec in merged["mappings"].items():
         where = owner["mappings"][cid]
-        if cid in authored_map:
-            errors.append(f"{cid} ({where}): already in the AUTHORED resource_map. "
-                          f"A draft must not replace a reviewed mapping.")
-        if cid in live_map:
-            errors.append(f"{cid} ({where}): already in resource_map_derived. "
-                          f"If it is wrong, change it there in its own commit — "
-                          f"several entries in that file were removed after a live "
-                          f"exec and must not be silently reinstated.")
-        if cid not in catalog:
-            errors.append(f"{cid} ({where}): not in checkov_catalog.yml")
+        if cid in live.authored_mappings:
+            out.append(f"{cid} ({where}): already in the AUTHORED resource_map. "
+                       f"A draft must not replace a reviewed mapping.")
+        if cid in live.mappings:
+            out.append(f"{cid} ({where}): already in resource_map_derived. "
+                       f"If it is wrong, change it there in its own commit — "
+                       f"several entries in that file were removed after a live "
+                       f"exec and must not be silently reinstated.")
+        if cid not in live.catalog:
+            out.append(f"{cid} ({where}): not in checkov_catalog.yml")
         if not isinstance(spec, dict) or not spec:
-            errors.append(f"{cid} ({where}): mapping must be keyed by terraform type")
+            out.append(f"{cid} ({where}): mapping must be keyed by terraform type")
             continue
         for tf_type, body in spec.items():
-            if not isinstance(body, dict):
-                errors.append(f"{cid}/{tf_type} ({where}): not a mapping")
-                continue
-            reader = body.get("reader")
-            if reader not in SHAPE_REQUIRED:
-                errors.append(f"{cid}/{tf_type} ({where}): reader '{reader}' is not one "
-                              f"of {sorted(SHAPE_REQUIRED)}")
-                continue
-            for block, keys in SHAPE_REQUIRED[reader].items():
-                target = body if block == "_self" else body.get(block)
-                if target is None:
-                    errors.append(f"{cid}/{tf_type} ({where}): reader '{reader}' needs a "
-                                  f"'{block}' block")
-                    continue
-                for key in keys:
-                    if not target.get(key):
-                        errors.append(f"{cid}/{tf_type} ({where}): "
-                                      f"{block if block != '_self' else reader}.{key} is required")
-            if reader == "policy":
-                predicate = body.get("predicate")
-                if predicate and predicate not in known_predicates():
-                    errors.append(f"{cid}/{tf_type} ({where}): predicate '{predicate}' is not "
-                                  f"implemented. libraries/_policy_document.rb has: "
-                                  f"{', '.join(known_predicates())}")
-                source = body.get("source") or tf_type
-                if source not in live_policy_specs and source not in merged["policy_specs"]:
-                    errors.append(f"{cid}/{tf_type} ({where}): policy source '{source}' is not "
-                                  f"in tools/policy_specs.yml")
+            out += _type_errors(cid, tf_type, body, where, spec, live, merged, verbs)
+        if (cid not in merged["metadata"] and cid not in live.metadata
+                and cid not in live.authored_metadata):
+            out.append(f"{cid} ({where}): mapped with no metadata. render_controls "
+                       f"indexes metadata[cid] unconditionally.")
+    return out
 
-            # `satisfies` sits on the assert block for stock, on the body otherwise.
-            holder = body.get("assert", body) if reader == "stock" else body
-            verb = holder.get("satisfies", "equals")
-            if reader in VERBLESS_READERS:
-                pass
-            elif verb not in verbs:
-                errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is not "
-                              f"implemented. matcher_for knows: {', '.join(verbs)}")
-            elif verb in rollup_verbs():
-                # A roll-up takes `conditions:`, not `value:`. render_controls
-                # raises SystemExit on an empty list -- mid-render, after it has
-                # already written part of controls/ -- so it is refused here.
-                if not body.get("conditions"):
-                    errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' rolls up over "
-                                  f"the elements of a collection and needs a non-empty "
-                                  f"`conditions:` list; with none it matches every element or "
-                                  f"none of them, and either way asserts nothing")
-                if reader != "api":
-                    errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' is supported "
-                                  f"on the `api` reader only, not '{reader}' — and "
-                                  f"tools/lint_api_paths.rb can only resolve condition paths "
-                                  f"for that reader, so an unchecked path is a control that "
-                                  f"cannot fail")
-            elif verb in ("equals", "not_equals", "greater_than", "at_least", "at_most",
-                          "less_than", "includes", "excludes", "matches", "in_list",
-                          "not_in_list") and holder.get("value") is None:
-                errors.append(f"{cid}/{tf_type} ({where}): satisfies '{verb}' needs a value")
-            if reader == "api":
-                for t in spec:
-                    if t not in live_specs and t not in merged["api_specs"]:
-                        errors.append(f"{cid}/{t} ({where}): reader 'api' but no api spec "
-                                      f"for {t}, here or live")
-        if cid not in merged["metadata"] and cid not in live_meta and cid not in authored_meta:
-            errors.append(f"{cid} ({where}): mapped with no metadata. render_controls "
-                          f"indexes metadata[cid] unconditionally.")
 
+def _metadata_errors(merged, owner, live):
+    out = []
     for cid, meta in merged["metadata"].items():
         where = owner["metadata"][cid]
-        if cid in authored_meta:
-            errors.append(f"{cid} ({where}): already in the AUTHORED control_metadata.")
+        if cid in live.authored_metadata:
+            out.append(f"{cid} ({where}): already in the AUTHORED control_metadata.")
         missing = [k for k in META_REQUIRED if not meta.get(k)]
         if missing:
-            errors.append(f"{cid} ({where}): metadata missing {missing}")
+            out.append(f"{cid} ({where}): metadata missing {missing}")
         src = meta.get("nist_source")
         if src not in NIST_SOURCES:
-            errors.append(f"{cid} ({where}): nist_source '{src}' not in {list(NIST_SOURCES)}")
+            out.append(f"{cid} ({where}): nist_source '{src}' not in {list(NIST_SOURCES)}")
         for key in ("nist", "nist_r4", "cci", "ksi"):
             if key in meta and not isinstance(meta[key], list):
-                errors.append(f"{cid} ({where}): {key} must be a list")
+                out.append(f"{cid} ({where}): {key} must be a list")
+    return out
 
+
+def _api_spec_errors(merged, owner, live):
+    out = []
     for tf_type, spec in merged["api_specs"].items():
         where = owner["api_specs"][tf_type]
-        if tf_type in live_specs:
-            errors.append(f"{tf_type} ({where}): api spec already live")
+        if tf_type in live.api_specs:
+            out.append(f"{tf_type} ({where}): api spec already live")
         missing = [k for k in SPEC_REQUIRED if not spec.get(k)]
         if missing:
-            errors.append(f"{tf_type} ({where}): api spec missing {missing}")
+            out.append(f"{tf_type} ({where}): api spec missing {missing}")
         gem = spec.get("gem")
-        if gem and gem not in gems:
-            errors.append(f"{tf_type} ({where}): gem '{gem}' is not in the auditor image. "
-                          f"A LoadError is rescued into unreadable_regions and the control "
-                          f"reads as Not Applicable. Park it in api_specs_pending_gems.yml.")
+        if gem and gem not in live.gems:
+            out.append(f"{tf_type} ({where}): gem '{gem}' is not in the auditor image. "
+                       f"A LoadError is rescued into unreadable_regions and the control "
+                       f"reads as Not Applicable. Park it in api_specs_pending_gems.yml.")
+    return out
 
-    # A policy spec is validated the same way an api spec is, and for the same
-    # reason: a missing gem, a missing member or a source declared twice all end
-    # in a control that reads as an answer. The one extra rule is that the bake
-    # in libraries/_policy_specs.rb is what the reader actually reads, so a merge
-    # here must be followed by `python3 tools/render_policy_specs.py`.
+
+def _policy_spec_errors(merged, owner, live):
+    """A policy spec is validated the same way an api spec is, and for the same
+    reason: a missing gem, a missing member or a source declared twice all end in
+    a control that reads as an answer. The one extra rule is that the bake in
+    libraries/_policy_specs.rb is what the reader actually reads, so a merge here
+    must be followed by `python3 tools/render_policy_specs.py`."""
+    out = []
     for source, spec in merged["policy_specs"].items():
         where = owner["policy_specs"][source]
-        if source in live_policy_specs:
-            errors.append(f"{source} ({where}): policy spec already live")
+        if source in live.policy_specs:
+            out.append(f"{source} ({where}): policy spec already live")
         missing = [k for k in SPEC_REQUIRED if not spec.get(k)]
         if missing:
-            errors.append(f"{source} ({where}): policy spec missing {missing}")
+            out.append(f"{source} ({where}): policy spec missing {missing}")
         if not spec.get("document") and not spec.get("fetch"):
-            errors.append(f"{source} ({where}): policy spec declares neither `document` nor "
-                          f"`fetch`, so no policy is ever read and every asset is undecidable")
+            out.append(f"{source} ({where}): policy spec declares neither `document` nor "
+                       f"`fetch`, so no policy is ever read and every asset is undecidable")
         gem = spec.get("gem")
-        if gem and gem not in gems:
-            errors.append(f"{source} ({where}): gem '{gem}' is not in the auditor image.")
+        if gem and gem not in live.gems:
+            out.append(f"{source} ({where}): gem '{gem}' is not in the auditor image.")
+    return out
 
-    for cid in merged["fixes"]:
-        if cid not in catalog:
-            warnings.append(f"fix for {cid} ({owner['fixes'][cid]}): not in the catalogue")
 
+def validate(merged, owner, verbs):
+    """Every way a staged proposal can be wrong, in the order a reader cares.
+
+    Split into one function per section rather than one 143-line loop: the
+    original mixed five unrelated jobs and nested five deep, so a change to the
+    verb rules meant reading the metadata rules to be sure they were untouched.
+    """
+    live = _Live()
+    errors = (_mapping_errors(merged, owner, live, verbs)
+              + _metadata_errors(merged, owner, live)
+              + _api_spec_errors(merged, owner, live)
+              + _policy_spec_errors(merged, owner, live))
+    warnings = [f"fix for {cid} ({owner['fixes'][cid]}): not in the catalogue"
+                for cid in merged["fixes"] if cid not in live.catalog]
     return errors, warnings
 
 
@@ -345,7 +408,7 @@ def write_merged(merged, dry_run):
         body = yaml_dump.dump(doc)
         out = "\n".join(header).rstrip("\n") + "\n" + body if header else body
         if not dry_run:
-            path.write_text(out)
+            paths.inside_repo(path, f"{section} data file").write_text(out)
         written.append(f"  {path.name}: +{count}")
     return written
 

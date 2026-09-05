@@ -11,6 +11,9 @@
 # the helpers callable here at top level.
 #
 # Run through tests/membership/run.sh, which mounts the repo at /work.
+
+REGION = 'us-east-1'.freeze
+
 module Inspec; class Rule; def self.include(m); Object.include(m); end; end; end
 load "/work/libraries/_checkov_membership.rb"
 
@@ -27,25 +30,25 @@ EFS_ARN = "arn:aws:elasticfilesystem:us-east-1:111122223333:file-system/fs-0abc"
 
 # --- key_form reduction -------------------------------------------------
 eq "verbatim keeps the string",
-   checkov_membership_key({ id: VOL_ARN, region: "us-east-1" }, field: :id, key_form: "verbatim"),
-   ["us-east-1", VOL_ARN]
+   checkov_membership_key({ id: VOL_ARN, region: REGION }, field: :id, key_form: "verbatim"),
+   [REGION, VOL_ARN]
 eq "terminal_segment of an ARN with '/'",
-   checkov_membership_key({ id: VOL_ARN, region: "us-east-1" }, field: :id, key_form: "terminal_segment"),
-   ["us-east-1", "vol-0abc"]
+   checkov_membership_key({ id: VOL_ARN, region: REGION }, field: :id, key_form: "terminal_segment"),
+   [REGION, "vol-0abc"]
 eq "terminal_segment of an ARN with ':'",
-   checkov_membership_key({ id: CLU_ARN, region: "us-east-1" }, field: :id, key_form: "terminal_segment"),
-   ["us-east-1", "prod"]
+   checkov_membership_key({ id: CLU_ARN, region: REGION }, field: :id, key_form: "terminal_segment"),
+   [REGION, "prod"]
 eq "terminal_segment of a path",
-   checkov_membership_key({ id: "/hostedzone/Z1234", region: "us-east-1" }, field: :id, key_form: "terminal_segment"),
-   ["us-east-1", "Z1234"]
+   checkov_membership_key({ id: "/hostedzone/Z1234", region: REGION }, field: :id, key_form: "terminal_segment"),
+   [REGION, "Z1234"]
 
 # --- unkeyable rows are nil, never a blank that matches another blank ----
 eq "nil field yields no key",
-   checkov_membership_key({ arn: nil, region: "us-east-1" }, field: :arn, key_form: "verbatim"), nil
+   checkov_membership_key({ arn: nil, region: REGION }, field: :arn, key_form: "verbatim"), nil
 eq "missing field yields no key",
-   checkov_membership_key({ region: "us-east-1" }, field: :arn, key_form: "verbatim"), nil
+   checkov_membership_key({ region: REGION }, field: :arn, key_form: "verbatim"), nil
 eq "blank field yields no key",
-   checkov_membership_key({ arn: "   ", region: "us-east-1" }, field: :arn, key_form: "verbatim"), nil
+   checkov_membership_key({ arn: "   ", region: REGION }, field: :arn, key_form: "verbatim"), nil
 eq "two blank rows do not collide (both nil, both counted)",
    [checkov_membership_key({ arn: "", region: "r" }, field: :arn, key_form: "verbatim"),
     checkov_membership_key({ arn: nil, region: "r" }, field: :arn, key_form: "verbatim")],
@@ -60,9 +63,9 @@ rescue ArgumentError => e
 end
 
 # --- THE JOIN THIS SHAPE EXISTS FOR: CKV2_AWS_9 -------------------------
-left  = [{ id: "vol-0abc", region: "us-east-1" }, { id: "vol-0dead", region: "us-east-1" }]
-right = [{ id: VOL_ARN, region: "us-east-1", resource_type: "EBS" },
-         { id: CLU_ARN, region: "us-east-1", resource_type: "Aurora" }]
+left  = [{ id: "vol-0abc", region: REGION }, { id: "vol-0dead", region: REGION }]
+right = [{ id: VOL_ARN, region: REGION, resource_type: "EBS" },
+         { id: CLU_ARN, region: REGION, resource_type: "Aurora" }]
 
 narrowed = checkov_membership_where(right, { resource_type: ["EBS"] })
 eq "where narrows to the declared type", narrowed.length, 1
@@ -78,7 +81,7 @@ eq "keying the right side verbatim matches NOTHING (the bug the guard catches)",
    [false, false]
 
 # --- region pairing ------------------------------------------------------
-other = [{ id: VOL_ARN.sub("us-east-1", "us-west-2"), region: "us-west-2", resource_type: "EBS" }]
+other = [{ id: VOL_ARN.sub(REGION, "us-west-2"), region: "us-west-2", resource_type: "EBS" }]
 rk2 = checkov_membership_keys(other, field: :id, key_form: "terminal_segment")
 eq "same id in another region does not cover (match_region: true)", rk2.key?(lk[0]), false
 rk3 = checkov_membership_keys(other, field: :id, key_form: "terminal_segment", match_region: false)
@@ -87,12 +90,12 @@ eq "match_region: false lets it cover", rk3.key?(lk3), true
 
 # --- CKV2_AWS_8 / _18: verbatim ARN on both sides ------------------------
 eq "cluster ARN matches the backup ARN verbatim",
-   checkov_membership_keys([{ id: CLU_ARN, region: "us-east-1" }], field: :id, key_form: "verbatim")
-     .key?(checkov_membership_key({ arn: CLU_ARN, region: "us-east-1" }, field: :arn, key_form: "verbatim")),
+   checkov_membership_keys([{ id: CLU_ARN, region: REGION }], field: :id, key_form: "verbatim")
+     .key?(checkov_membership_key({ arn: CLU_ARN, region: REGION }, field: :arn, key_form: "verbatim")),
    true
 eq "efs ARN matches the backup ARN verbatim",
-   checkov_membership_keys([{ id: EFS_ARN, region: "us-east-1" }], field: :id, key_form: "verbatim")
-     .key?(checkov_membership_key({ arn: EFS_ARN, region: "us-east-1" }, field: :arn, key_form: "verbatim")),
+   checkov_membership_keys([{ id: EFS_ARN, region: REGION }], field: :id, key_form: "verbatim")
+     .key?(checkov_membership_key({ arn: EFS_ARN, region: REGION }, field: :arn, key_form: "verbatim")),
    true
 
 # --- diagnostics used by the guards --------------------------------------

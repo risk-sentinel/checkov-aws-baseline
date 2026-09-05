@@ -27,11 +27,14 @@
 
 require_relative "../libraries/_checkov_collection"
 
+ANY_IPV4 = '0.0.0.0/0'.freeze
+
+
 SSH = [
   { paths: ['from_port'], when_absent: true, test: ->(v) { v <= 22 } },
   { paths: ['to_port'],   when_absent: true, test: ->(v) { v >= 22 } },
   { paths: ['ip_ranges.cidr_ip', 'ipv_6_ranges.cidr_ipv_6'],
-    test: ->(v) { ['0.0.0.0/0', '::/0'].include?(v) } },
+    test: ->(v) { [ANY_IPV4, '::/0'].include?(v) } },
 ].freeze
 
 def t(label, got, want)
@@ -40,21 +43,21 @@ def t(label, got, want)
 end
 
 open_ssh = [{ ip_protocol: 'tcp', from_port: 22, to_port: 22,
-              ip_ranges: [{ cidr_ip: '0.0.0.0/0' }], ipv_6_ranges: [], user_id_group_pairs: [] }]
+              ip_ranges: [{ cidr_ip: ANY_IPV4 }], ipv_6_ranges: [], user_id_group_pairs: [] }]
 t('open tcp/22 to the world -> none_of false', CheckovCollection.none_of?(open_ssh, SSH), false)
 
 wide = [{ ip_protocol: 'tcp', from_port: 0, to_port: 65535,
-          ip_ranges: [{ cidr_ip: '10.0.0.0/8' }, { cidr_ip: '0.0.0.0/0' }] }]
+          ip_ranges: [{ cidr_ip: '10.0.0.0/8' }, { cidr_ip: ANY_IPV4 }] }]
 t('wide range, second cidr open -> none_of false', CheckovCollection.none_of?(wide, SSH), false)
 
-allproto = [{ ip_protocol: '-1', ip_ranges: [{ cidr_ip: '0.0.0.0/0' }] }]
+allproto = [{ ip_protocol: '-1', ip_ranges: [{ cidr_ip: ANY_IPV4 }] }]
 t('protocol -1, ports omitted -> none_of false', CheckovCollection.none_of?(allproto, SSH), false)
 
 v6 = [{ ip_protocol: 'tcp', from_port: 20, to_port: 25,
         ip_ranges: [], ipv_6_ranges: [{ cidr_ipv_6: '::/0' }] }]
 t('ipv6 ::/0 over 20-25 -> none_of false', CheckovCollection.none_of?(v6, SSH), false)
 
-icmp = [{ ip_protocol: 'icmp', from_port: -1, to_port: -1, ip_ranges: [{ cidr_ip: '0.0.0.0/0' }] }]
+icmp = [{ ip_protocol: 'icmp', from_port: -1, to_port: -1, ip_ranges: [{ cidr_ip: ANY_IPV4 }] }]
 t('icmp -1/-1 (all types, not port 22) -> none_of true', CheckovCollection.none_of?(icmp, SSH), true)
 
 corp = [{ ip_protocol: 'tcp', from_port: 22, to_port: 22, ip_ranges: [{ cidr_ip: '10.0.0.0/8' }] }]
@@ -64,7 +67,7 @@ peer = [{ ip_protocol: 'tcp', from_port: 22, to_port: 22, ip_ranges: [],
           user_id_group_pairs: [{ group_id: 'sg-0123456789abcdef0' }] }]
 t('tcp/22 from a peer SG -> none_of true', CheckovCollection.none_of?(peer, SSH), true)
 
-http = [{ ip_protocol: 'tcp', from_port: 443, to_port: 443, ip_ranges: [{ cidr_ip: '0.0.0.0/0' }] }]
+http = [{ ip_protocol: 'tcp', from_port: 443, to_port: 443, ip_ranges: [{ cidr_ip: ANY_IPV4 }] }]
 t('tcp/443 open to the world -> none_of true', CheckovCollection.none_of?(http, SSH), true)
 
 t('empty rule list -> none_of true (vacuous)', CheckovCollection.none_of?([], SSH), true)
@@ -103,7 +106,7 @@ t('nil field -> any_of false (fails, no guard needed)', CheckovCollection.any_of
 
 # --- shape edge cases --------------------------------------------------------
 t('a Hash is ONE element, not its pairs',
-  CheckovCollection.any_of?({ from_port: 22, to_port: 22, ip_ranges: [{ cidr_ip: '0.0.0.0/0' }] }, SSH), true)
+  CheckovCollection.any_of?({ from_port: 22, to_port: 22, ip_ranges: [{ cidr_ip: ANY_IPV4 }] }, SSH), true)
 t('false survives the nil filter',
   CheckovCollection.any_of?([{ a: false }], [{ paths: ['a'], test: ->(v) { v == false } }]), true)
 t('leaf array arrives whole',

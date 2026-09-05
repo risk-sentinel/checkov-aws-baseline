@@ -93,7 +93,11 @@ module CheckovScope
   # path, so a broken credential chain would have added that stall to every one
   # of them. This is the SDK's own region chain, and it touches no network.
   def checkov_connection_region
-    from_env = ENV["AWS_REGION"] || ENV["AMAZON_REGION"] || ENV["AWS_DEFAULT_REGION"]
+    # ENV.fetch(..., nil) rather than ENV[...]: absent is a REAL case here (the
+    # chain falls through to the shared config), and saying so explicitly keeps
+    # a reader from mistaking the nil for an oversight.
+    from_env = ENV.fetch("AWS_REGION", nil) || ENV.fetch("AMAZON_REGION", nil) ||
+               ENV.fetch("AWS_DEFAULT_REGION", nil)
     return from_env unless from_env.to_s.strip.empty?
 
     shared = ::Aws.shared_config.region if defined?(::Aws)

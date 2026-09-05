@@ -1,4 +1,5 @@
 require "aws_backend"
+require "base64"
 
 # Every deployed asset a Checkov EC2-family check can apply to, as one row each.
 #
@@ -389,7 +390,6 @@ class AwsComputeAssets < AwsResourceBase
   def decode(blob)
     return "" if blob.to_s.empty?
 
-    require "base64"
     Base64.decode64(blob.to_s)
   rescue ArgumentError
     ""

@@ -1,0 +1,6 @@
+# Pinned because these linters gate merges. An unpinned install is an
+# unreviewed dependency inside a required check: whatever pip resolves that
+# morning decides whether the gate passes, and nobody reviewed it.
+#
+# Bump deliberately, with the lints re-run against the new version.
+pyyaml==6.0.3

@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 
+import paths
 import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -210,7 +211,7 @@ def main() -> int:
         subprocess.run([sys.executable, str(HERE / "render_policy_specs.py")],
                        check=True, capture_output=True)
         if BAKED.read_text() != before:
-            BAKED.write_text(before)
+            paths.inside_repo(BAKED, 'baked policy specs').write_text(before)
             problems.append(f"{BAKED.relative_to(ROOT)} is stale — run "
                             f"`python3 tools/render_policy_specs.py` and commit the result")
 

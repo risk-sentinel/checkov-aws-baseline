@@ -49,6 +49,14 @@
 # suite does not depend on the image's locale.
 Encoding.default_external = Encoding::UTF_8
 Encoding.default_internal = Encoding::UTF_8
+require "tmpdir"
+
+PUBLIC_TRUST = 'public-trust'.freeze
+PUBLIC_REPO = 'public-repo'.freeze
+NO_POLICY = 'no-policy'.freeze
+POLICY_VERSION = '2012-10-17'.freeze
+BROKEN_REGION = 'eu-broken'.freeze
+
 
 require "json"
 require "aws-sdk-iam"
@@ -68,12 +76,12 @@ def encoded(doc)
 end
 
 WILDCARD_TRUST = encoded(
-  "Version" => "2012-10-17",
+  "Version" => POLICY_VERSION,
   "Statement" => [{ "Effect" => "Allow", "Principal" => { "AWS" => "*" },
                     "Action" => "sts:AssumeRole" }]
 )
 SERVICE_TRUST = encoded(
-  "Version" => "2012-10-17",
+  "Version" => POLICY_VERSION,
   # A single object rather than an array, which is legal and which a parser that
   # assumes an array drops silently.
   "Statement" => { "Effect" => "Allow",
@@ -81,7 +89,7 @@ SERVICE_TRUST = encoded(
                    "Action" => "sts:AssumeRole" }
 )
 ADMIN_POLICY = encoded(
-  "Version" => "2012-10-17",
+  "Version" => POLICY_VERSION,
   "Statement" => [{ "Sid" => "Admin", "Effect" => "Allow", "Action" => "*", "Resource" => "*" }]
 )
 
@@ -118,7 +126,7 @@ module StubIam
     # TWO pages: a reader that reads only the first would miss the finding, and
     # would report a clean estate while doing it.
     stub_responses(:list_roles, [
-                     { roles: [role.call("public-trust", WILDCARD_TRUST)],
+                     { roles: [role.call(PUBLIC_TRUST, WILDCARD_TRUST)],
                        is_truncated: true, marker: "m1" },
                      { roles: [role.call("service-trust", SERVICE_TRUST),
                                role.call("broken-trust", "not a policy at all")],
@@ -153,7 +161,7 @@ module StubEcr
   def canned_stubs
     stub_responses(:describe_repositories, lambda { |ctx|
       raise Aws::ECR::Errors::ServerException.new(ctx, "region opted out") if
-        ctx.config.region == "eu-broken"
+        ctx.config.region == BROKEN_REGION
 
       { repositories: %w[public-repo no-policy denied].map do |n|
           { repository_name: n, registry_id: ACCOUNT,
@@ -162,14 +170,14 @@ module StubEcr
     })
     stub_responses(:get_repository_policy, lambda { |ctx|
       case ctx.params[:repository_name]
-      when "public-repo"
-        { registry_id: ACCOUNT, repository_name: "public-repo",
+      when PUBLIC_REPO
+        { registry_id: ACCOUNT, repository_name: PUBLIC_REPO,
           policy_text: JSON.generate(
-            "Version" => "2012-10-17",
+            "Version" => POLICY_VERSION,
             "Statement" => [{ "Sid" => "Public", "Effect" => "Allow", "Principal" => "*",
                               "Action" => "ecr:BatchGetImage" }]
           ) }
-      when "no-policy"
+      when NO_POLICY
         # The declared absent_when: a real answer, and a passing one.
         Aws::ECR::Errors::RepositoryPolicyNotFoundException.new(ctx, "no policy")
       else
@@ -200,7 +208,7 @@ class FakeSts
   def get_caller_identity = Struct.new(:account).new(ACCOUNT)
 end
 
-STUB_REGIONS = ["us-east-1", "eu-broken"].freeze
+STUB_REGIONS = ["us-east-1", BROKEN_REGION].freeze
 
 class FakeRegions
   def initialize(regions) = @regions = regions
@@ -261,7 +269,6 @@ BACKEND = <<~'RUBY'
   end
 RUBY
 
-require "tmpdir"
 dir = Dir.mktmpdir
 File.write(File.join(dir, "aws_backend.rb"), BACKEND)
 $LOAD_PATH.unshift(dir)
@@ -285,16 +292,16 @@ assert "a PAGEABLE list is walked to the end, not truncated at page one",
        by_id.keys.sort == %w[public-trust service-trust],
        "got #{by_id.keys.inspect} (broken-trust is correctly undecidable)"
 assert "a percent-encoded document from the real API is decoded and judged",
-       by_id["public-trust"] && by_id["public-trust"][:offenders].length == 1
+       by_id[PUBLIC_TRUST] && by_id[PUBLIC_TRUST][:offenders].length == 1
 assert "the offender names the statement and the principal",
-       by_id["public-trust"][:offenders].first
+       by_id[PUBLIC_TRUST][:offenders].first
                                        .start_with?("Statement[0]: Effect Allow to Principal.AWS *")
 assert "a single-object Statement is judged, not dropped",
        by_id["service-trust"] && by_id["service-trust"][:offenders] == [] &&
        by_id["service-trust"][:policy_present] == true
 assert "an unparsable document is UNDECIDABLE, never clean",
        roles.undecidable.length == 1 && roles.undecidable.first.include?("broken-trust")
-assert "a global source enumerates once and says so", by_id["public-trust"][:region] == "global"
+assert "a global source enumerates once and says so", by_id[PUBLIC_TRUST][:region] == "global"
 
 # ------------------------------------------------------- IAM policy, 2 calls ---
 
@@ -321,21 +328,21 @@ ecr_by_id = ecr.assets.to_h { |r| [r[:id], r] }
 
 assert "a region whose LIST call raised is unreadable, not empty",
        ecr.unreadable_regions.length == 1 &&
-       ecr.unreadable_regions.first[:region] == "eu-broken",
+       ecr.unreadable_regions.first[:region] == BROKEN_REGION,
        ecr.unreadable_regions.inspect
 assert "the readable region still produced rows", ecr.assets.length == 2
 assert "a public repository policy is a finding",
-       ecr_by_id["public-repo"] && ecr_by_id["public-repo"][:offenders].length == 1
+       ecr_by_id[PUBLIC_REPO] && ecr_by_id[PUBLIC_REPO][:offenders].length == 1
 assert "the REAL RepositoryPolicyNotFoundException matches absent_when and PASSES",
-       ecr_by_id["no-policy"] && ecr_by_id["no-policy"][:offenders] == [] &&
-       ecr_by_id["no-policy"][:policy_present] == false
+       ecr_by_id[NO_POLICY] && ecr_by_id[NO_POLICY][:offenders] == [] &&
+       ecr_by_id[NO_POLICY][:policy_present] == false
 assert "a REAL AccessDeniedException is undecidable, never 'no policy'",
        ecr.undecidable.length == 1 && ecr.undecidable.first.include?("denied") &&
        ecr.undecidable.first.include?("AccessDeniedException"), ecr.undecidable.inspect
 assert "the denied repository is excluded from assets", ecr_by_id["denied"].nil?
 assert "fetch args resolve `from: id` into a validated param",
        CALLS.select { |c| c.first == :get_repository_policy }
-            .map { |c| c[1] }.include?(repository_name: "public-repo")
+            .map { |c| c[1] }.include?(repository_name: PUBLIC_REPO)
 
 # ------------------------------------------------------------------ report -----
 

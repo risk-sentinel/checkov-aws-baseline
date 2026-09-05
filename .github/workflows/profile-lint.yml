@@ -28,6 +28,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install pinned Python lint dependencies
+        # One pinned install rather than five unpinned ones. These linters gate
+        # merges, so whatever pip resolved on the day would otherwise decide
+        # whether the gate passed -- an unreviewed dependency inside a required
+        # check.
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check \
+            -r tools/requirements-lint.txt
+
       - name: Docker Hub login (auditor image pull)
         env:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -99,7 +108,6 @@ jobs:
         # LoadError, returns no rows, and the control renders Not Applicable.
         # Four specs shipped in exactly that state.
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tools/lint_api_specs.py
 
       - name: Stock mappings match the resource pack
@@ -109,14 +117,12 @@ jobs:
         # like a clean Not Applicable, indefinitely. Two were wrong when this
         # lint was written.
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tools/lint_resource_map.py
 
       - name: Generated controls are in sync with the data files
         # controls/CKV_*.rb are rendered from the four data files. A hand-edit
         # is correct and stale at the same time: the next render drops it.
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tools/render_controls.py --check
 
       - name: Catalogue drift (controls vs pinned Checkov)
@@ -125,7 +131,6 @@ jobs:
         # is a gap that looks like finished work. Coverage is printed every run,
         # so "we cover Checkov" is never claimable without a number beside it.
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tools/lint_catalog_drift.py
 
       - name: Control-tag completeness
@@ -147,7 +152,6 @@ jobs:
         # not the other renders a control asserting something nothing implements.
         # Also asserts the policy-spec bake is current.
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 tools/lint_policy_specs.py
 
       - name: Declared API paths exist in the AWS SDK model

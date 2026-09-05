@@ -23,6 +23,13 @@
 # that constant does not exist, so it is stubbed rather than the call being
 # removed -- the point is to load the file EXACTLY as InSpec loads it, including
 # the line that has historically been got wrong.
+require 'json'
+
+S3_GET = 's3:GetObject'.freeze
+STS_ASSUME = 'sts:AssumeRole'.freeze
+SUB_ORG_WILDCARD = 'repo:acme/*'.freeze
+SNS_PUBLISH = 'sns:Publish'.freeze
+
 module Inspec
   class Rule
     def self.include(mod)
@@ -37,6 +44,11 @@ module Inspec
   end
 end
 
+# Required HERE rather than at the top: _policy_document.rb ends with
+# `::Inspec::Rule.include(PolicyDocument)`, so the stub Inspec::Rule defined
+# above has to exist first. Hoisting it raises NameError at load. Sonar's
+# rubydre:S7816 is unsatisfiable for this one line, demonstrated rather than
+# asserted -- the move was made, it failed, and it was reverted.
 require_relative '../libraries/_policy_document'
 
 FAILURES = []
@@ -61,7 +73,6 @@ def offenders(document, predicate, account_id: nil)
 end
 
 def doc(statements)
-  require 'json'
   JSON.generate('Version' => '2012-10-17', 'Statement' => statements)
 end
 
@@ -90,7 +101,7 @@ assert 'no policy at all parses to nil',
 assert 'plain JSON parses',
        PolicyDocument.policy_document_parse(doc([]))['Version'] == '2012-10-17'
 
-encoded = doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => 's3:GetObject' }])
+encoded = doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => S3_GET }])
           .gsub('{', '%7B').gsub('}', '%7D').gsub('"', '%22').gsub(' ', '%20')
 assert 'URL-encoded IAM document parses',
        offenders(encoded, 'no_wildcard_principal').length == 1
@@ -129,7 +140,7 @@ end
 check 'a null element in a value list raises rather than being dropped' do
   begin
     offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => [nil] },
-                     'Action' => 's3:GetObject' }]), 'no_wildcard_principal')
+                     'Action' => S3_GET }]), 'no_wildcard_principal')
     FAILURES << 'a null principal was compacted into a clean statement'
   rescue PolicyDocument::ParseError
     nil
@@ -148,7 +159,7 @@ end
 
 assert 'a nested list of strings still flattens',
        offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => [['*']] },
-                        'Action' => 's3:GetObject' }]), 'no_wildcard_principal').length == 1
+                        'Action' => S3_GET }]), 'no_wildcard_principal').length == 1
 
 # ----------------------------------------------------------- shape variety --
 
@@ -184,17 +195,17 @@ assert 'bare "*" principal is a finding',
 
 assert 'Principal.AWS "*" is a finding',
        offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => '*' },
-                        'Action' => 's3:GetObject' }]),
+                        'Action' => S3_GET }]),
                  'no_wildcard_principal').length == 1
 
 assert 'a Condition takes the statement out of scope',
-       offenders(doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => 's3:GetObject',
+       offenders(doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => S3_GET,
                         'Condition' => { 'StringEquals' => { 'aws:PrincipalOrgID' => 'o-x' } } }]),
                  'no_wildcard_principal').empty?
 
 assert 'a service principal is not a wildcard principal',
        offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'Service' => 'ec2.amazonaws.com' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'no_wildcard_principal').empty?
 
 assert 'Deny to "*" is not a finding',
@@ -209,11 +220,11 @@ assert 'a KMS default key policy is clean',
 
 assert 'the failure message names the statement',
        offenders(doc([{ 'Sid' => 'PublicRead', 'Effect' => 'Allow', 'Principal' => '*',
-                        'Action' => 's3:GetObject' }]),
+                        'Action' => S3_GET }]),
                  'no_wildcard_principal').first.to_s.start_with?('Sid PublicRead:')
 
 assert 'an unnamed statement is reported by index',
-       offenders(doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => 's3:GetObject' }]),
+       offenders(doc([{ 'Effect' => 'Allow', 'Principal' => '*', 'Action' => S3_GET }]),
                  'no_wildcard_principal').first.to_s.start_with?('Statement[0]:')
 
 # ---------------------------------------------------- no_wildcard_action ----
@@ -245,10 +256,10 @@ assert 'Action * on a named resource is not',
                         'Resource' => 'arn:aws:s3:::bucket/*' }]),
                  'no_admin_star_star').empty?
 assert 'named actions on Resource * are not',
-       offenders(doc([{ 'Effect' => 'Allow', 'Action' => 's3:GetObject', 'Resource' => '*' }]),
+       offenders(doc([{ 'Effect' => 'Allow', 'Action' => S3_GET, 'Resource' => '*' }]),
                  'no_admin_star_star').empty?
 assert 'the star-star statement is found among several',
-       offenders(doc([{ 'Effect' => 'Allow', 'Action' => 's3:GetObject', 'Resource' => '*' },
+       offenders(doc([{ 'Effect' => 'Allow', 'Action' => S3_GET, 'Resource' => '*' },
                       { 'Sid' => 'Admin', 'Effect' => 'Allow', 'Action' => ['*'],
                         'Resource' => ['*'] }]),
                  'no_admin_star_star') == ['Sid Admin: Effect Allow with Action * on ' \
@@ -257,26 +268,26 @@ assert 'the star-star statement is found among several',
 # ------------------------- no_cross_account_principal_without_condition -----
 
 cross = doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => 'arn:aws:iam::999988887777:root' },
-               'Action' => 'sns:Publish' }])
+               'Action' => SNS_PUBLISH }])
 assert 'another account with no condition is a finding',
        offenders(cross, 'no_cross_account_principal_without_condition',
                  account_id: '111122223333').length == 1
 assert 'the scanning account itself is not cross-account',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'AWS' => 'arn:aws:iam::111122223333:role/app' },
-                        'Action' => 'sns:Publish' }]),
+                        'Action' => SNS_PUBLISH }]),
                  'no_cross_account_principal_without_condition',
                  account_id: '111122223333').empty?
 assert 'another account WITH a condition is not a finding',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'AWS' => 'arn:aws:iam::999988887777:root' },
-                        'Action' => 'sns:Publish',
+                        'Action' => SNS_PUBLISH,
                         'Condition' => { 'StringEquals' => { 'aws:PrincipalOrgID' => 'o-x' } } }]),
                  'no_cross_account_principal_without_condition',
                  account_id: '111122223333').empty?
 assert 'a bare 12-digit account principal counts',
        offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => '999988887777' },
-                        'Action' => 'sns:Publish' }]),
+                        'Action' => SNS_PUBLISH }]),
                  'no_cross_account_principal_without_condition',
                  account_id: '111122223333').length == 1
 assert 'an unknown scanning account over-reports rather than under-reports',
@@ -287,21 +298,21 @@ assert 'an unknown scanning account over-reports rather than under-reports',
 assert 'a root ARN is a finding',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'AWS' => 'arn:aws:iam::111122223333:root' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'no_account_root_principal').length == 1
 assert 'a bare account number is a finding',
        offenders(doc([{ 'Effect' => 'Allow', 'Principal' => { 'AWS' => '111122223333' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'no_account_root_principal').length == 1
 assert 'a GovCloud root ARN is a finding',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'AWS' => 'arn:aws-us-gov:iam::111122223333:root' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'no_account_root_principal').length == 1
 assert 'a named role in the same account is not',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'AWS' => 'arn:aws:iam::111122223333:role/deploy' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'no_account_root_principal').empty?
 assert 'a Deny on root is not',
        offenders(doc([{ 'Effect' => 'Deny',
@@ -337,8 +348,8 @@ assert 'a Null presence check on :sub is a finding',
        offenders(gh('Null' => { SUB => 'false' }), 'gh_oidc_sub_safe').length == 1
 assert 'sub "*" is a finding',
        offenders(gh('StringLike' => { SUB => '*' }), 'gh_oidc_sub_safe').length == 1
-assert 'sub "repo:acme/*" is a finding',
-       offenders(gh('StringLike' => { SUB => 'repo:acme/*' }), 'gh_oidc_sub_safe').length == 1
+assert 'sub SUB_ORG_WILDCARD is a finding',
+       offenders(gh('StringLike' => { SUB => SUB_ORG_WILDCARD }), 'gh_oidc_sub_safe').length == 1
 assert 'a concrete repo passes',
        offenders(gh('StringEquals' => { SUB => 'repo:acme/widgets:ref:refs/heads/main' }),
                  'gh_oidc_sub_safe').empty?
@@ -349,12 +360,12 @@ assert 'ForAllValues:StringLike is recognised as constraining',
        offenders(gh('ForAllValues:StringLike' => { SUB => 'repo:acme/widgets:*' }),
                  'gh_oidc_sub_safe').empty?
 assert 'a list of subs is safe only if every element is',
-       offenders(gh('StringLike' => { SUB => ['repo:acme/widgets:*', 'repo:acme/*'] }),
+       offenders(gh('StringLike' => { SUB => ['repo:acme/widgets:*', SUB_ORG_WILDCARD] }),
                  'gh_oidc_sub_safe').length == 1
 assert 'a role with no GitHub federated principal is clean, not skipped',
        offenders(doc([{ 'Effect' => 'Allow',
                         'Principal' => { 'Service' => 'ec2.amazonaws.com' },
-                        'Action' => 'sts:AssumeRole' }]),
+                        'Action' => STS_ASSUME }]),
                  'gh_oidc_sub_safe').empty?
 
 # A renamed GitHub repository presents `repo:<org>@<id>/<repo>@<id>`, so a trust
@@ -373,11 +384,11 @@ assert 'a :repository_id under StringLike does NOT pin -- it can carry a wildcar
                                       REPO_ID => '126*' }),
                  'gh_oidc_sub_safe').length == 1
 assert 'an empty :repository_id pins nothing',
-       offenders(gh('StringLike' => { SUB => 'repo:acme/*' },
+       offenders(gh('StringLike' => { SUB => SUB_ORG_WILDCARD },
                     'StringEquals' => { REPO_ID => '' }),
                  'gh_oidc_sub_safe').length == 1
 assert 'a wildcard :repository_id under StringEquals pins nothing',
-       offenders(gh('StringLike' => { SUB => 'repo:acme/*' },
+       offenders(gh('StringLike' => { SUB => SUB_ORG_WILDCARD },
                     'StringEquals' => { REPO_ID => '*' }),
                  'gh_oidc_sub_safe').length == 1
 
@@ -389,7 +400,7 @@ assert 'a wildcard :repository_id under StringEquals pins nothing',
 # a positive case is caught.
 firing = {
   'no_wildcard_principal' => doc([{ 'Effect' => 'Allow', 'Principal' => '*',
-                                    'Action' => 's3:GetObject' }]),
+                                    'Action' => S3_GET }]),
   'no_wildcard_action' => doc([{ 'Effect' => 'Allow', 'Action' => '*', 'Resource' => 'x' }]),
   'no_admin_star_star' => admin,
   'no_cross_account_principal_without_condition' => cross,
