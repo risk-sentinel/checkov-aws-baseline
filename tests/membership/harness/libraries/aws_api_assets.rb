@@ -10,6 +10,9 @@
 # `exempt:` is accepted and ignored. Exemption filtering belongs to the real
 # reader and is not what these scenarios are about; honouring it here would only
 # let a bug in the stub look like a bug in the control.
+
+REGION = 'us-east-1'.freeze
+
 class AwsApiAssets < Inspec.resource(1)
   name "aws_api_assets"
   attr_reader :unreadable_regions
@@ -17,23 +20,23 @@ class AwsApiAssets < Inspec.resource(1)
   def initialize(opts = {})
     @type = opts[:type].to_s
     @unreadable_regions = []
-    s = ENV["SCENARIO"]
+    s = ENV.fetch("SCENARIO", nil)
     @rows =
       case [@type, s]
       when ["aws_ebs_volume", "mixed"], ["aws_ebs_volume", "empty_right"],
            ["aws_ebs_volume", "broken_keys"], ["aws_ebs_volume", "bad_filter"]
-        [{ id: "vol-covered", region: "us-east-1", account_id: "111122223333" },
-         { id: "vol-orphan",  region: "us-east-1", account_id: "111122223333" }]
+        [{ id: "vol-covered", region: REGION, account_id: "111122223333" },
+         { id: "vol-orphan",  region: REGION, account_id: "111122223333" }]
       when ["aws_ebs_volume", "unkeyable"]
-        [{ id: "", region: "us-east-1", account_id: "111122223333" }]
+        [{ id: "", region: REGION, account_id: "111122223333" }]
       when ["aws_backup_protected_resource", "mixed"]
-        [{ id: VOL, region: "us-east-1", resource_type: "EBS" }]
+        [{ id: VOL, region: REGION, resource_type: "EBS" }]
       when ["aws_backup_protected_resource", "broken_keys"]
         [{ id: "vol-covered", region: "us-west-2", resource_type: "EBS" }]
       when ["aws_backup_protected_resource", "bad_filter"]
-        [{ id: VOL, region: "us-east-1", resource_type: "EBSVolume" }]
+        [{ id: VOL, region: REGION, resource_type: "EBSVolume" }]
       when ["aws_backup_protected_resource", "unread_right"]
-        @unreadable_regions = [{ region: "us-east-1", error: "AccessDenied" }]
+        @unreadable_regions = [{ region: REGION, error: "AccessDenied" }]
         []
       else
         []

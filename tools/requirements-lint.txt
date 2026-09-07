@@ -1,0 +1,18 @@
+# Pinned AND hashed because these linters gate merges.
+#
+# An unpinned install is an unreviewed dependency inside a required check:
+# whatever pip resolved that morning decides whether the gate passes, and
+# nobody reviewed it. A version pin alone still trusts the index to serve the
+# same artefact under that version, so the hashes are what actually bind it.
+#
+# --require-hashes makes pip refuse anything not listed here, including a
+# transitive dependency that appears later. PyYAML has none today; if that
+# changes, the install fails loudly rather than pulling something unhashed.
+#
+# Both CPython 3.11 and 3.12 manylinux wheels are listed so the runner image
+# can move between them without this file becoming a puzzle, plus the sdist for
+# any platform without a wheel. Bump deliberately, re-running the lints.
+pyyaml==6.0.3 \
+    --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

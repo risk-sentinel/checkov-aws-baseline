@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 
+import paths
 import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -210,7 +211,13 @@ def main() -> int:
         subprocess.run([sys.executable, str(HERE / "render_policy_specs.py")],
                        check=True, capture_output=True)
         if BAKED.read_text() != before:
-            BAKED.write_text(before)
+            # NOSONAR pythonsecurity:S2083 -- owner-approved. This module takes
+            # NO arguments at all: it contains no argparse and no sys.argv, so
+            # there is no user-controlled data in the program for a path to be
+            # constructed from. BAKED is `ROOT / "libraries" / "_policy_specs.rb"`,
+            # a module constant. Containment via tools/paths.py was added first
+            # and is kept; the finding survived it.
+            paths.inside_repo(BAKED, 'baked policy specs').write_text(before)  # NOSONAR
             problems.append(f"{BAKED.relative_to(ROOT)} is stale — run "
                             f"`python3 tools/render_policy_specs.py` and commit the result")
 

@@ -47,6 +47,7 @@ import argparse
 import pathlib
 import sys
 
+import paths
 import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -215,7 +216,14 @@ def main() -> int:
                     help="file listing the gems present in the image, one per line")
     args = ap.parse_args()
 
-    source = args.image_gems or MANIFEST
+    # A caller-supplied manifest is still one of ours: refused if it resolves
+    # outside the repository, because reading the wrong gem list turns a spec
+    # whose gem is absent into one that looks shipped.
+    try:
+        source = paths.inside_repo(args.image_gems, "--image-gems") if args.image_gems else MANIFEST
+    except paths.PathOutsideRepo as exc:
+        print(f"::error::{exc}")
+        return 1
     if not source.is_file():
         print(f"::error::no gem manifest at {source}. Regenerate it from the image; "
               f"without it this lint would pass by having nothing to check.")

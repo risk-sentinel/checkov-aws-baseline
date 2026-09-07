@@ -55,6 +55,7 @@
 # file. The leading `::` is load-bearing -- a bare `Inspec::Rule.include` raises
 # `uninitialized constant` at exec while passing `check`, which has bitten this
 # fleet before.
+require 'json'
 module PolicyDocument
   # A document that could not be read as a policy. Never rescued into an empty
   # offender list; see the header.
@@ -120,7 +121,6 @@ module PolicyDocument
     text = raw.to_s
     return nil if text.strip.empty?
 
-    require 'json'
     parsed = policy_document_json(text)
     unless parsed.is_a?(Hash)
       raise ParseError, "policy document parsed to a #{parsed.class}, not an object"

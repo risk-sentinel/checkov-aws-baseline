@@ -10,6 +10,11 @@
 # It lives under tests/ rather than libraries/ so InSpec never loads it.
 require "aws-sdk-core"
 
+# Raised when a test reaches a path the stub deliberately does not implement.
+# A named class rather than a bare string so the failure says what kind of
+# mistake it is, and so a test could assert on it.
+class StubMisuse < RuntimeError; end
+
 class FakeConnection
   def sts_client
     @sts_client ||= Aws::STS::Client.new(region: "us-east-1", stub_responses: true).tap do |c|
@@ -26,11 +31,11 @@ class FakeConnection
 
   def compute_client
     FakeConnection.compute_client_stub ||
-      raise("compute_client: a test reached the region walk; declare regions: instead")
+      raise(StubMisuse, "compute_client: a test reached the region walk; declare regions: instead")
   end
 
   def aws_client(_klass)
-    raise "aws_client: the stubbed subclass should have overridden #client"
+    raise StubMisuse, "aws_client: the stubbed subclass should have overridden #client"
   end
 end
 

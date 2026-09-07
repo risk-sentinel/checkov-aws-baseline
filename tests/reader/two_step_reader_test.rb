@@ -12,6 +12,10 @@
 #   docker run --rm -v "$PWD:/work" -w /work \
 #     --entrypoint ruby risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 \
 #     tests/reader/two_step_reader_test.rb
+require "aws-sdk-ec2"
+
+REGION = 'us-east-1'.freeze
+
 $LOAD_PATH.unshift(__dir__)
 require "aws_backend"
 require "aws-sdk-apigateway"
@@ -38,7 +42,7 @@ class StubbedAssets < AwsApiAssets
 end
 
 def stubbed(klass)
-  klass.new(region: "us-east-1", stub_responses: true)
+  klass.new(region: REGION, stub_responses: true)
 end
 
 FAILURES = []
@@ -78,7 +82,7 @@ api.stub_responses(:get_stages,
                     { item: [{ stage_name: "dev", tracing_enabled: false },
                              { stage_name: "qa", tracing_enabled: true }] }])
 
-stages = StubbedAssets.new(type: "aws_api_gateway_stage", regions: ["us-east-1"],
+stages = StubbedAssets.new(type: "aws_api_gateway_stage", regions: [REGION],
                            stub_client: api)
 rows = stages.assets
 
@@ -97,7 +101,7 @@ check("a nested child field resolves through dig_path") do
   api2.stub_responses(:get_stages,
                       item: [{ stage_name: "prod",
                                access_log_settings: { destination_arn: "arn:log" } }])
-  a = StubbedAssets.new(type: "aws_api_gateway_stage", regions: ["us-east-1"],
+  a = StubbedAssets.new(type: "aws_api_gateway_stage", regions: [REGION],
                         stub_client: api2).assets
   eq(a.first[:access_log_destination_arn], "arn:log")
 end
@@ -112,7 +116,7 @@ api_err.stub_responses(:get_stages,
                         "AccessDeniedException",
                         { item: [{ stage_name: "dev" }] }])
 
-lossy = StubbedAssets.new(type: "aws_api_gateway_stage", regions: ["us-east-1"],
+lossy = StubbedAssets.new(type: "aws_api_gateway_stage", regions: [REGION],
                           stub_client: api_err)
 
 check("the surviving subtrees are still read") { eq(lossy.assets.length, 2) }
@@ -131,7 +135,7 @@ eks.stub_responses(:describe_cluster,
                     { cluster: { name: "data", arn: "arn:data",
                                  resources_vpc_config: { endpoint_public_access: false } } }])
 
-clusters = StubbedAssets.new(type: "aws_eks_cluster", regions: ["us-east-1"], stub_client: eks)
+clusters = StubbedAssets.new(type: "aws_eks_cluster", regions: [REGION], stub_client: eks)
 eks_rows = clusters.assets
 
 # The regression this guards: Aws::EKS::Types::Cluster is a Struct subclass, so
@@ -159,7 +163,7 @@ gd.stub_responses(:list_detectors, detector_ids: ["d-1"])
 gd.stub_responses(:get_detector, status: "ENABLED", service_role: "arn:role",
                                  finding_publishing_frequency: "FIFTEEN_MINUTES")
 
-detectors = StubbedAssets.new(type: "aws_guardduty_detector", regions: ["us-east-1"],
+detectors = StubbedAssets.new(type: "aws_guardduty_detector", regions: [REGION],
                               stub_client: gd)
 gd_rows = detectors.assets
 
@@ -172,7 +176,7 @@ puts "empty and broken accounts are told apart"
 
 empty = stubbed(Aws::EKS::Client)
 empty.stub_responses(:list_clusters, clusters: [])
-none = StubbedAssets.new(type: "aws_eks_cluster", regions: ["us-east-1"], stub_client: empty)
+none = StubbedAssets.new(type: "aws_eks_cluster", regions: [REGION], stub_client: empty)
 
 check("no parents means no rows") { eq(none.assets, []) }
 check("no parents is counted, so the control can say so") { eq(none.parents_seen, 0) }
@@ -181,7 +185,7 @@ check("no parents is not an unreadable region") { eq(none.unreadable_regions, []
 
 denied = stubbed(Aws::EKS::Client)
 denied.stub_responses(:list_clusters, "AccessDeniedException")
-blind = StubbedAssets.new(type: "aws_eks_cluster", regions: ["us-east-1"], stub_client: denied)
+blind = StubbedAssets.new(type: "aws_eks_cluster", regions: [REGION], stub_client: denied)
 
 check("a failed PARENT leg is an unreadable region") { eq(blind.unreadable_regions.length, 1) }
 check("a failed parent leg enumerates nothing") { eq(blind.parents_seen, 0) }
@@ -196,7 +200,7 @@ puts "a parent whose id came back blank is a LOST SUBTREE, not a skipped one"
 blankid = stubbed(Aws::APIGateway::Client)
 blankid.stub_responses(:get_rest_apis, items: [{ name: "no-id" }, { id: "a2" }])
 blankid.stub_responses(:get_stages, item: [{ stage_name: "prod" }])
-partial = StubbedAssets.new(type: "aws_api_gateway_stage", regions: ["us-east-1"],
+partial = StubbedAssets.new(type: "aws_api_gateway_stage", regions: [REGION],
                             stub_client: blankid)
 
 check("a blank parent id is recorded, not silently dropped") do
@@ -233,7 +237,7 @@ puts "one-step specs are unchanged by the shared item/hash handling"
 
 sns = stubbed(Aws::SNS::Client)
 sns.stub_responses(:list_topics, topics: [{ topic_arn: "arn:t1" }, { topic_arn: "arn:t2" }])
-topics = StubbedAssets.new(type: "aws_sns_topic", regions: ["us-east-1"], stub_client: sns)
+topics = StubbedAssets.new(type: "aws_sns_topic", regions: [REGION], stub_client: sns)
 
 check("a one-step spec still enumerates") { eq(topics.assets.map { |r| r[:id] }, %w[arn:t1 arn:t2]) }
 check("a one-step spec reports no parents") { eq(topics.parents_seen, 0) }
@@ -262,7 +266,7 @@ scalar.stub_responses(:list_clusters, clusters: %w[app])
 
 check("a scalar child collection raises rather than yielding empty rows") do
   begin
-    StubbedAssets.new(type: "aws_scalar_child_probe", regions: ["us-east-1"],
+    StubbedAssets.new(type: "aws_scalar_child_probe", regions: [REGION],
                       stub_client: scalar)
     [false, "no exception raised — a spec bug would have rendered Not Applicable"]
   rescue AwsApiAssets::SpecError => e
@@ -279,7 +283,6 @@ puts "region DISCOVERY that failed is not an account with one region"
 # profile swept ONE region while reporting on the account — every region it never
 # visited enumerated nothing and rendered Not Applicable. inspec.yml's own
 # description of scan_regions says why that is not acceptable.
-require "aws-sdk-ec2"
 
 ec2 = stubbed(Aws::EC2::Client)
 ec2.stub_responses(:describe_regions,
@@ -305,7 +308,7 @@ check("it still reads the one region it can, rather than nothing") do
 end
 
 ec2.stub_responses(:describe_regions,
-                   regions: [{ region_name: "us-east-1" }, { region_name: "eu-west-1" }])
+                   regions: [{ region_name: REGION }, { region_name: "eu-west-1" }])
 found = stubbed(Aws::EKS::Client)
 found.stub_responses(:list_clusters, clusters: [])
 discovered = StubbedAssets.new(type: "aws_eks_cluster", stub_client: found)

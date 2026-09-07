@@ -54,6 +54,14 @@ SENTINELS = %w[_self _parent _response].freeze
 
 Shapes = Seahorse::Model::Shapes
 
+# A declared path that does not resolve against the SDK model.
+#
+# Inherits RuntimeError deliberately: a bare `raise "..."` already raised
+# RuntimeError, and five `rescue RuntimeError` sites below catch exactly these.
+# Naming the class satisfies rubydre:S7815 without moving those rescues, which
+# is the change most likely to silently stop catching something.
+class PathError < RuntimeError; end
+
 def load_yaml(path)
   YAML.safe_load(File.read(path), aliases: true) || {}
 end
@@ -74,11 +82,11 @@ def resolve(shape, path)
       return :map
     end
     unless cursor.is_a?(Shapes::StructureShape)
-      raise "`#{segment}` continues past a #{cursor.class.name.split('::').last}, " \
+      raise PathError, "`#{segment}` continues past a #{cursor.class.name.split('::').last}, " \
             "which has no members to address"
     end
     unless cursor.member?(segment.to_sym)
-      raise "`#{segment}` is not a member of #{cursor.name}. It has: " \
+      raise PathError, "`#{segment}` is not a member of #{cursor.name}. It has: " \
             "#{cursor.member_names.join(', ')}"
     end
     cursor = cursor.member(segment.to_sym).shape

@@ -52,6 +52,17 @@
 # suite does not depend on the image's locale.
 Encoding.default_external = Encoding::UTF_8
 Encoding.default_internal = Encoding::UTF_8
+require "tmpdir"
+
+PUBLIC_TRUST = 'public-trust'.freeze
+SERVICE_TRUST = 'service-trust'.freeze
+POLICY_VERSION = '2012-10-17'.freeze
+PUBLIC_REPO = 'public-repo'.freeze
+NO_POLICY = 'no-policy'.freeze
+BROKEN_TRUST = 'broken-trust'.freeze
+REGION = 'us-east-1'.freeze
+BROKEN_REGION = 'eu-broken'.freeze
+
 
 require "json"
 
@@ -108,27 +119,27 @@ class FakeIam
 
   def list_roles(_args = {})
     [Page.new(:roles, [
-      { role_name: "public-trust", arn: "arn:aws:iam::111122223333:role/public-trust",
+      { role_name: PUBLIC_TRUST, arn: "arn:aws:iam::111122223333:role/public-trust",
         assume_role_policy_document: encoded(
-          "Version" => "2012-10-17",
+          "Version" => POLICY_VERSION,
           "Statement" => [{ "Effect" => "Allow", "Principal" => { "AWS" => "*" },
                             "Action" => "sts:AssumeRole" }]
         ) },
-      { role_name: "service-trust", arn: "arn:aws:iam::111122223333:role/service-trust",
+      { role_name: SERVICE_TRUST, arn: "arn:aws:iam::111122223333:role/service-trust",
         assume_role_policy_document: encoded(
-          "Version" => "2012-10-17",
+          "Version" => POLICY_VERSION,
           "Statement" => { "Effect" => "Allow",
                            "Principal" => { "Service" => "ecs-tasks.amazonaws.com" },
                            "Action" => "sts:AssumeRole" }
         ) },
-      { role_name: "broken-trust", arn: "arn:aws:iam::111122223333:role/broken-trust",
+      { role_name: BROKEN_TRUST, arn: "arn:aws:iam::111122223333:role/broken-trust",
         assume_role_policy_document: "not a policy at all" },
       # Parses as JSON, but the predicates cannot judge the shape. The ParseError
       # comes out of policy_document_statements, which runs during EVALUATION and
       # not during the parse -- it used to escape the constructor and error the
       # whole control, taking every other role's verdict with it.
       { role_name: "statement-is-a-string", arn: "arn:aws:iam::111122223333:role/sis",
-        assume_role_policy_document: JSON.generate("Version" => "2012-10-17",
+        assume_role_policy_document: JSON.generate("Version" => POLICY_VERSION,
                                                    "Statement" => "nonsense") },
       # `to_h` OMITS a member the API did not return, so the document digs out as
       # nil, `#{nil}` is "" and "" is the spelling of "no policy" -- a PASS.
@@ -149,7 +160,7 @@ class FakeIam
   def get_policy_version(args)
     CALLS << [:get_policy_version, args]
     Response.new(policy_version: {
-      document: encoded("Version" => "2012-10-17",
+      document: encoded("Version" => POLICY_VERSION,
                         "Statement" => [{ "Effect" => "Allow", "Action" => "*",
                                           "Resource" => "*" }]),
       version_id: args[:version_id],
@@ -166,12 +177,12 @@ class FakeEcr
   def initialize(region: nil) = @region = region
 
   def describe_repositories(_args = {})
-    raise ::Aws::Errors::ServiceError, "region opted out" if @region == "eu-broken"
+    raise ::Aws::Errors::ServiceError, "region opted out" if @region == BROKEN_REGION
 
     [Page.new(:repositories, [
-      { repository_name: "public-repo",
+      { repository_name: PUBLIC_REPO,
         repository_arn: "arn:aws:ecr:#{@region}:111122223333:repository/public-repo" },
-      { repository_name: "no-policy",
+      { repository_name: NO_POLICY,
         repository_arn: "arn:aws:ecr:#{@region}:111122223333:repository/no-policy" },
       { repository_name: "denied",
         repository_arn: "arn:aws:ecr:#{@region}:111122223333:repository/denied" },
@@ -181,13 +192,13 @@ class FakeEcr
   def get_repository_policy(args)
     CALLS << [:get_repository_policy, args]
     case args[:repository_name]
-    when "public-repo"
+    when PUBLIC_REPO
       Response.new(policy_text: JSON.generate(
-        "Version" => "2012-10-17",
+        "Version" => POLICY_VERSION,
         "Statement" => [{ "Sid" => "Public", "Effect" => "Allow", "Principal" => "*",
                           "Action" => "ecr:BatchGetImage" }]
       ))
-    when "no-policy"
+    when NO_POLICY
       raise ::Aws::ECR::Errors::RepositoryPolicyNotFoundException, "no policy"
     else
       raise ::Aws::ECR::Errors::AccessDeniedException, "not authorized"
@@ -227,7 +238,7 @@ end
 
 # Stand-in for the vendored AwsResourceBase. Only the four things the reader
 # actually uses: @opts, @aws, validate_parameters and catch_aws_errors.
-STUB_REGIONS = ["us-east-1", "eu-broken"].freeze
+STUB_REGIONS = [REGION, BROKEN_REGION].freeze
 
 BACKEND = <<~'RUBY'
   class AwsResourceBase
@@ -281,7 +292,6 @@ BACKEND = <<~'RUBY'
   end
 RUBY
 
-require "tmpdir"
 dir = Dir.mktmpdir
 File.write(File.join(dir, "aws_backend.rb"), BACKEND)
 $LOAD_PATH.unshift(dir)
@@ -313,20 +323,20 @@ by_id = rows.to_h { |r| [r[:id], r] }
 assert "global scope enumerates once, not per region", rows.length == 2,
        "got #{rows.map { |r| r[:id] }.inspect}"
 assert "the wildcard trust role has one offender",
-       by_id["public-trust"] && by_id["public-trust"][:offenders].length == 1
+       by_id[PUBLIC_TRUST] && by_id[PUBLIC_TRUST][:offenders].length == 1
 assert "the offender names the statement",
-       by_id["public-trust"][:offenders].first.start_with?("Statement[0]: Effect Allow to Principal.AWS *")
+       by_id[PUBLIC_TRUST][:offenders].first.start_with?("Statement[0]: Effect Allow to Principal.AWS *")
 assert "the service-principal role is clean, not absent",
-       by_id["service-trust"] && by_id["service-trust"][:offenders] == []
-assert "a URL-encoded document was decoded", by_id["service-trust"][:policy_present] == true
+       by_id[SERVICE_TRUST] && by_id[SERVICE_TRUST][:offenders] == []
+assert "a URL-encoded document was decoded", by_id[SERVICE_TRUST][:policy_present] == true
 assert "an unparsable document is UNDECIDABLE, not clean",
-       roles.undecidable.any? { |u| u.include?("broken-trust") }
-assert "an undecidable asset is NOT in assets", by_id["broken-trust"].nil?
+       roles.undecidable.any? { |u| u.include?(BROKEN_TRUST) }
+assert "an undecidable asset is NOT in assets", by_id[BROKEN_TRUST].nil?
 assert "a shape the predicates cannot judge is UNDECIDABLE, not a control-wide error",
        roles.undecidable.any? { |u| u.include?("statement-is-a-string") },
        roles.undecidable.inspect
 assert "one unjudgeable asset does not cost the others their verdict",
-       by_id["public-trust"] && by_id["service-trust"]
+       by_id[PUBLIC_TRUST] && by_id[SERVICE_TRUST]
 assert "an ABSENT document member is UNDECIDABLE, never an empty offender list",
        roles.undecidable.any? { |u| u.include?("no-document-member") } &&
        by_id["no-document-member"].nil?, roles.undecidable.inspect
@@ -335,18 +345,18 @@ assert "the absent-member reason names the spec key to check",
             .to_s.include?("assume_role_policy_document")
 assert "exactly three roles are undecidable and two have verdicts",
        roles.undecidable.length == 3 && rows.length == 2, roles.undecidable.inspect
-assert "a global source reports region 'global'", by_id["public-trust"][:region] == "global"
-assert "the account id is carried", by_id["public-trust"][:account_id] == "111122223333"
+assert "a global source reports region 'global'", by_id[PUBLIC_TRUST][:region] == "global"
+assert "the account id is carried", by_id[PUBLIC_TRUST][:account_id] == "111122223333"
 assert "no region was reported unreadable", roles.unreadable_regions.empty?
 assert "exemptions match on id",
-       roles.assets(exempt: [{ "type" => "aws_iam_role", "ids" => ["public-trust"] }])
-            .map { |r| r[:id] } == ["service-trust"]
+       roles.assets(exempt: [{ "type" => "aws_iam_role", "ids" => [PUBLIC_TRUST] }])
+            .map { |r| r[:id] } == [SERVICE_TRUST]
 assert "exemptions match on arn",
        roles.assets(exempt: [{ "type" => "aws_iam_role",
                                "arns" => ["arn:aws:iam::111122223333:role/public-trust"] }])
-            .map { |r| r[:id] } == ["service-trust"]
+            .map { |r| r[:id] } == [SERVICE_TRUST]
 assert "an exemption scoped to another type does not match",
-       roles.assets(exempt: [{ "type" => "aws_s3_bucket", "ids" => ["public-trust"] }])
+       roles.assets(exempt: [{ "type" => "aws_s3_bucket", "ids" => [PUBLIC_TRUST] }])
             .length == 2
 
 # ------------------------------------------------------------ IAM policy fetch
@@ -374,22 +384,22 @@ ecr_by_id = ecr.assets.to_h { |r| [r[:id], r] }
 
 assert "a region whose LIST call failed is unreadable, not empty",
        ecr.unreadable_regions.length == 1 &&
-       ecr.unreadable_regions.first[:region] == "eu-broken"
+       ecr.unreadable_regions.first[:region] == BROKEN_REGION
 assert "the readable region still produced rows", ecr.assets.length == 2
 assert "a public repository policy is a finding",
-       ecr_by_id["public-repo"] && ecr_by_id["public-repo"][:offenders].length == 1
+       ecr_by_id[PUBLIC_REPO] && ecr_by_id[PUBLIC_REPO][:offenders].length == 1
 assert "absent_when means no policy, which PASSES",
-       ecr_by_id["no-policy"] && ecr_by_id["no-policy"][:offenders] == [] &&
-       ecr_by_id["no-policy"][:policy_present] == false
+       ecr_by_id[NO_POLICY] && ecr_by_id[NO_POLICY][:offenders] == [] &&
+       ecr_by_id[NO_POLICY][:policy_present] == false
 assert "a DENIED read is undecidable, never 'no policy'",
        ecr.undecidable.length == 1 && ecr.undecidable.first.include?("denied") &&
        ecr.undecidable.first.include?("AccessDeniedException")
 assert "the denied repository is not in assets", ecr_by_id["denied"].nil?
 assert "a regional source carries its region",
-       ecr_by_id["public-repo"][:region] == "us-east-1"
+       ecr_by_id[PUBLIC_REPO][:region] == REGION
 assert "fetch args resolve `from: id`",
        CALLS.select { |c| c.first == :get_repository_policy }
-            .map { |c| c[1] }.include?(repository_name: "public-repo")
+            .map { |c| c[1] }.include?(repository_name: PUBLIC_REPO)
 
 # --------------------------------------------------------------- refusals -----
 
@@ -423,7 +433,7 @@ assert "a failed region discovery is recorded, not silently narrowed to one regi
        narrowed.unreadable_regions.inspect
 assert "the narrowing record names the region that WAS scanned",
        narrowed.unreadable_regions.find { |r| r[:region] == "region discovery" }
-               .to_h[:error].to_s.include?("us-east-1")
+               .to_h[:error].to_s.include?(REGION)
 
 # --------------------------------- an absent member that really means none -----
 #
@@ -485,7 +495,7 @@ class FakeSqs
     open = args[:queue_url].to_s.end_with?("open-queue")
     Response.new(attributes: {
       "Policy" => JSON.generate(
-        "Version" => "2012-10-17",
+        "Version" => POLICY_VERSION,
         "Statement" => [{ "Sid" => "S", "Effect" => "Allow",
                           "Principal" => (open ? "*" : { "AWS" => "arn:aws:iam::111122223333:root" }),
                           "Action" => "sqs:SendMessage" }]
