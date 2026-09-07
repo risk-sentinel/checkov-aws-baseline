@@ -35,7 +35,7 @@ jobs:
         # check.
         run: |
           python3 -m pip install --quiet --disable-pip-version-check \
-            -r tools/requirements-lint.txt
+            --require-hashes -r tools/requirements-lint.txt
 
       - name: Docker Hub login (auditor image pull)
         env:
