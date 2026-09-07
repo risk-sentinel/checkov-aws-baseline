@@ -408,7 +408,17 @@ def write_merged(merged, dry_run):
         body = yaml_dump.dump(doc)
         out = "\n".join(header).rstrip("\n") + "\n" + body if header else body
         if not dry_run:
-            paths.inside_repo(path, f"{section} data file").write_text(out)
+            # NOSONAR pythonsecurity:S2083 -- owner-approved, and demonstrated
+            # rather than claimed. `path` is LIVE[section], one of five literal
+            # `HERE / "<name>.yml"` constants defined at module scope; no argv
+            # value reaches it. The only arguments this tool takes are `--only`,
+            # used solely as a membership test against `p.stem`, and `--dry-run`,
+            # a boolean. tools/paths.py containment was added FIRST and is kept
+            # -- it is what fixed the real instance of this rule, on
+            # lint_api_specs' caller-supplied --image-gems -- but the taint
+            # engine does not recognise a validating helper as a sanitiser,
+            # because the value it returns still derives from its input.
+            paths.inside_repo(path, f"{section} data file").write_text(out)  # NOSONAR
         written.append(f"  {path.name}: +{count}")
     return written
 
