@@ -38,7 +38,7 @@ import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-IMAGE = "risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8"
+IMAGE = "risksentinel/sparc-auditor@sha256:a388fd08ebf64750d233f267a514d8bbd0bb3372f319b35f6098560026ee7f90"
 SOURCE = ROOT / "controls" / "CKV_AWS_24.rb"
 
 # id -> (rows literal, expected control status). "failed" on a compliant-looking

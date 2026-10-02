@@ -32,10 +32,13 @@ supports:
 depends:
   - name: inspec-aws
     git: https://github.com/inspec/inspec-aws.git
-    # `main`, matching the rest of the fleet. The v1.21.0 tag ships 90 resources;
-    # main ships 481, and the difference decides how many of Checkov's 194 AWS
-    # resource types can be read with a stock resource instead of a custom one.
-    branch: main
+    # Pinned to the tag the rest of the fleet pins, so a run is reproducible and
+    # an upstream push cannot change what is assessed. The resource count
+    # matters here: the old v1.21.0 tag ships 90 resources where a current
+    # release ships several hundred, and that decides how many of Checkov's 194
+    # AWS resource types can be read with a stock resource instead of a custom
+    # one. tools/lint_resource_map.py fails if a mapped resource is missing.
+    tag: v1.83.63
 
 inputs:
   - name: aws_partition
