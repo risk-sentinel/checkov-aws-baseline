@@ -276,7 +276,7 @@ control '{cid}' do
   # checkov_stock_value in libraries/_checkov_enumeration.rb.
   unreadable = []
   readings = in_scope.filter_map do |id, region|
-    value, fault = checkov_stock_value({singular}({arg_expr}), '{prop}')
+    value, fault = checkov_stock_value({singular}({arg_expr}), '{prop}'{joined})
     where = region ? "#{{id}} in #{{region}}" : id
     if fault
       unreadable << "#{{where}}: #{{fault}}"
@@ -996,7 +996,15 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
                   else (f"{assertion['arg']}: id, aws_region: region"
                         if spec.get("scope") != "global"
                         else f"{assertion['arg']}: id")),
-        prop=assertion["property"], matcher=matcher)
+        prop=assertion["property"], matcher=matcher,
+        # The singular is the enumerated asset's own resource unless its name is
+        # not the plural's singular; then it is something looked up BY the asset,
+        # and not finding it is the answer rather than a failed read.
+        joined=("" if enum["resource"] in _plurals(assertion["resource"]) else ", joined: true"))
+
+
+def _plurals(singular):
+    return {singular + "s", singular + "es"} | ({singular[:-1] + "ies"} if singular.endswith("y") else set())
 
 
 def ruby_single_quoted(text):
@@ -1437,8 +1445,11 @@ def collection_matcher_for(cid, satisfies, conditions):
     """
     prose = [condition_parts(cid, c)[1] for c in conditions]
     label = ROLLUP_PROSE[satisfies] + " " + " and ".join(prose)
-    return (f"should satisfy({ruby_string(label)}) "
-            f"{{ |v| ::CheckovCollection.{satisfies}?(v, element_conditions) }}")
+    # `satisfy_rollup`, not `satisfy` (#19): a bare `satisfy` fails with the whole
+    # collection inspected and truncated. The matcher is defined beside the
+    # walker in libraries/_checkov_collection.rb and reports the offending
+    # elements by name, with only the paths the conditions read.
+    return f"should satisfy_rollup(:{satisfies}, element_conditions, {ruby_string(label)})"
 
 
 def collection_guard_for(satisfies, tf_type, field):

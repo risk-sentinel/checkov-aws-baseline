@@ -177,7 +177,7 @@ control 'CKV_AWS_99' do
   in_scope.each do |asset|
     describe "aws_glue_security_configuration #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:encryption_configuration] }
-      it { should satisfy("have an element where cloud_watch_encryption.cloud_watch_encryption_mode == SSE-KMS and job_bookmarks_encryption.job_bookmarks_encryption_mode == CSE-KMS and s3_encryption.s3_encryption_mode != DISABLED") { |v| ::CheckovCollection.any_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:any_of, element_conditions, "have an element where cloud_watch_encryption.cloud_watch_encryption_mode == SSE-KMS and job_bookmarks_encryption.job_bookmarks_encryption_mode == CSE-KMS and s3_encryption.s3_encryption_mode != DISABLED") }
     end
   end
 end

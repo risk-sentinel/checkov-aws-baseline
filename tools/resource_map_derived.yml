@@ -1902,10 +1902,13 @@ checks:
         FAILS. The enumeration deliberately does NOT use ecs:ListTaskDefinitions. That call returns every
         REVISION ever registered, which tools/proposals/parentchild.yml records as the one population
         in this catalogue that costs more than the rest of the profile combined. ecs:ListTaskDefinitionFamilies
-        takes no required argument, defaults to ACTIVE families, and is bounded by the FAMILY count; ecs:DescribeTaskDefinition(taskDefinition:
-        <family>) then resolves the latest ACTIVE revision, which is the definition a new task would actually
-        run. That is a divergence from Checkov, which sees every revision in the HCL, and it is the right
-        one: a deregistered revision is not a deployed asset.'
+        takes no required argument and is bounded by the FAMILY count. It does NOT default to ACTIVE families,
+        as this note used to say: it returns INACTIVE ones too, a family with no active revision cannot
+        be described, and a live run failed the control on exactly that (#19). The spec therefore passes
+        status: ACTIVE on the parent call; ecs:DescribeTaskDefinition(taskDefinition: <family>) then resolves
+        the latest ACTIVE revision, which is the definition a new task would actually run. That is a divergence
+        from Checkov, which sees every revision in the HCL, and it is the right one: a deregistered revision
+        is not a deployed asset.'
       reader: api
       satisfies: all_of
   CKV_AWS_338:

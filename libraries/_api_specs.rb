@@ -266,6 +266,9 @@ API_SPECS = {
     'id' => 'task_definition_arn',
     'list' => 'describe_task_definition',
     'parent' => {
+      'args' => {
+        'status' => 'ACTIVE'
+      },
       'collection' => 'families',
       'id' => '_self',
       'list' => 'list_task_definition_families'

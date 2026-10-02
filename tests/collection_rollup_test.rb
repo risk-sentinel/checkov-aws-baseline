@@ -117,6 +117,40 @@ t('string keys work too',
   CheckovCollection.dig_all({ 'r' => [{ 'c' => 'x' }] }, 'r.c'), %w[x])
 t('missing member reaches nothing', CheckovCollection.dig_all({ a: 1 }, 'b.c'), [])
 
+# --- explain: a failure names the offending ELEMENTS, not the collection (#19) --
+# The message used to be the whole collection inspected and truncated by RSpec:
+# for a task definition, a slice of one container's command and the tail of
+# another's secret references, with neither the failing container nor the tested
+# field in it.
+READ_ONLY = [{ paths: ['readonly_root_filesystem'], test: ->(v) { v == true }, when_absent: false }].freeze
+CONTAINERS = [
+  { name: 'web', readonly_root_filesystem: true, command: %w[sh -c run],
+    secrets: [{ name: 'TOKEN', value_from: 'arn:aws:secretsmanager:region:acct:secret:x' }] },
+  { name: 'sidecar', command: %w[tail -f] },
+  { name: 'job', readonly_root_filesystem: false },
+].freeze
+why = CheckovCollection.explain(:all_of, CONTAINERS, READ_ONLY,
+                                'have only elements where readonly_root_filesystem == True')
+t('all_of: counts the elements and the offenders',
+  why.include?('expected 3 element(s)') && why.include?('2 do not'), true)
+t('all_of: names an offender whose member is absent',
+  why.include?("'sidecar' (readonly_root_filesystem: (absent))"), true)
+t('all_of: names an offender with the value it has',
+  why.include?("'job' (readonly_root_filesystem: false)"), true)
+t('all_of: does not name the compliant element', why.include?("'web'"), false)
+t('all_of: shows nothing the conditions do not read',
+  why.include?('secretsmanager') || why.include?('tail') || why.include?('command'), false)
+t('none_of: names the elements that DO match',
+  CheckovCollection.explain(:none_of, CONTAINERS, READ_ONLY, 'x').include?("1 do: 'web'"), true)
+t('any_of: says none does, and lists what was looked at',
+  CheckovCollection.explain(:any_of, [{ name: 'job', readonly_root_filesystem: false }], READ_ONLY, 'x')
+                   .include?("at least one of 1 element(s) to x; none does: 'job'"), true)
+t('an element with no name is identified by position',
+  CheckovCollection.explain(:all_of, [{ a: 1 }], READ_ONLY, 'x').include?('element 0 ('), true)
+t('more offenders than are shown are counted, not dropped',
+  CheckovCollection.explain(:all_of, Array.new(7) { |i| { name: "c#{i}" } }, READ_ONLY, 'x')
+                   .end_with?('and 2 more'), true)
+
 if $bad
   warn 'FAILED — the roll-up does not mean what the generator says it means.'
   exit 1

@@ -188,7 +188,7 @@ control 'CKV_AWS_229' do
   in_scope.each do |asset|
     describe "aws_network_acl #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:entries] }
-      it { should satisfy("have no element where egress == False and rule_action == allow and protocol is one of [6, -1] and (cidr_block or ipv_6_cidr_block) is one of [0.0.0.0/0, ::/0] and port_range.from <= 21 (or absent) and port_range.to >= 21 (or absent)") { |v| ::CheckovCollection.none_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:none_of, element_conditions, "have no element where egress == False and rule_action == allow and protocol is one of [6, -1] and (cidr_block or ipv_6_cidr_block) is one of [0.0.0.0/0, ::/0] and port_range.from <= 21 (or absent) and port_range.to >= 21 (or absent)") }
     end
   end
 end

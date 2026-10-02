@@ -139,7 +139,7 @@ control 'CKV2_AWS_11' do
   # checkov_stock_value in libraries/_checkov_enumeration.rb.
   unreadable = []
   readings = in_scope.filter_map do |id, region|
-    value, fault = checkov_stock_value(aws_flow_log(vpc_id: id, aws_region: region), 'exists?')
+    value, fault = checkov_stock_value(aws_flow_log(vpc_id: id, aws_region: region), 'exists?', joined: true)
     where = region ? "#{id} in #{region}" : id
     if fault
       unreadable << "#{where}: #{fault}"

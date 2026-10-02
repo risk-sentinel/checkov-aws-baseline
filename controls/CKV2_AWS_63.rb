@@ -154,7 +154,7 @@ control 'CKV2_AWS_63' do
   # checkov_stock_value in libraries/_checkov_enumeration.rb.
   unreadable = []
   readings = in_scope.filter_map do |id, region|
-    value, fault = checkov_stock_value(aws_network_firewall_logging_configuration(firewall_name: id, aws_region: region), 'logging_configuration.log_destination_configs')
+    value, fault = checkov_stock_value(aws_network_firewall_logging_configuration(firewall_name: id, aws_region: region), 'logging_configuration.log_destination_configs', joined: true)
     where = region ? "#{id} in #{region}" : id
     if fault
       unreadable << "#{where}: #{fault}"

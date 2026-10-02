@@ -145,10 +145,26 @@ specs.each do |type, spec|
       errors << "#{type}: parent list #{parent['list']} is not an operation on #{spec['client']}"
     else
       pop = client.api.operation(pop_name)
-      preq = pop.input.shape.required.to_a.map(&:to_s)
+      pargs = parent["args"] || {}
+      preq = pop.input.shape.required.to_a.map(&:to_s) - pargs.keys.map(&:to_s)
       unless preq.empty?
         errors << "#{type}: parent list #{parent['list']} REQUIRES #{preq.join(', ')}; " \
-                  "the parent leg is called with no arguments, so nothing would enumerate"
+                  "the parent leg does not pass #{preq.size == 1 ? 'it' : 'them'}, so nothing would enumerate"
+      end
+      # `parent.args` are literal parameters on the parent call (#19). A name the
+      # operation does not take is rejected by the SDK's own parameter
+      # validation, in every region, at exec.
+      #
+      # The VALUE is not checked here, and cannot be: the SDK's compiled model
+      # names the enum (TaskDefinitionFamilyStatus) but does not carry its
+      # members, so `status: LIVE` resolves as cleanly as `status: ACTIVE`.
+      # A value is confirmed by a live run against the service, and the mapping
+      # that depends on it should say that it was.
+      pargs.each_key do |arg_name|
+        next if pop.input.shape.member?(arg_name.to_sym)
+
+        errors << "#{type}: parent.args.#{arg_name} is not a parameter of #{parent['list']} " \
+                  "(it takes: #{pop.input.shape.member_names.map(&:to_s).sort.join(', ')})"
       end
       begin
         pcoll = resolve(pop.output.shape, parent["collection"])

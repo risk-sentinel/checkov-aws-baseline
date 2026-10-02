@@ -25,8 +25,12 @@ So the vendored pack is the authority, checked statically:
 
 What it cannot check is the PROPERTY on the singular resource: those come from
 `create_resource_methods` over the API response at runtime, so they exist only
-when a real response does. Those are named in the report as unverifiable, so the
-distinction between "checked" and "unchecked" stays visible.
+when a real response does. Those are named in the report as unverifiable HERE,
+so the distinction between "checked" and "unchecked" stays visible.
+
+They are checked by tools/lint_stock_properties.rb, which runs in the auditor
+image, builds each resource on the SDK's stub transport and asks it. This file
+stays static on purpose: it needs no image, so it is the check that runs first.
 """
 import pathlib
 import re

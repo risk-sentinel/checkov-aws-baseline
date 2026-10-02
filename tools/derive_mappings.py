@@ -25,8 +25,11 @@ mapping is a starting point, not an answer.
 
 `tools/lint_resource_map.py` verifies the resource and column exist. It cannot
 verify the property: those come from `create_resource_methods` over a live API
-response. A wrong one raises at exec, visibly, against an account that has the
-resource — which is what the honeypot and early-access runs are for.
+response. A wrong one does NOT raise at exec, as this used to say: a stock
+resource answers an unknown property with a NullResponse, and the control fails
+every asset as if each were non-compliant (#16). tools/lint_stock_properties.rb
+resolves every derived property on the resource under the SDK's stub transport,
+and is the gate for anything this script writes.
 
 **Anchors.** Checkov ships no NIST mapping, no CCI and no severity. Derived
 anchors come from the check's own category — ENCRYPTION to SC-28, LOGGING to

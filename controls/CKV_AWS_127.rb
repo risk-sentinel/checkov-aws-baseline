@@ -167,7 +167,7 @@ control 'CKV_AWS_127' do
   in_scope.each do |asset|
     describe "aws_elb #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:listener_descriptions] }
-      it { should satisfy("have only elements where listener.ssl_certificate_id is set") { |v| ::CheckovCollection.all_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:all_of, element_conditions, "have only elements where listener.ssl_certificate_id is set") }
     end
   end
 end

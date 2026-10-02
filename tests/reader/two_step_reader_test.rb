@@ -244,6 +244,38 @@ check("a one-step spec reports no parents") { eq(topics.parents_seen, 0) }
 check("a one-step row carries no parent_id") { eq(topics.assets.first.key?(:parent_id), false) }
 
 # --------------------------------------------------------------------------
+puts "aws_ecs_task_definition — `parent.args` reach the parent call, and only that call (#19)"
+
+# ListTaskDefinitionFamilies returns INACTIVE families unless it is asked not
+# to, and a family with no active revision cannot be described: each one was a
+# lost subtree that failed the control. The spec asks for status: ACTIVE. What
+# is proven here is that the literal reaches the SDK — `api_requests` is the
+# stubbed client's own record of what it was called with.
+require "aws-sdk-ecs"
+
+ecs = stubbed(Aws::ECS::Client)
+ecs.stub_responses(:list_task_definition_families, families: %w[web])
+ecs.stub_responses(:describe_task_definition,
+                   task_definition: {
+                     task_definition_arn: "arn:aws:ecs:us-east-1:111111111111:task-definition/web:3",
+                     container_definitions: [{ name: "app", readonly_root_filesystem: true }],
+                   })
+task_defs = StubbedAssets.new(type: "aws_ecs_task_definition", regions: [REGION], stub_client: ecs)
+task_rows = task_defs.assets
+calls = ecs.api_requests.to_h { |r| [r[:operation_name], r[:params]] }
+
+check("the parent call carries the spec's literal args") do
+  eq(calls[:list_task_definition_families], { status: "ACTIVE" })
+end
+check("the child call carries the parent id and nothing else") do
+  eq(calls[:describe_task_definition], { task_definition: "web" })
+end
+check("the family's row is read") { eq(task_rows.map { |r| r[:parent_id] }, ["web"]) }
+check("a spec with no parent.args still calls its parent with no parameters") do
+  eq(api.api_requests.find { |r| r[:operation_name] == :get_rest_apis }[:params], {})
+end
+
+# --------------------------------------------------------------------------
 puts "a spec that names the wrong kind of member is a PROFILE ERROR, not zero rows"
 
 broken = API_SPECS.dup
