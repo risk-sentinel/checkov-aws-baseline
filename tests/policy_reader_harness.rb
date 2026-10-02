@@ -4,7 +4,7 @@
 # Why this exists, measured rather than assumed
 # ---------------------------------------------
 # `cinc-auditor check` and `json` cover NOTHING in libraries/. Verified against
-# risksentinel/sparc-auditor@sha256:b47711fe1e6177e937f17e24d2bd26cc0fea57852ec7546dac2b5146ed328ff8 by appending, in turn, a runtime NameError
+# risksentinel/sparc-auditor@sha256:a388fd08ebf64750d233f267a514d8bbd0bb3372f319b35f6098560026ee7f90 by appending, in turn, a runtime NameError
 # and then a syntax error to libraries/_policy_document.rb: both commands exited
 # 0 and printed "Valid: true — No errors, warnings, or offenses". (A syntax error
 # in a CONTROL file is barely better: `check` still says Valid: true and simply
