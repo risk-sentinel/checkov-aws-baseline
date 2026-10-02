@@ -789,18 +789,6 @@ checks:
         ids: subnet_ids
         resource: aws_subnets
       reader: stock
-  CKV_AWS_131:
-    aws_alb:
-      assert:
-        arg: load_balancer_arn
-        property: drop_invalid_header_fields
-        resource: aws_alb
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: canonical_hosted_zone_ids
-        resource: aws_albs
-      reader: stock
   CKV_AWS_133:
     aws_db_instance:
       assert:
@@ -849,13 +837,15 @@ checks:
     aws_elb:
       assert:
         arg: load_balancer_name
-        property: cross_zone_load_balancing
+        property: cross_zone_load_balancing_enabled?
         resource: aws_elb
         satisfies: equals
         value: true
       enumerate:
         ids: dns_names
         resource: aws_elbs
+      note: Was `cross_zone_load_balancing`, the Terraform argument, which the stock resource does not
+        expose. Property confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_140:
     aws_rds_global_cluster:
@@ -910,30 +900,6 @@ checks:
         \ the two association sets and passes the rest of DescribeVpcs through create_resource_methods,\
         \ so :is_default is a real method."
       reader: stock
-  CKV_AWS_150:
-    aws_alb:
-      assert:
-        arg: load_balancer_arn
-        property: enable_deletion_protection
-        resource: aws_alb
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: canonical_hosted_zone_ids
-        resource: aws_albs
-      reader: stock
-  CKV_AWS_152:
-    aws_alb:
-      assert:
-        arg: load_balancer_arn
-        property: enable_cross_zone_load_balancing
-        resource: aws_alb
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: canonical_hosted_zone_ids
-        resource: aws_albs
-      reader: stock
   CKV_AWS_153:
     aws_autoscaling_group:
       assert:
@@ -985,16 +951,15 @@ checks:
         actually allow.'
   CKV_AWS_174:
     aws_cloudfront_distribution:
-      assert:
-        arg: distribution_id
-        property: viewer_certificate
-        resource: aws_cloudfront_distribution
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: distribution_ids
-        resource: aws_cloudfront_distributions
-      reader: stock
+      field: viewer_certificate_minimum_protocol_version
+      note: 'Was a stock mapping on `viewer_certificate`, which aws_cloudfront_distribution does not expose
+        (it derives no methods from the API response). Read from ListDistributions instead; the path is
+        checked against the SDK model by tools/lint_api_paths.rb. The rule is ''TLS v1.2 or higher'':
+        every 1.2 and 1.3 security policy name begins TLSv1.2 or TLSv1.3, and the default certificate''s
+        `TLSv1` does not match.'
+      reader: api
+      satisfies: matches
+      value: \ATLSv1\.[23]
   CKV_AWS_175:
     aws_waf_web_acl:
       assert:
@@ -1026,17 +991,6 @@ checks:
         \ here does."
       reader: stock
       scope: global
-  CKV_AWS_176:
-    aws_waf_web_acl:
-      assert:
-        arg: web_acl_id
-        property: logging_configuration
-        resource: aws_waf_web_acl
-        satisfies: not_empty
-      enumerate:
-        ids: names
-        resource: aws_waf_web_acls
-      reader: stock
   CKV_AWS_184:
     aws_efs_file_system:
       assert:
@@ -1059,12 +1013,14 @@ checks:
     aws_glue_crawler:
       assert:
         arg: name
-        property: security_configuration
+        property: crawler_security_configuration
         resource: aws_glue_crawler
         satisfies: not_empty
       enumerate:
         ids: names
         resource: aws_glue_crawlers
+      note: Was `security_configuration`, the Terraform argument, which the stock resource does not expose.
+        Property confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_197:
     aws_mq_broker:
@@ -1146,27 +1102,26 @@ checks:
       reader: stock
   CKV_AWS_216:
     aws_cloudfront_distribution:
-      assert:
-        arg: distribution_id
-        property: enabled
-        resource: aws_cloudfront_distribution
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: distribution_ids
-        resource: aws_cloudfront_distributions
-      reader: stock
+      field: enabled
+      note: Was a stock mapping on `enabled`, which aws_cloudfront_distribution does not expose (it derives
+        no methods from the API response). Read from ListDistributions instead; the path is checked against
+        the SDK model by tools/lint_api_paths.rb.
+      reader: api
+      satisfies: equals
+      value: true
   CKV_AWS_227:
     aws_kms_key:
       assert:
         arg: key_id
-        property: is_enabled
+        property: enabled
         resource: aws_kms_key
         satisfies: equals
         value: true
       enumerate:
         ids: key_ids
         resource: aws_kms_keys
+      note: Was `is_enabled`, the Terraform argument, which the stock resource does not expose. Property
+        confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_228:
     aws_elasticsearch_domain: &id002
@@ -1439,11 +1394,12 @@ checks:
         satisfies: equals
         value: true
       enumerate:
-        ids: names
+        ids: trail_arns
         resource: aws_cloudtrail_trails
       note: '`logging?` calls GetTrailStatus, which DescribeTrails does not return. Stronger than the
         IaC check: enable_logging in HCL is the requested state, is_logging is whether the trail is delivering
-        right now.'
+        right now. Enumerated by `trail_arns`: a multi-region trail is listed in every region, but outside
+        its home region it can only be described by ARN, and by name the singular finds nothing.'
       reader: stock
   CKV_AWS_252:
     aws_cloudtrail:
@@ -1634,18 +1590,6 @@ checks:
         the same basis as the repo's existing CKV_AWS_191 ElastiCache mapping.
       reader: api
       satisfies: not_empty
-  CKV_AWS_28:
-    aws_dynamodb_table:
-      assert:
-        arg: table_name
-        property: point_in_time_recovery
-        resource: aws_dynamodb_table
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: table_names
-        resource: aws_dynamodb_tables
-      reader: stock
   CKV_AWS_284:
     aws_sfn_state_machine:
       assert:
@@ -1799,17 +1743,6 @@ checks:
       reader: api
       satisfies: at_most
       value: 90
-  CKV_AWS_305:
-    aws_cloudfront_distribution:
-      assert:
-        arg: distribution_id
-        property: default_root_object
-        resource: aws_cloudfront_distribution
-        satisfies: not_empty
-      enumerate:
-        ids: distribution_ids
-        resource: aws_cloudfront_distributions
-      reader: stock
   CKV_AWS_315:
     aws_autoscaling_group:
       assert:
@@ -1975,17 +1908,6 @@ checks:
         one: a deregistered revision is not a deployed asset.'
       reader: api
       satisfies: all_of
-  CKV_AWS_337:
-    aws_ssm_parameter:
-      assert:
-        arg: name
-        property: key_id
-        resource: aws_ssm_parameter
-        satisfies: not_empty
-      enumerate:
-        ids: names
-        resource: aws_ssm_parameters
-      reader: stock
   CKV_AWS_338:
     aws_cloudwatch_log_group:
       field: retention_in_days
@@ -2042,19 +1964,6 @@ checks:
       note: An exact translation. The vendored predicate collects the default cache behaviour's viewer_protocol_policy
         plus every additional cache behaviour's, then tests for "allow-all" -- the same set and the same
         value Checkov fails on across default_cache_behavior and ordered_cache_behavior.
-      reader: stock
-  CKV_AWS_341:
-    aws_launch_configuration:
-      assert:
-        arg: launch_configuration_name
-        property: metadata_options
-        resource: aws_launch_configuration
-        satisfies: in_list
-        value:
-        - '1'
-      enumerate:
-        ids: names
-        resource: aws_launch_configurations
       reader: stock
   CKV_AWS_344:
     aws_networkfirewall_firewall:
@@ -2127,11 +2036,13 @@ checks:
         satisfies: equals
         value: true
       enumerate:
-        ids: names
+        ids: trail_arns
         resource: aws_cloudtrail_trails
       note: '`encrypted?` is `!@kms_key_id.nil?` on the resource. Asserting kms_key_id with not_empty
         would raise NoMethodError on nil, because this resource sets it through an attr_reader rather
-        than through create_resource_methods (whose NullResponse answers empty?).'
+        than through create_resource_methods (whose NullResponse answers empty?). Enumerated by `trail_arns`:
+        a multi-region trail is listed in every region, but outside its home region it can only be described
+        by ARN, and by name the singular finds nothing.'
       reader: stock
   CKV_AWS_351:
     aws_emr_security_configuration:
@@ -2156,8 +2067,10 @@ checks:
         satisfies: equals
         value: true
       enumerate:
-        ids: names
+        ids: trail_arns
         resource: aws_cloudtrail_trails
+      note: 'Enumerated by `trail_arns`: a multi-region trail is listed in every region, but outside its
+        home region it can only be described by ARN, and by name the singular finds nothing.'
       reader: stock
   CKV_AWS_363:
     aws_lambda_function:
@@ -2540,20 +2453,19 @@ checks:
         satisfies: equals
         value: true
       enumerate:
-        ids: names
+        ids: trail_arns
         resource: aws_cloudtrail_trails
+      note: 'Enumerated by `trail_arns`: a multi-region trail is listed in every region, but outside its
+        home region it can only be described by ARN, and by name the singular finds nothing.'
       reader: stock
   CKV_AWS_68:
     aws_cloudfront_distribution:
-      assert:
-        arg: distribution_id
-        property: web_acl_id
-        resource: aws_cloudfront_distribution
-        satisfies: not_empty
-      enumerate:
-        ids: distribution_ids
-        resource: aws_cloudfront_distributions
-      reader: stock
+      field: web_acl_id
+      note: Was a stock mapping on `web_acl_id`, which aws_cloudfront_distribution does not expose (it
+        derives no methods from the API response). Read from ListDistributions instead; the path is checked
+        against the SDK model by tools/lint_api_paths.rb.
+      reader: api
+      satisfies: not_empty
   CKV_AWS_69:
     aws_mq_broker:
       assert:
@@ -2570,25 +2482,15 @@ checks:
     aws_kms_key:
       assert:
         arg: key_id
-        property: enable_key_rotation
+        property: has_rotation_enabled?
         resource: aws_kms_key
         satisfies: equals
         value: true
       enumerate:
         ids: key_ids
         resource: aws_kms_keys
-      reader: stock
-  CKV_AWS_71:
-    aws_redshift_cluster:
-      assert:
-        arg: cluster_identifier
-        property: logging
-        resource: aws_redshift_cluster
-        satisfies: equals
-        value: true
-      enumerate:
-        ids: cluster_identifiers
-        resource: aws_redshift_clusters
+      note: Was `enable_key_rotation`, the Terraform argument, which the stock resource does not expose.
+        Property confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_73:
     aws_api_gateway_stage:
@@ -2627,13 +2529,15 @@ checks:
     aws_athena_workgroup:
       assert:
         arg: work_group
-        property: configuration.enforce_workgroup_configuration
+        property: configuration.enforce_work_group_configuration
         resource: aws_athena_work_group
         satisfies: equals
         value: true
       enumerate:
         ids: names
         resource: aws_athena_work_groups
+      note: Was `configuration.enforce_workgroup_configuration`, the Terraform argument, which the stock
+        resource does not expose. Property confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_83:
     aws_elasticsearch_domain: &id006
@@ -2653,24 +2557,32 @@ checks:
     aws_cloudfront_distribution:
       assert:
         arg: distribution_id
-        property: logging_config
+        property: has_access_logging_enabled?
         resource: aws_cloudfront_distribution
-        satisfies: not_empty
+        satisfies: equals
+        value: true
       enumerate:
         ids: distribution_ids
         resource: aws_cloudfront_distributions
+      note: Was `logging_config` / not_empty. aws_cloudfront_distribution derives no methods from the
+        API response; access logging is its `has_access_logging_enabled?` predicate. Property confirmed
+        on the resource under the SDK stub transport (tools/lint_stock_properties.rb).
       reader: stock
   CKV_AWS_91:
     aws_alb:
       assert:
         arg: load_balancer_arn
-        property: access_logs
+        property: access_log_enabled
         resource: aws_alb
         satisfies: equals
         value: true
       enumerate:
-        ids: canonical_hosted_zone_ids
+        ids: load_balancer_arns
         resource: aws_albs
+      note: 'Was `access_logs`, the Terraform argument, which the stock resource does not expose. Property
+        confirmed on the resource under the SDK stub transport (tools/lint_stock_properties.rb). Enumerated
+        by `load_balancer_arns`: the singular takes a load balancer ARN, and the canonical hosted zone
+        id it was given before is shared by every load balancer in a region.'
       reader: stock
   CKV_AWS_92:
     aws_elb:

@@ -165,6 +165,18 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" \
             tools/lint_api_paths.rb
 
+      - name: Stock properties and columns exist on the resource pack
+        # The stock half of the check above. A stock resource answers an unknown
+        # property with NullResponse instead of raising, so a mapping that names
+        # one renders a control that FAILS every asset and reads as a finding. A
+        # live run reported every KMS key in an account as disabled this way; all
+        # were enabled. lint_resource_map.py cannot see it — properties come from
+        # the API response — so each resource is built on the SDK's stub
+        # transport and asked. Nineteen mappings were wrong the first time it ran.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby "${AUDITOR_IMAGE}" \
+            tools/lint_stock_properties.rb
+
       - name: Reader and predicate test suites
         # `check` and `json` load control files without evaluating a body, so
         # nothing above this line can see a reader that returns the wrong rows.
@@ -176,6 +188,7 @@ jobs:
           set -uo pipefail
           fail=0
           for t in tests/collection_rollup_test.rb \
+                   tests/enumeration_stub_test.rb \
                    tests/policy_document_test.rb \
                    tests/policy_reader_harness.rb \
                    tests/policy_reader_sdk_harness.rb \

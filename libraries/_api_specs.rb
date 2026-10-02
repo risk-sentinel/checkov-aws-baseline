@@ -86,7 +86,10 @@ API_SPECS = {
     'client' => 'Aws::CloudFront::Client',
     'collection' => 'distribution_list.items',
     'fields' => {
-      'response_headers_policy_id' => 'default_cache_behavior.response_headers_policy_id'
+      'enabled' => 'enabled',
+      'response_headers_policy_id' => 'default_cache_behavior.response_headers_policy_id',
+      'viewer_certificate_minimum_protocol_version' => 'viewer_certificate.minimum_protocol_version',
+      'web_acl_id' => 'web_acl_id'
     },
     'gem' => 'aws-sdk-cloudfront',
     'id' => 'id',

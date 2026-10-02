@@ -133,6 +133,61 @@ module CheckovEnumeration
     end
   end
 
+  # What a stock SINGULAR resource holds at a dotted property path, read at
+  # control scope:
+  #
+  #   value, fault = checkov_stock_value(aws_kms_key(key_id: id, aws_region: region), 'enabled')
+  #
+  # `fault` is why the asset could not be read, and the control asserts there are
+  # none. It is kept apart from the value for the same reason `problems` is kept
+  # apart from `ids` above: an asset that could not be read must not be reported
+  # as an asset that failed the rule.
+  #
+  # That is not hypothetical (#16, #17). `describe singular(...) { its(prop) }`
+  # compared whatever came back, and a stock resource that finds nothing answers
+  # every property with a NullResponse instead of raising. Four ALB controls
+  # enumerated by a column that is not an ARN, the lookup failed, and each
+  # reported `expected: true, got: NullResponse` — a failure indistinguishable
+  # from a load balancer with the setting off. A CloudTrail trail read by NAME
+  # from a region that is not its home is the same shape: found by the plural,
+  # not by the singular, and reported as non-compliant on all three settings.
+  #
+  # A NullResponse that survives both checks means the member is ABSENT on this
+  # asset — an optional setting that was never configured. That is a real answer,
+  # so it is returned as nil and the matcher decides what nil means for the rule;
+  # the evidence then reads `got: nil` rather than an object address.
+  def checkov_stock_value(resource, path)
+    fault = checkov_read_failure(resource)
+    return [nil, fault] if fault
+
+    found = begin
+      !resource.respond_to?(:exists?) || resource.exists?
+    rescue StandardError
+      true # a resource that cannot say is not one this may call absent
+    end
+    unless found
+      return [nil, 'the singular resource found nothing under this identifier — the `ids:` '\
+                   'column in resource_map.yml names a value it cannot look up, or the '\
+                   'asset cannot be read from this region']
+    end
+
+    value = path.to_s.split('.').inject(resource) do |obj, segment|
+      break nil if obj.nil?
+
+      step = if obj.is_a?(Hash)
+               obj.key?(segment.to_sym) ? obj[segment.to_sym] : obj[segment]
+             else
+               obj.public_send(segment)
+             end
+      step.class.name == 'NullResponse' ? nil : step
+    end
+
+    # A property that makes its own AWS call (aws_cloudtrail_trail#logging?) can
+    # fail the resource only now, after the checks above passed.
+    fault = checkov_read_failure(resource)
+    fault ? [nil, fault] : [value, nil]
+  end
+
   private
 
   # Why the resource could not be read, or nil if it was read.
@@ -207,18 +262,26 @@ module CheckovEnumeration
   # `respond_to?` is honest here even though `method_missing` is not:
   # AwsResourceBase overrides method_missing but leaves respond_to_missing? as
   # super, so an unregistered column answers false rather than being masked.
+  #
+  # The row count comes from `count`, not `entries` (#18). On an EMPTY table
+  # FilterTable#entries raises NoMethodError (inspec-core 7.0.107, filter.rb:163),
+  # so asking an empty resource for its rows looked exactly like a resource that
+  # could not say, and every dynamic column on an account with none of that
+  # resource was reported :missing: four EKS controls failed on an account with no
+  # clusters. `count` is registered on every FilterTable and answers 0 there.
   def checkov_column_state(collection, column)
     return :present if collection.respond_to?(column.to_sym)
 
     rows = begin
-      collection.entries
+      collection.count
     rescue StandardError
       nil
     end
-    # Deliberately `is_a?(Array)`: FilterTable#entries returns one. A NullResponse
-    # answers true to `empty?` as well, and treating that as "nothing here" would
-    # reinstate exactly the silence this method exists to remove.
-    return :empty if rows.is_a?(Array) && rows.empty?
+    # Deliberately `is_a?(Integer)`: FilterTable#count returns one. A NullResponse
+    # answers true to `zero?`-style questions through method_missing, and treating
+    # that as "nothing here" would reinstate exactly the silence this method
+    # exists to remove.
+    return :empty if rows.is_a?(Integer) && rows.zero?
 
     :missing
   end

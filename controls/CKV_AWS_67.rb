@@ -75,7 +75,7 @@ control 'CKV_AWS_67' do
   problems = []
   found = checkov_scan_regions(scan_regions).flat_map do |region|
     ids, found_problems = checkov_enumerate(
-      aws_cloudtrail_trails(aws_region: region), :names
+      aws_cloudtrail_trails(aws_region: region), :trail_arns
     )
     problems.concat(found_problems.map { |p| "#{region}: #{p}" })
     ids.map { |id| [id, region] }
@@ -123,9 +123,41 @@ control 'CKV_AWS_67' do
   impact 0.0 unless applicable
   only_if('no aws_cloudtrail in scope') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_cloudtrail_trail(trail_name: id, aws_region: region) do
-      its('is_multi_region_trail') { should eq true }
+  # Every asset is READ at control scope before anything is asserted on it, and
+  # the reads that failed are reported as reads that failed. `describe
+  # singular(...) { its(prop) }` cannot tell them apart: a stock resource that
+  # finds nothing answers every property with a NullResponse, which compares
+  # unequal to the expected value and renders as a finding (#16, #17). See
+  # checkov_stock_value in libraries/_checkov_enumeration.rb.
+  unreadable = []
+  readings = in_scope.filter_map do |id, region|
+    value, fault = checkov_stock_value(aws_cloudtrail_trail(trail_name: id, aws_region: region), 'is_multi_region_trail')
+    where = region ? "#{id} in #{region}" : id
+    if fault
+      unreadable << "#{where}: #{fault}"
+      next
+    end
+    [where, value]
+  end
+
+  unless unreadable.empty?
+    describe 'aws_cloudtrail read-back' do
+      it 'read every asset the enumeration named' do
+        # The count is asserted and the list is in the message: RSpec truncates
+        # an inspected collection to a couple of hundred characters with the
+        # middle elided, and the evidence would lose the assets it is about.
+        expect(unreadable.length).to eq(0),
+          "#{unreadable.length} of #{in_scope.length} aws_cloudtrail asset(s) were enumerated but could "\
+          "not be read by aws_cloudtrail_trail, so NOTHING was assessed for them: "\
+          "#{unreadable.first(5).join('; ')}"
+      end
+    end
+  end
+
+  readings.each do |where, value|
+    describe "aws_cloudtrail #{where} is_multi_region_trail" do
+      subject { value }
+      it { should eq true }
     end
   end
 end

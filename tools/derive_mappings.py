@@ -56,6 +56,26 @@ ALIASES = {
     "name": "name",
 }
 
+# The same, where the divergence belongs to ONE resource: a stock resource that
+# exposes the setting as a predicate, or under the API's spelling. Each was a
+# false failure on every asset until the stub probe named it (#16).
+RESOURCE_ALIASES = {
+    ("aws_kms_key", "is_enabled"): "enabled",
+    ("aws_kms_key", "enable_key_rotation"): "has_rotation_enabled?",
+    ("aws_alb", "access_logs"): "access_log_enabled",
+    ("aws_elb", "cross_zone_load_balancing"): "cross_zone_load_balancing_enabled?",
+    ("aws_glue_crawler", "security_configuration"): "crawler_security_configuration",
+}
+
+# The id column the SINGULAR can look an asset up by, where the naming heuristic
+# in id_column picks one that exists but identifies nothing (#17).
+ID_COLUMNS = {
+    # canonical_hosted_zone_ids is shared by every load balancer in a region.
+    "aws_albs": "load_balancer_arns",
+    # A multi-region trail is listed everywhere and describable by name only at home.
+    "aws_cloudtrail_trails": "trail_arns",
+}
+
 # Category -> (NIST Rev 5, CCI, KSI). Family-level, and labelled as such.
 CATEGORY_ANCHORS = {
     "ENCRYPTION":          (["SC-28", "SC-28 (1)"], ["CCI-001199", "CCI-002475"], ["KSI-SVC-CER"]),
@@ -167,6 +187,18 @@ def singular_arg(singular):
 EXCLUDED = {
     "CKV_AWS_238": "aws_guardduty_detectors yields non-String ids, so the singular "
                    "resource rejects them — needs a hand-written enumeration",
+    # Withdrawn after the stub probe (tools/lint_stock_properties.rb, #16): the
+    # stock resource does not expose the Terraform argument as a property, and
+    # nothing it does expose carries the setting. The full reasons are in
+    # tools/staging/stock-probe.yml.
+    **{cid: "the stock resource does not expose this setting — see staging/stock-probe.yml"
+       for cid in ("CKV_AWS_131", "CKV_AWS_150", "CKV_AWS_152", "CKV_AWS_176", "CKV_AWS_28",
+                   "CKV_AWS_71", "CKV_AWS_305", "CKV_AWS_337", "CKV_AWS_341")},
+    # Re-mapped by hand in resource_map_derived.yml for the same reason: three to
+    # the api reader, one to a stock predicate with a different verb.
+    **{cid: "CloudFront: the stock singular derives no methods from the API response — "
+            "mapped by hand, see the note on the mapping"
+       for cid in ("CKV_AWS_174", "CKV_AWS_216", "CKV_AWS_68", "CKV_AWS_86")},
 }
 
 
@@ -200,8 +232,8 @@ def derive(catalog, authored_map, authored_meta, resources):
             key = (e["inspected_key"].get(tf) or "").split("/")[0]
             if not key:
                 continue
-            prop = ALIASES.get(key, key)
-            column = id_column(plural, singular, resources)
+            prop = RESOURCE_ALIASES.get((singular, key), ALIASES.get(key, key))
+            column = ID_COLUMNS.get(plural) or id_column(plural, singular, resources)
             if not column:
                 continue
             expected = e.get("expected") or []

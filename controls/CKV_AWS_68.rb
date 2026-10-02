@@ -2,7 +2,7 @@
 #
 # Rule:        CKV_AWS_68 (checkov 3.3.16)
 # Applies to:  aws_cloudfront_distribution
-# Read with:   aws_cloudfront_distributions -> aws_cloudfront_distribution (stock inspec-aws, no custom reader)
+# Read with:   aws_api_assets (declarative spec, tools/api_specs.yml)
 #
 # The rule id is the identity: file name, control id and `tag checkov_id` all
 # carry it, and tools/lint_catalog_drift.py asserts the three agree.
@@ -15,8 +15,8 @@ control 'CKV_AWS_68' do
 
   desc <<~DESC
     Checkov asserts this against Terraform. This profile asserts it against
-    the aws_cloudfront_distribution resources that actually exist, read
-    through the stock inspec-aws aws_cloudfront_distribution resource.
+    the aws_cloudfront_distribution resources that actually exist,
+    enumerated through the declarative API spec.
   DESC
 
   desc 'rationale', <<~RATIONALE
@@ -48,72 +48,58 @@ control 'CKV_AWS_68' do
   tag nist_source:           'category-derived'
   tag implementation_status: 'implemented'
 
-  # Enumerated at control scope, then each asset asserted on its own. The
-  # resource is an ARGUMENT to `describe`, which evaluates on the control --
-  # calling it inside the block would defer it into the example.
-  #
-  # Every call carries aws_region: a stock resource otherwise reads only the
-  # region the connection was built with, and every other region's resources
-  # report as absent, which renders Not Applicable rather than unexamined.
-  #
-  # checkov_enumerate does the reading. It flattens a nested id column, tells an
-  # unregistered column apart from an account that simply has none of this
-  # resource, and hands back anything that stopped it as `problems` rather than
-  # as an empty list -- see libraries/_checkov_enumeration.rb.
-  problems = []
-  found = checkov_scan_regions(scan_regions).flat_map do |region|
-    ids, found_problems = checkov_enumerate(
-      aws_cloudfront_distributions(aws_region: region), :distribution_ids
-    )
-    problems.concat(found_problems.map { |p| "#{region}: #{p}" })
-    ids.map { |id| [id, region] }
-  end
+  assets = aws_api_assets(type: 'aws_cloudfront_distribution', regions: scan_regions)
 
-  # The region LIST is upstream of every enumeration above, and its failure
-  # is the one that hides best: no regions means no rows, no rows means no
-  # problems, and the control renders Not Applicable across the whole account
-  # while a denied ec2:DescribeRegions goes unreported. checkov_scan_regions
-  # falls back to the connection's own region and records that here, so a
-  # partial scan fails loudly instead of passing quietly.
-  problems.concat(checkov_region_problems)
-
-  # Blank ids are separated out and asserted on below rather than filtered away,
-  # so a wrong `ids` column is a visible failure and not a silent Not Applicable.
-  # `id.nil?` before the interpolation on purpose: a NullResponse answers true to
-  # nil? but interpolates to "#<NullResponse:0x...>", which is not blank. The
-  # survivors are interpolated rather than `.to_s`'d, because to_s on a
-  # NullResponse returns nil and the singular then rejects the argument.
-  unusable = found.count { |id, _r| id.nil? || "#{id}".strip.empty? }
-  found = found.reject { |id, _r| id.nil? || "#{id}".strip.empty? }
-               .map { |id, region| ["#{id}", region] }
-  in_scope = found.reject { |id, _r| checkov_exempt?(id: id, type: 'aws_cloudfront_distribution', rules: exempt) }
-
-  if unusable.positive? || problems.any?
+  # A region — or a whole service — that could not be READ is not the same as
+  # one with nothing in it. A missing SDK gem, a denied call or an unreachable
+  # endpoint all end up here, and without this assertion they render as "no
+  # assets" and the control reports Not Applicable: the worst case reported as
+  # "does not apply here".
+  unreadable = assets.unreadable_regions
+  unless unreadable.empty?
     describe "aws_cloudfront_distribution enumeration" do
-      it 'produced usable identifiers' do
-        expect(unusable).to eq(0),
-          "#{unusable} row(s) had a blank id — the `ids` column in resource_map.yml "\
-          'likely names a field this resource does not expose'
-      end
-
-      it 'read the assets it set out to read' do
-        expect(problems).to be_empty
+      it 'read every region it attempted' do
+        expect(unreadable.map { |r| "#{r[:region]}: #{r[:error]}" }).to be_empty
       end
     end
   end
 
-  # `unusable.positive? || problems.any?` keeps the control APPLICABLE when the
-  # enumeration broke. Without it only_if skips the control, and the broken cases
-  # these guards exist to catch are exactly the ones it would suppress — a Not
-  # Applicable that means "nobody looked".
-  applicable = !in_scope.empty? || unusable.positive? || problems.any?
+  # A blank id means the spec's `id` column names a member this response does
+  # not carry. tools/lint_resource_map.py cannot see that statically, and the
+  # damage is silent: every describe is titled with a blank where the identity
+  # belongs, and `exempt_assets` entries keyed by id stop matching. Asserted,
+  # not filtered — filtering renders Not Applicable, which is the same silence.
+  enumerated = assets.assets(exempt: exempt)
+  unusable = enumerated.count { |a| "#{a[:id]}".strip.empty? }
+  if unusable.positive?
+    describe "aws_cloudfront_distribution enumeration" do
+      it 'produced usable identifiers' do
+        expect(unusable).to eq(0),
+          "#{unusable} row(s) had a blank id — the `id` for aws_cloudfront_distribution in "\
+          'tools/api_specs.yml likely names a member this API does not return'
+      end
+    end
+  end
+
+  # A nil field is the FAILING state for a presence check, so it is
+  # deliberately not filtered out here.
+  in_scope = enumerated
+
+  # `applicable` is a CLAIM that this rule does not apply to this boundary, and
+  # only an enumeration that succeeded can earn it. An unreadable region or a
+  # blank id column keeps the control applicable so the assertions above are
+  # reported; without that, only_if skips the whole control — the two guards
+  # included — and the worst case, "every region denied", renders as Not
+  # Applicable. The stock template already carries the `unusable` half of this.
+  applicable = !in_scope.empty? || !unreadable.empty? || unusable.positive?
   impact 0.5
   impact 0.0 unless applicable
-  only_if('no aws_cloudfront_distribution in scope') { applicable }
+  only_if('no aws_cloudfront_distribution in scope expressing this setting') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_cloudfront_distribution(distribution_id: id, aws_region: region) do
-      its('web_acl_id') { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
+  in_scope.each do |asset|
+    describe "aws_cloudfront_distribution #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
+      subject { asset[:web_acl_id] }
+      it { should satisfy('be set') { |v| !v.nil? && !(v.respond_to?(:empty?) && v.empty?) } }
     end
   end
 end
