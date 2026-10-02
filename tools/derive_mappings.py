@@ -194,14 +194,16 @@ EXCLUDED = {
     # stock resource does not expose the Terraform argument as a property, and
     # nothing it does expose carries the setting. The full reasons are in
     # tools/staging/stock-probe.yml.
-    **{cid: "the stock resource does not expose this setting — see staging/stock-probe.yml"
-       for cid in ("CKV_AWS_131", "CKV_AWS_150", "CKV_AWS_152", "CKV_AWS_176", "CKV_AWS_28",
-                   "CKV_AWS_71", "CKV_AWS_305", "CKV_AWS_337", "CKV_AWS_341")},
+    **dict.fromkeys(
+        ("CKV_AWS_131", "CKV_AWS_150", "CKV_AWS_152", "CKV_AWS_176", "CKV_AWS_28",
+         "CKV_AWS_71", "CKV_AWS_305", "CKV_AWS_337", "CKV_AWS_341"),
+        "the stock resource does not expose this setting — see staging/stock-probe.yml"),
     # Re-mapped by hand in resource_map_derived.yml for the same reason: three to
     # the api reader, one to a stock predicate with a different verb.
-    **{cid: "CloudFront: the stock singular derives no methods from the API response — "
-            "mapped by hand, see the note on the mapping"
-       for cid in ("CKV_AWS_174", "CKV_AWS_216", "CKV_AWS_68", "CKV_AWS_86")},
+    **dict.fromkeys(
+        ("CKV_AWS_174", "CKV_AWS_216", "CKV_AWS_68", "CKV_AWS_86"),
+        "CloudFront: the stock singular derives no methods from the API response — "
+        "mapped by hand, see the note on the mapping"),
 }
 
 

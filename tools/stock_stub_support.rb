@@ -20,27 +20,38 @@
 Encoding.default_external = Encoding::UTF_8
 Encoding.default_internal = Encoding::UTF_8
 
+# The vendored pack has to be on the load path before it can be required, and a
+# run without it has nothing to check: it would pass by finding no resources. So
+# both are settled here, before anything else is loaded.
+VENDORED_LIBRARIES = Dir[File.join(File.expand_path('..', __dir__), 'vendor', '*', 'libraries')].first
+unless VENDORED_LIBRARIES
+  abort '::error::no vendored resource pack found. Run `cinc-auditor vendor .` first. ' \
+        'Without it this would pass by having nothing to check.'
+end
+$LOAD_PATH.unshift(VENDORED_LIBRARIES)
+
 require 'inspec'
+require 'aws_backend'
 
 module StockStub
-  ROOT = File.expand_path('..', __dir__)
-  VENDOR = Dir[File.join(ROOT, 'vendor', '*', 'libraries')].first
+  VENDOR = VENDORED_LIBRARIES
   CLIENT_ARGS = { stub_responses: true, region: 'us-east-1' }.freeze
 
   class << self
     attr_accessor :full
 
-    def vendored?
-      !VENDOR.nil?
-    end
-
     # The class behind a resource name, or nil when the pack has no such file.
+    #
+    # Which file to load is known only by name, at run time, so the class is
+    # registered for autoload and loaded on first use. A resource another one
+    # already pulled in is defined and is left alone.
     def resource_class(name)
       path = File.join(VENDOR, "#{name}.rb")
       return nil unless File.file?(path)
 
-      require name
-      Object.const_get(File.read(path)[/^class\s+(\w+)\s*</, 1])
+      const = File.read(path)[/^class\s+(\w+)\s*</, 1].to_sym
+      Object.autoload(const, path) unless Object.const_defined?(const)
+      Object.const_get(const)
     end
 
     # A stock resource built under stubs. `args` are the resource's own
@@ -146,8 +157,4 @@ module StockStub
   end
 end
 
-if StockStub.vendored?
-  $LOAD_PATH.unshift(StockStub::VENDOR)
-  require 'aws_backend'
-  Aws::Stubbing::EmptyStub.prepend(StockStub::FullStub)
-end
+Aws::Stubbing::EmptyStub.prepend(StockStub::FullStub)

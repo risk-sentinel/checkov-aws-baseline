@@ -815,18 +815,11 @@ def render_fix(cid, entry, fixes):
         example = per_type.get(res)
         if not example:
             continue
-        out.append(f"Terraform — {res}:")
-        out.append("")
-        out.append(block(example["terraform"], 2))
-        out.append("")
+        out.extend([f"Terraform — {res}:", "", block(example["terraform"], 2), ""])
         if example.get("cli"):
-            out.append(f"Out of band — {res}:")
-            out.append("")
-            out.append(block(example["cli"], 2))
-            out.append("")
+            out.extend([f"Out of band — {res}:", "", block(example["cli"], 2), ""])
         if example.get("note"):
-            out.append(wrap(f"Note ({res}): {example['note']}", 0))
-            out.append("")
+            out.extend([wrap(f"Note ({res}): {example['note']}", 0), ""])
     if not out:
         out = [f"See {list(entry['tf_docs'].values())[0]}"]
     return "\n".join(l for l in out).rstrip()

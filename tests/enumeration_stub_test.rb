@@ -26,9 +26,6 @@
 #   docker run --rm -v "$PWD:/work" -w /work --entrypoint ruby <image> \
 #     tests/enumeration_stub_test.rb
 require_relative '../tools/stock_stub_support'
-
-abort 'no vendored resource pack — run `cinc-auditor vendor .` first' unless StockStub.vendored?
-
 require_relative '../libraries/_checkov_enumeration'
 
 FAILURES = []

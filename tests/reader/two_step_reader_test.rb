@@ -19,6 +19,7 @@ REGION = 'us-east-1'.freeze
 $LOAD_PATH.unshift(__dir__)
 require "aws_backend"
 require "aws-sdk-apigateway"
+require "aws-sdk-ecs"
 require "aws-sdk-eks"
 require "aws-sdk-guardduty"
 require "aws-sdk-sns"
@@ -251,8 +252,6 @@ puts "aws_ecs_task_definition — `parent.args` reach the parent call, and only 
 # lost subtree that failed the control. The spec asks for status: ACTIVE. What
 # is proven here is that the literal reaches the SDK — `api_requests` is the
 # stubbed client's own record of what it was called with.
-require "aws-sdk-ecs"
-
 ecs = stubbed(Aws::ECS::Client)
 ecs.stub_responses(:list_task_definition_families, families: %w[web])
 ecs.stub_responses(:describe_task_definition,

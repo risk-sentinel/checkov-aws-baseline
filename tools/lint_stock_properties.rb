@@ -37,12 +37,6 @@ require 'timeout'
 require 'yaml'
 require_relative 'stock_stub_support'
 
-unless StockStub.vendored?
-  warn '::error::no vendored resource pack found. Run `cinc-auditor vendor .` first. ' \
-       'Without it this lint would pass by having nothing to check.'
-  exit 1
-end
-
 # A resource that loops under stubs is reported as unprobeable, not waited on.
 PROBE_SECONDS = 20
 ALLOWED_PATH = File.join(__dir__, 'stock_unprobeable.yml')
@@ -60,29 +54,32 @@ def mappings
   merged
 end
 
+# A Hash member by symbol or string key; a NullResponse when it has neither.
+def hash_member(hash, seg)
+  return hash[seg.to_sym] if hash.key?(seg.to_sym)
+
+  hash.key?(seg) ? hash[seg] : NullResponse.new
+end
+
+# One segment of a path: the value there, a NullResponse when the name is not
+# there, or nil when nothing can be said.
+def step_into(obj, seg)
+  return hash_member(obj, seg) if obj.is_a?(Hash)
+
+  obj.public_send(seg)
+rescue NoMethodError => e
+  # Raised ON this object FOR this name: the method is not public here, which
+  # is the same answer as a NullResponse. Anything else is the method existing
+  # and tripping over stub data, which says nothing about whether it is there.
+  e.name.to_s == seg && e.receiver.equal?(obj) ? NullResponse.new : nil
+rescue StandardError
+  nil
+end
+
 # The value at a dotted path, or the first segment that is not there.
 def resolve(resource, path)
   path.split('.').inject(resource) do |obj, seg|
-    value =
-      if obj.is_a?(Hash)
-        if obj.key?(seg.to_sym) then obj[seg.to_sym]
-        elsif obj.key?(seg) then obj[seg]
-        else NullResponse.new
-        end
-      else
-        begin
-          obj.public_send(seg)
-        rescue NoMethodError => e
-          # Raised ON this object FOR this name: the method is not public here.
-          # Anything else is the method existing and tripping over stub data,
-          # which says nothing about whether the property is there.
-          return [:missing, seg] if e.name.to_s == seg && e.receiver.equal?(obj)
-
-          return [:ok, nil]
-        rescue StandardError
-          return [:ok, nil]
-        end
-      end
+    value = step_into(obj, seg)
     return [:missing, seg] if value.is_a?(NullResponse)
     # A scalar or an exhausted stub: nothing deeper can be confirmed or denied.
     return [:ok, nil] if value.nil?
