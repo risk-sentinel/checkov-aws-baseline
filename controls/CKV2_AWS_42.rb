@@ -126,9 +126,41 @@ control 'CKV2_AWS_42' do
   impact 0.0 unless applicable
   only_if('no aws_cloudfront_distribution in scope') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_cloudfront_distribution(distribution_id: id) do
-      its('ssl_certificate') { should_not eq 'cloudfront' }
+  # Every asset is READ at control scope before anything is asserted on it, and
+  # the reads that failed are reported as reads that failed. `describe
+  # singular(...) { its(prop) }` cannot tell them apart: a stock resource that
+  # finds nothing answers every property with a NullResponse, which compares
+  # unequal to the expected value and renders as a finding (#16, #17). See
+  # checkov_stock_value in libraries/_checkov_enumeration.rb.
+  unreadable = []
+  readings = in_scope.filter_map do |id, region|
+    value, fault = checkov_stock_value(aws_cloudfront_distribution(distribution_id: id), 'ssl_certificate')
+    where = region ? "#{id} in #{region}" : id
+    if fault
+      unreadable << "#{where}: #{fault}"
+      next
+    end
+    [where, value]
+  end
+
+  unless unreadable.empty?
+    describe 'aws_cloudfront_distribution read-back' do
+      it 'read every asset the enumeration named' do
+        # The count is asserted and the list is in the message: RSpec truncates
+        # an inspected collection to a couple of hundred characters with the
+        # middle elided, and the evidence would lose the assets it is about.
+        expect(unreadable.length).to eq(0),
+          "#{unreadable.length} of #{in_scope.length} aws_cloudfront_distribution asset(s) were enumerated but could "\
+          "not be read by aws_cloudfront_distribution, so NOTHING was assessed for them: "\
+          "#{unreadable.first(5).join('; ')}"
+      end
+    end
+  end
+
+  readings.each do |where, value|
+    describe "aws_cloudfront_distribution #{where} ssl_certificate" do
+      subject { value }
+      it { should_not eq 'cloudfront' }
     end
   end
 end

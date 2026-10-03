@@ -268,9 +268,41 @@ control '{cid}' do
   impact 0.0 unless applicable
   only_if('no {tf_type} in scope') {{ applicable }}
 
-  in_scope.each do |id, region|
-    describe {singular}({arg_expr}) do
-      its('{prop}') {{ {matcher} }}
+  # Every asset is READ at control scope before anything is asserted on it, and
+  # the reads that failed are reported as reads that failed. `describe
+  # singular(...) {{ its(prop) }}` cannot tell them apart: a stock resource that
+  # finds nothing answers every property with a NullResponse, which compares
+  # unequal to the expected value and renders as a finding (#16, #17). See
+  # checkov_stock_value in libraries/_checkov_enumeration.rb.
+  unreadable = []
+  readings = in_scope.filter_map do |id, region|
+    value, fault = checkov_stock_value({singular}({arg_expr}), '{prop}'{joined})
+    where = region ? "#{{id}} in #{{region}}" : id
+    if fault
+      unreadable << "#{{where}}: #{{fault}}"
+      next
+    end
+    [where, value]
+  end
+
+  unless unreadable.empty?
+    describe '{tf_type} read-back' do
+      it 'read every asset the enumeration named' do
+        # The count is asserted and the list is in the message: RSpec truncates
+        # an inspected collection to a couple of hundred characters with the
+        # middle elided, and the evidence would lose the assets it is about.
+        expect(unreadable.length).to eq(0),
+          "#{{unreadable.length}} of #{{in_scope.length}} {tf_type} asset(s) were enumerated but could "\\
+          "not be read by {singular}, so NOTHING was assessed for them: "\\
+          "#{{unreadable.first(5).join('; ')}}"
+      end
+    end
+  end
+
+  readings.each do |where, value|
+    describe "{tf_type} #{{where}} {prop}" do
+      subject {{ value }}
+      it {{ {matcher} }}
     end
   end
 end
@@ -783,18 +815,11 @@ def render_fix(cid, entry, fixes):
         example = per_type.get(res)
         if not example:
             continue
-        out.append(f"Terraform — {res}:")
-        out.append("")
-        out.append(block(example["terraform"], 2))
-        out.append("")
+        out.extend([f"Terraform — {res}:", "", block(example["terraform"], 2), ""])
         if example.get("cli"):
-            out.append(f"Out of band — {res}:")
-            out.append("")
-            out.append(block(example["cli"], 2))
-            out.append("")
+            out.extend([f"Out of band — {res}:", "", block(example["cli"], 2), ""])
         if example.get("note"):
-            out.append(wrap(f"Note ({res}): {example['note']}", 0))
-            out.append("")
+            out.extend([wrap(f"Note ({res}): {example['note']}", 0), ""])
     if not out:
         out = [f"See {list(entry['tf_docs'].values())[0]}"]
     return "\n".join(l for l in out).rstrip()
@@ -964,7 +989,15 @@ def render_stock(cid, version, entry, mapping, meta, fixes):
                   else (f"{assertion['arg']}: id, aws_region: region"
                         if spec.get("scope") != "global"
                         else f"{assertion['arg']}: id")),
-        prop=assertion["property"], matcher=matcher)
+        prop=assertion["property"], matcher=matcher,
+        # The singular is the enumerated asset's own resource unless its name is
+        # not the plural's singular; then it is something looked up BY the asset,
+        # and not finding it is the answer rather than a failed read.
+        joined=("" if enum["resource"] in _plurals(assertion["resource"]) else ", joined: true"))
+
+
+def _plurals(singular):
+    return {singular + "s", singular + "es"} | ({singular[:-1] + "ies"} if singular.endswith("y") else set())
 
 
 def ruby_single_quoted(text):
@@ -1405,8 +1438,11 @@ def collection_matcher_for(cid, satisfies, conditions):
     """
     prose = [condition_parts(cid, c)[1] for c in conditions]
     label = ROLLUP_PROSE[satisfies] + " " + " and ".join(prose)
-    return (f"should satisfy({ruby_string(label)}) "
-            f"{{ |v| ::CheckovCollection.{satisfies}?(v, element_conditions) }}")
+    # `satisfy_rollup`, not `satisfy` (#19): a bare `satisfy` fails with the whole
+    # collection inspected and truncated. The matcher is defined beside the
+    # walker in libraries/_checkov_collection.rb and reports the offending
+    # elements by name, with only the paths the conditions read.
+    return f"should satisfy_rollup(:{satisfies}, element_conditions, {ruby_string(label)})"
 
 
 def collection_guard_for(satisfies, tf_type, field):

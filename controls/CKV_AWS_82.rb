@@ -138,9 +138,41 @@ control 'CKV_AWS_82' do
   impact 0.0 unless applicable
   only_if('no aws_athena_workgroup in scope') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_athena_work_group(work_group: id, aws_region: region) do
-      its('configuration.enforce_workgroup_configuration') { should eq true }
+  # Every asset is READ at control scope before anything is asserted on it, and
+  # the reads that failed are reported as reads that failed. `describe
+  # singular(...) { its(prop) }` cannot tell them apart: a stock resource that
+  # finds nothing answers every property with a NullResponse, which compares
+  # unequal to the expected value and renders as a finding (#16, #17). See
+  # checkov_stock_value in libraries/_checkov_enumeration.rb.
+  unreadable = []
+  readings = in_scope.filter_map do |id, region|
+    value, fault = checkov_stock_value(aws_athena_work_group(work_group: id, aws_region: region), 'configuration.enforce_work_group_configuration')
+    where = region ? "#{id} in #{region}" : id
+    if fault
+      unreadable << "#{where}: #{fault}"
+      next
+    end
+    [where, value]
+  end
+
+  unless unreadable.empty?
+    describe 'aws_athena_workgroup read-back' do
+      it 'read every asset the enumeration named' do
+        # The count is asserted and the list is in the message: RSpec truncates
+        # an inspected collection to a couple of hundred characters with the
+        # middle elided, and the evidence would lose the assets it is about.
+        expect(unreadable.length).to eq(0),
+          "#{unreadable.length} of #{in_scope.length} aws_athena_workgroup asset(s) were enumerated but could "\
+          "not be read by aws_athena_work_group, so NOTHING was assessed for them: "\
+          "#{unreadable.first(5).join('; ')}"
+      end
+    end
+  end
+
+  readings.each do |where, value|
+    describe "aws_athena_workgroup #{where} configuration.enforce_work_group_configuration" do
+      subject { value }
+      it { should eq true }
     end
   end
 end

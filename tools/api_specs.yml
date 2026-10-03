@@ -141,7 +141,10 @@ aws_cloudfront_distribution:
   client: Aws::CloudFront::Client
   collection: distribution_list.items
   fields:
+    enabled: enabled
     response_headers_policy_id: default_cache_behavior.response_headers_policy_id
+    viewer_certificate_minimum_protocol_version: viewer_certificate.minimum_protocol_version
+    web_acl_id: web_acl_id
   gem: aws-sdk-cloudfront
   id: id
   list: list_distributions
@@ -292,6 +295,8 @@ aws_ecs_task_definition:
   id: task_definition_arn
   list: describe_task_definition
   parent:
+    args:
+      status: ACTIVE
     collection: families
     id: _self
     list: list_task_definition_families

@@ -67,7 +67,17 @@ RESERVED_FIELDS = {"id", "region", "account_id", "type", "parent_id", "arn"}
 SPEC_KEYS = {"gem", "client", "list", "collection", "id", "arn", "fields", "scope",
              "parent", "arg"}
 SPEC_REQUIRED = ("gem", "client", "list", "collection", "id")
-PARENT_KEYS = {"list", "collection", "id"}
+# `parent.args` is literal parameters on the PARENT list call — a status filter,
+# not an id. It exists because a list call's default is not always "deployed
+# assets": ecs ListTaskDefinitionFamilies returns INACTIVE families too, a
+# family with no active revision cannot be described, and that failed a control
+# on an account whose only fault was having deregistered one (#19). It is not
+# the top-level `args` refused below, which would be parameters on the CHILD
+# call and populates fields the reader does not yet know how to ask for.
+# tools/lint_api_paths.rb checks each NAME against the SDK's model of the
+# operation. It cannot check a value: the compiled model does not carry enum
+# members, so a value is only confirmed by a live run.
+PARENT_KEYS = {"list", "collection", "id", "args"}
 PARENT_REQUIRED = ("list", "collection", "id")
 
 # Drafted in tools/proposals/parentchild.yml, deliberately not built. Named
@@ -132,6 +142,16 @@ def spec_problems(specs):
             if parent.get("collection") == "_response":
                 out.append(f"{name}: parent.collection cannot be `_response` — a parent "
                            f"list call must name the member holding the parents")
+            if "args" in parent:
+                args = parent["args"]
+                if not isinstance(args, dict) or not args:
+                    out.append(f"{name}: parent.args must be a non-empty mapping of "
+                               f"parameter name to literal value")
+                else:
+                    for key, value in sorted(args.items()):
+                        if not isinstance(key, str) or isinstance(value, (dict, list)) or value is None:
+                            out.append(f"{name}: parent.args.{key} must be a name with a "
+                                       f"scalar literal value, got {value!r}")
 
         # The sentinels are position-specific, and using one in the wrong position
         # is silent: `_self` on a child id makes every row's id the response object.

@@ -1,0 +1,44 @@
+# Checks withdrawn from the stock map by the stub probe (tools/lint_stock_properties.rb)
+# and the live run of 2026-10-02 (#16, #17). Each was a derived mapping whose property
+# was the Terraform argument name; the stock resource does not expose it, so the
+# control failed every asset. No mappings here: this slice exists to carry the
+# reasons into staging/SKIPPED.md the way every other slice does.
+skipped:
+  CKV_AWS_131: 'WITHDRAWN from the stock map (#16, #17). aws_alb has no `drop_invalid_header_fields`:
+    the setting is a load balancer ATTRIBUTE, returned by elbv2 DescribeLoadBalancerAttributes(LoadBalancerArn)
+    as a list of {key, value} pairs. That is a per-asset follow-up call, and reading it needs selecting
+    a list element BY KEY (routing.http.drop_invalid_header_fields.enabled), which dig_path does not do.
+    Until then the control failed every load balancer with `got: NullResponse`.'
+  CKV_AWS_150: 'WITHDRAWN from the stock map (#16, #17). Same shape as CKV_AWS_131: deletion protection
+    is the load balancer attribute deletion_protection.enabled from DescribeLoadBalancerAttributes, a
+    key/value list, and aws_alb exposes no such property.'
+  CKV_AWS_152: 'WITHDRAWN from the stock map (#16, #17). Same shape as CKV_AWS_131 (attribute load_balancing.cross_zone.enabled),
+    with a second blocker: the rule applies to network and gateway load balancers only, so it also needs
+    a type filter on the enumeration or every application load balancer is asserted on a setting the rule
+    is not about.'
+  CKV_AWS_176: 'WITHDRAWN from the stock map (#16). aws_waf_web_acl carries rules and the default action,
+    not logging. Classic WAF logging is waf GetLoggingConfiguration(ResourceArn), one call per ACL, and
+    an ACL with logging off answers WAFNonexistentItemException: it needs a two-step spec AND absent_errors,
+    which is named in tools/api_specs.yml as not built.'
+  CKV_AWS_28: 'WITHDRAWN from the stock map (#16). aws_dynamodb_table reads DescribeTable, which does
+    not return point-in-time recovery; the control failed every table with `got: NullResponse`. The setting
+    is dynamodb DescribeContinuousBackups(TableName) -> continuous_backups_description.point_in_time_recovery_description.point_in_time_recovery_status.
+    That fits the two-step schema as it stands (parent list_tables with id: _self, child collection: _response,
+    id: _parent) and is the cheapest of this group to bring back; it has not been written or path-checked
+    yet.'
+  CKV_AWS_305: WITHDRAWN from the stock map (#16). aws_cloudfront_distribution derives no methods from
+    the API response and has no `default_root_object`. Unlike `enabled` and `web_acl_id` (now read from
+    ListDistributions), the default root object is on GetDistribution / GetDistributionConfig only, so
+    it needs a two-step spec against the distribution id.
+  CKV_AWS_337: 'WITHDRAWN from the stock map (#16). aws_ssm_parameter reads GetParameter, which returns
+    no key id. ssm DescribeParameters does (`key_id`), but the rule is about SecureString parameters only:
+    mapped as a plain `not_empty` it would fail every String and StringList parameter. Needs the `when`
+    applicability predicate.'
+  CKV_AWS_341: WITHDRAWN from the stock map (#16). aws_launch_configuration exposes no `metadata_options`.
+    autoscaling DescribeLaunchConfigurations returns metadata_options.http_put_response_hop_limit, but
+    the member is absent on a configuration that never set it, where the service default of 1 applies.
+    Mapping it needs a decision on what an absent value means for the rule before a verb is chosen.
+  CKV_AWS_71: 'WITHDRAWN from the stock map (#16). aws_redshift_cluster has no `logging`: audit logging
+    is redshift DescribeLoggingStatus(ClusterIdentifier) -> logging_enabled, a per-cluster follow-up call.
+    Fits the two-step schema (parent describe_clusters, child collection: _response); not yet written
+    or path-checked.'

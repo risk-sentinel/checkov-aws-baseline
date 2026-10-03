@@ -150,9 +150,41 @@ control 'CKV_AWS_228' do
   impact 0.0 unless applicable
   only_if('no aws_elasticsearch_domain in scope') { applicable }
 
-  in_scope.each do |id, region|
-    describe aws_elasticsearchservice_domain(domain_name: id, aws_region: region) do
-      its('domain_endpoint_options.tls_security_policy') { should be_in ['Policy-Min-TLS-1-2-2019-07', 'Policy-Min-TLS-1-2-PFS-2023-10'] }
+  # Every asset is READ at control scope before anything is asserted on it, and
+  # the reads that failed are reported as reads that failed. `describe
+  # singular(...) { its(prop) }` cannot tell them apart: a stock resource that
+  # finds nothing answers every property with a NullResponse, which compares
+  # unequal to the expected value and renders as a finding (#16, #17). See
+  # checkov_stock_value in libraries/_checkov_enumeration.rb.
+  unreadable = []
+  readings = in_scope.filter_map do |id, region|
+    value, fault = checkov_stock_value(aws_elasticsearchservice_domain(domain_name: id, aws_region: region), 'domain_endpoint_options.tls_security_policy')
+    where = region ? "#{id} in #{region}" : id
+    if fault
+      unreadable << "#{where}: #{fault}"
+      next
+    end
+    [where, value]
+  end
+
+  unless unreadable.empty?
+    describe 'aws_elasticsearch_domain read-back' do
+      it 'read every asset the enumeration named' do
+        # The count is asserted and the list is in the message: RSpec truncates
+        # an inspected collection to a couple of hundred characters with the
+        # middle elided, and the evidence would lose the assets it is about.
+        expect(unreadable.length).to eq(0),
+          "#{unreadable.length} of #{in_scope.length} aws_elasticsearch_domain asset(s) were enumerated but could "\
+          "not be read by aws_elasticsearchservice_domain, so NOTHING was assessed for them: "\
+          "#{unreadable.first(5).join('; ')}"
+      end
+    end
+  end
+
+  readings.each do |where, value|
+    describe "aws_elasticsearch_domain #{where} domain_endpoint_options.tls_security_policy" do
+      subject { value }
+      it { should be_in ['Policy-Min-TLS-1-2-2019-07', 'Policy-Min-TLS-1-2-PFS-2023-10'] }
     end
   end
 end

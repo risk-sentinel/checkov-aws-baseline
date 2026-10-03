@@ -173,7 +173,7 @@ control 'CKV_AWS_376' do
   in_scope.each do |asset|
     describe "aws_elb #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:listener_descriptions] }
-      it { should satisfy("have no element where listener.protocol is not one of [HTTPS, SSL] (or absent)") { |v| ::CheckovCollection.none_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:none_of, element_conditions, "have no element where listener.protocol is not one of [HTTPS, SSL] (or absent)") }
     end
   end
 end

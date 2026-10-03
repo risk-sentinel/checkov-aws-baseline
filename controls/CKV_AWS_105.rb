@@ -183,7 +183,7 @@ control 'CKV_AWS_105' do
   in_scope.each do |asset|
     describe "aws_redshift_parameter_group #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:parameters] }
-      it { should satisfy("have an element where parameter_name == require_ssl and parameter_value == true") { |v| ::CheckovCollection.any_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:any_of, element_conditions, "have an element where parameter_name == require_ssl and parameter_value == true") }
     end
   end
 end

@@ -172,7 +172,7 @@ control 'CKV_AWS_277' do
   in_scope.each do |asset|
     describe "aws_security_group #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:ip_permissions] }
-      it { should satisfy("have no element where ip_protocol == -1 and (ip_ranges.cidr_ip or ipv_6_ranges.cidr_ipv_6) is one of [0.0.0.0/0, ::/0, 0000:0000:0000:0000:0000:0000:0000:0000/0]") { |v| ::CheckovCollection.none_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:none_of, element_conditions, "have no element where ip_protocol == -1 and (ip_ranges.cidr_ip or ipv_6_ranges.cidr_ipv_6) is one of [0.0.0.0/0, ::/0, 0000:0000:0000:0000:0000:0000:0000:0000/0]") }
     end
   end
 end

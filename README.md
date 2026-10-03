@@ -210,6 +210,9 @@ tools/lint_control_tags.py        fleet tag gate
 tools/lint_resource_scope.py      fleet scope gate
 tools/lint_api_specs.py           spec gems ship in the image, and the bake is current
 tools/lint_api_paths.rb           every declared path exists in the SDK model (in the image)
+tools/lint_stock_properties.rb    every stock property and column exists on the resource (in the image)
+tools/stock_stub_support.rb       stock resources on the SDK's stub transport, for the lint above and the test below
+tests/enumeration_stub_test.rb    enumeration and read-back, against real stock resources under stubs
 tests/collection_rollup_test.rb   roll-up semantics, against hand-built rows
 tests/reader_dig_path_test.rb     the reader's field walk — a `false` member is not a nil
 tests/rollup_exec_probe.py        the GENERATED roll-up, evaluated under -t local://

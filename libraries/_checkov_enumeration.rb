@@ -96,7 +96,8 @@ module CheckovEnumeration
 
         problems << "cannot narrow the population on '#{excluded_column}': the resource "\
                     "returned rows but exposes no such column, so `exclude:` in "\
-                    "resource_map.yml names something that does not exist"
+                    "resource_map.yml names something that does not exist "\
+                    "(#{@checkov_row_evidence})"
         next
       end
 
@@ -131,6 +132,69 @@ module CheckovEnumeration
                   "exist, so nothing was assessed"
       [[], problems]
     end
+  end
+
+  # What a stock SINGULAR resource holds at a dotted property path, read at
+  # control scope:
+  #
+  #   value, fault = checkov_stock_value(aws_kms_key(key_id: id, aws_region: region), 'enabled')
+  #
+  # `fault` is why the asset could not be read, and the control asserts there are
+  # none. It is kept apart from the value for the same reason `problems` is kept
+  # apart from `ids` above: an asset that could not be read must not be reported
+  # as an asset that failed the rule.
+  #
+  # That is not hypothetical (#16, #17). `describe singular(...) { its(prop) }`
+  # compared whatever came back, and a stock resource that finds nothing answers
+  # every property with a NullResponse instead of raising. Four ALB controls
+  # enumerated by a column that is not an ARN, the lookup failed, and each
+  # reported `expected: true, got: NullResponse` — a failure indistinguishable
+  # from a load balancer with the setting off. A CloudTrail trail read by NAME
+  # from a region that is not its home is the same shape: found by the plural,
+  # not by the singular, and reported as non-compliant on all three settings.
+  #
+  # A NullResponse that survives both checks means the member is ABSENT on this
+  # asset — an optional setting that was never configured. That is a real answer,
+  # so it is returned as nil and the matcher decides what nil means for the rule;
+  # the evidence then reads `got: nil` rather than an object address.
+  def checkov_stock_value(resource, path, joined: false)
+    # `joined:` is a mapping whose singular is NOT the enumerated asset but
+    # something looked up by it: a flow log by VPC id, a firewall's logging
+    # configuration by firewall name. There, "found nothing" is the finding,
+    # not a failed read, and it reaches the matcher as nil.
+    found = begin
+      !resource.respond_to?(:exists?) || resource.exists?
+    rescue StandardError
+      true # a resource that cannot say is not one this may call absent
+    end
+    if !found && !joined
+      return [nil, 'the singular resource found nothing under this identifier — the `ids:` '\
+                   'column in resource_map.yml names a value it cannot look up, or the '\
+                   'asset cannot be read from this region']
+    end
+
+    value = path.to_s.split('.').inject(resource) do |obj, segment|
+      break nil if obj.nil?
+
+      step = if obj.is_a?(Hash)
+               obj.key?(segment.to_sym) ? obj[segment.to_sym] : obj[segment]
+             else
+               obj.public_send(segment)
+             end
+      # NullResponse#nil? is true. Its CLASS NAME is not a usable test: InSpec
+      # evaluates the resource pack under an anonymous module, so the name is
+      # "#<Class:0x...>::NullResponse" and a comparison against "NullResponse"
+      # let every one through to the results.
+      step.nil? ? nil : step
+    end
+    return [value, nil] unless value.nil?
+
+    # Asked only when there is no value. A stock resource marks ITSELF failed
+    # for errors that are an answer — aws_iam_user does it when a user has no
+    # login profile, which is exactly "no console password" — so a failed flag
+    # beside a real value is not a failed read. Beside no value at all, it is.
+    fault = checkov_read_failure(resource)
+    fault ? [nil, fault] : [nil, nil]
   end
 
   private
@@ -197,39 +261,42 @@ module CheckovEnumeration
     table.custom_properties_schema[column.to_sym]
   end
 
-  # :present — the column can be read.
-  # :empty   — nothing was enumerated, so an absent column carries no information:
-  #            a table populated from the API response registers no columns at all
-  #            when there was no response to derive them from.
+  # :empty   — nothing was enumerated, so the column carries no information: a
+  #            table populated from the API response registers no columns of its
+  #            own when there was no response to derive them from.
+  # :present — rows exist and the column can be read.
   # :missing — rows exist and the column does not. That is a mapping bug, and the
   #            only one of the three that must reach the results.
   #
-  # `respond_to?` is honest here even though `method_missing` is not:
-  # AwsResourceBase overrides method_missing but leaves respond_to_missing? as
-  # super, so an unregistered column answers false rather than being masked.
+  # EMPTINESS IS DECIDED FIRST, and not by asking whether the resource responds
+  # to the column (#18). inspec-aws installs FilterTable's methods on the shared
+  # AwsCollectionResourceBase, so a column one plural derived from ITS response
+  # stays defined for every plural built after it. An empty aws_eks_clusters
+  # therefore answers to `statuses` if any earlier resource had a `status` field,
+  # while its own schema has no such column. Asking `respond_to?` first read that
+  # as "has the column", the schema then said it did not, and four EKS controls
+  # failed on an account with no clusters — but only inside a full run, because a
+  # control run on its own has no earlier resource to inherit from.
+  #
+  # So `respond_to?` is honest about method_missing (AwsResourceBase leaves
+  # respond_to_missing? as super) and NOT honest across resources. The row count
+  # is the resource's own, and it is asked first.
   def checkov_column_state(collection, column)
-    return :present if collection.respond_to?(column.to_sym)
-
     rows = begin
-      collection.entries
-    rescue StandardError
-      nil
+      collection.count
+    rescue StandardError => e
+      "#{e.class}: #{e.message}"
     end
-    # Deliberately `is_a?(Array)`: FilterTable#entries returns one. A NullResponse
-    # answers true to `empty?` as well, and treating that as "nothing here" would
+    @checkov_row_evidence = "count answered #{rows.inspect[0, 120]}"
+    # Deliberately `is_a?(Integer)`: FilterTable#count returns one. A NullResponse
+    # answers through method_missing, and treating that as "nothing here" would
     # reinstate exactly the silence this method exists to remove.
-    return :empty if rows.is_a?(Array) && rows.empty?
+    return :empty if rows.is_a?(Integer) && rows.zero?
+    return :present if collection.respond_to?(column.to_sym)
 
     :missing
   end
 
-  # The column's values as a flat list, with nothing coerced yet.
-  #
-  # Flattened because FilterTable only flattens columns registered with
-  # `style: :simple`, and a hand-registered column whose field holds a list comes
-  # back nested. Nil and blank entries are left in: the control counts them and
-  # reports them, because "every id was blank" is a broken enumeration and must
-  # not be quietly filtered into an empty, inapplicable control.
   def checkov_identifiers(raw)
     return [] if raw.nil? # NullResponse#nil? is true, which is the point
     return [] unless raw.respond_to?(:to_a)

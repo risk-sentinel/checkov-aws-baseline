@@ -119,6 +119,54 @@ module ::CheckovCollection
     Array(conditions).all? { |condition| condition_matches?(element, condition) }
   end
 
+  # Why a roll-up failed, in terms of the ELEMENTS (#19).
+  #
+  # `should satisfy(label) { ... }` reports `expected <the whole collection> to
+  # <label>`, and RSpec caps the inspected collection at a couple of hundred
+  # characters with the middle elided. For a task definition that was a slice of
+  # a container's command and the tail of another's secret references: it named
+  # neither the container that failed nor the field that was tested, and what it
+  # did show depended on array order. This names each offending element and shows
+  # only the paths the conditions read.
+  SHOWN = 5
+
+  def explain(verb, collection, conditions, label)
+    judged = elements(collection).each_with_index.map do |element, index|
+      [element, index, matches?(element, conditions)]
+    end
+    offenders, verdict =
+      case verb.to_sym
+      when :all_of  then [judged.reject { |_, _, ok| ok }, 'do not']
+      when :none_of then [judged.select { |_, _, ok| ok }, 'do']
+      else               [judged, 'does']
+      end
+    shown = offenders.first(SHOWN).map do |element, index, _|
+      "#{element_label(element, index)} (#{tested_values(element, conditions)})"
+    end
+    more = offenders.size > SHOWN ? " and #{offenders.size - SHOWN} more" : ''
+    if verb.to_sym == :any_of
+      return "expected at least one of #{judged.size} element(s) to #{label}; none #{verdict}: " \
+             "#{shown.join('; ')}#{more}"
+    end
+    "expected #{judged.size} element(s) to #{label}; #{offenders.size} #{verdict}: " \
+      "#{shown.join('; ')}#{more}"
+  end
+
+  # An element by its own name where it has one, by position where it does not.
+  def element_label(element, index)
+    name = %i[name id].map { |key| step(element, key.to_s).first }.compact.first if element.is_a?(Hash)
+    name ? "'#{name}'" : "element #{index}"
+  end
+
+  # The values at the paths the conditions test, and nothing else on the element.
+  def tested_values(element, conditions)
+    Array(conditions).flat_map { |condition| Array(condition[:paths]) }.uniq.map do |path|
+      values = dig_all(element, path)
+      text = values.empty? ? '(absent)' : values.map(&:inspect).join(', ')
+      "#{path}: #{text.length > 80 ? "#{text[0, 77]}..." : text}"
+    end.join(', ')
+  end
+
   def condition_matches?(element, condition)
     values = Array(condition[:paths]).flat_map { |path| dig_all(element, path) }
     return condition[:when_absent] == true if values.empty?
@@ -150,5 +198,19 @@ module ::CheckovCollection
     value = node[key.to_sym]
     value = node[key] if value.nil?
     value.nil? ? [] : [value]
+  end
+end
+
+# The roll-up as a matcher, so its failure message is `explain` above and not an
+# inspected collection. The description is the rule's own prose, exactly as the
+# `satisfy` it replaces produced, so a result still reads "is expected to have
+# only elements where ...".
+#
+# Guarded because the unit tests load this file in plain Ruby, without RSpec.
+if defined?(::RSpec::Matchers)
+  ::RSpec::Matchers.define :satisfy_rollup do |verb, conditions, label|
+    match { |actual| ::CheckovCollection.public_send("#{verb}?", actual, conditions) }
+    description { label }
+    failure_message { |actual| ::CheckovCollection.explain(verb, actual, conditions, label) }
   end
 end

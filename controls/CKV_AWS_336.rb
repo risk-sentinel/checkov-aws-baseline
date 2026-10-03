@@ -192,7 +192,7 @@ control 'CKV_AWS_336' do
   in_scope.each do |asset|
     describe "aws_ecs_task_definition #{asset[:id]} (#{asset[:account_id]}/#{asset[:region]})" do
       subject { asset[:container_definitions] }
-      it { should satisfy("have only elements where readonly_root_filesystem == True") { |v| ::CheckovCollection.all_of?(v, element_conditions) } }
+      it { should satisfy_rollup(:all_of, element_conditions, "have only elements where readonly_root_filesystem == True") }
     end
   end
 end

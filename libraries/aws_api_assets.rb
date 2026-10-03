@@ -262,10 +262,17 @@ class AwsApiAssets < AwsResourceBase
   # A failure on the PARENT leg is a failure for the whole region and propagates
   # to rows_for's rescue, which is correct: nothing was enumerated. A failure on a
   # CHILD leg is one lost subtree, and is handled in children_of.
+  #
+  # `parent.args` are literal parameters on the parent call. They narrow the
+  # parents to the ones that are deployed assets where the call's default does
+  # not: ecs ListTaskDefinitionFamilies returns INACTIVE families as well, and
+  # a family with no active revision cannot be described, so every such family
+  # was recorded as a lost subtree and failed the control (#19).
   def collect_two_step(api, region)
     parent = @spec["parent"]
+    args = (parent["args"] || {}).transform_keys(&:to_sym)
     ids = []
-    each_page(api.public_send(parent["list"])) do |page|
+    each_page(api.public_send(parent["list"], **args)) do |page|
       items_from(page, parent["collection"]).each do |item|
         # Counted BEFORE the usability test. The census in the control's skip
         # message answers "did the account have any parents at all", and a count
